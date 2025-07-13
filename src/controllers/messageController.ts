@@ -1,172 +1,80 @@
 // src/controllers/messageController.ts
 
 import { Request, Response } from 'express';
-import { getBaileysSock } from '../config/baileys'; 
-import { AnyMessageContent } from '@whiskeysockets/baileys'; 
+import { getBaileysSock, sendMessage } from '../config/baileys';
+import { jidNormalizedUser } from '@whiskeysockets/baileys';
 import pino from 'pino';
-import { prisma } from '../config/authStorage';
-// import { ensureChat } from '../config/baileys'; // Убедитесь, что ensureChat экспортируется из baileys.ts
+import { prisma } from '../config/authStorage'; // Для получения phoneJid
 
 const logger = pino({ level: 'info' });
 
-// ID вашего внутреннего бота/системного пользователя.
-// Используется, если ваш бот сам по себе считается "оператором",
-// но не является конкретным пользователем, вошедшим через API.
-const BOT_SYSTEM_USER_ID = 1; // Замените на фактический ID системного пользователя в вашей таблице User, если применимо
-
-/**
- * Вспомогательная функция для поиска или создания записи клиента в БД.
- * @param whatsappJid WhatsApp JID клиента
- * @returns ID клиента из вашей БД.
- */
-// async function ensureClient(whatsappJid: string): Promise<number> {
-//     let client = await prisma.client.findUnique({
-//         where: { whatsappJid: whatsappJid },
-//     });
-
-//     if (!client) {
-//         client = await prisma.client.create({
-//             data: { 
-//                 whatsappJid: whatsappJid,
-//                 name: whatsappJid.split('@')[0] 
-//             },
-//         });
-//         logger.info(`✅ Создан новый клиент с JID: ${whatsappJid}, ID: ${client.id}`);
-//     }
-//     return client.id;
-// }
-
-
-/**
- * Отправляет текстовое сообщение по указанному JID и записывает отправителя.
- * @param req Request - должен содержать { jid: string, message: string, phoneNumber: string }
- * @param res Response
- */
 export const sendTextMessage = async (req: Request, res: Response) => {
-    const sentByUserId = res.locals.userId; 
-  const { jid, message, phoneNumber } = req.body; 
-
-  if (!jid || !message || !phoneNumber || sentByUserId === undefined) {
-    return res.status(400).json({ error: 'Требуются поля jid, message, phoneNumber, и пользователь должен быть авторизован.' });
+  const { organizationPhoneId, receiverJid, text } = req.body;
+const organizationId = res.locals.organizationId; 
+  // 1. Валидация входных данных
+  if (!organizationPhoneId || !receiverJid || !text) {
+    logger.warn('[sendTextMessage] Отсутствуют необходимые параметры: organizationPhoneId, receiverJid или text.');
+    return res.status(400).json({ error: 'Missing organizationPhoneId, receiverJid, or text' });
   }
 
+  // 2. Нормализация JID получателя
+  // jidNormalizedUser может вернуть null, если JID невалидный.
+  const normalizedReceiverJid = jidNormalizedUser(receiverJid);
+
+  // --- НОВОЕ ИЗМЕНЕНИЕ: Проверка, что JID успешно нормализован ---
+  if (!normalizedReceiverJid) {
+    logger.error(`[sendTextMessage] Некорректный или ненормализуемый receiverJid: "${receiverJid}".`);
+    return res.status(400).json({ error: 'Invalid receiverJid provided. Could not normalize WhatsApp ID.' });
+  }
+  // --- КОНЕЦ НОВОГО ИЗМЕНЕНИЯ ---
+
+  // 3. Получение Baileys сокета
+  const sock = getBaileysSock(organizationPhoneId);
+
+  // 4. Проверка готовности сокета
+  // Сокет готов к отправке, если он существует и успешно аутентифицирован (имеет объект user).
+  if (!sock || !sock.user) {
+    logger.warn(`[sendTextMessage] Попытка отправить сообщение, но сокет для ID ${organizationPhoneId} не готов (пользователь не авторизован или сокет отсутствует).`);
+    const status = sock ? 'connecting/closed' : 'not found';
+    return res.status(503).json({ 
+      error: `WhatsApp аккаунт (ID: ${organizationPhoneId}) еще не полностью подключен или не готов к отправке сообщений. Текущий статус: ${status}. Попробуйте позже.`,
+      details: 'Socket not ready or user not authenticated.'
+    });
+  }
+  const organizationPhone = await prisma.organizationPhone.findUnique({
+      where: { id: organizationPhoneId, organizationId: organizationId },
+      select: { phoneJid: true }
+  });
+
+  if (!organizationPhone || !organizationPhone.phoneJid) {
+      logger.error(`[sendTextMessage] Не удалось найти phoneJid для organizationPhoneId: ${organizationPhoneId} или он пуст.`);
+      return res.status(404).json({ error: 'Sender WhatsApp account not found or not configured.' });
+  }
+  const senderJid = organizationPhone.phoneJid;
+  // 5. Попытка отправить сообщение
   try {
-    const sock = getBaileysSock(); 
-
-    if (!sock) {
-      return res.status(404).json({ error: `Аккаунт с номером ${phoneNumber} неактивен или не найден.` });
+ const sentMessage = await sendMessage(
+      sock,
+      normalizedReceiverJid,
+      { text },
+      organizationId,      // Передаем organizationId
+      organizationPhoneId, // Передаем organizationPhoneId
+      senderJid            // Передаем JID вашего номера
+    );
+    // 6. Проверка, что sentMessage не undefined
+    // sock.sendMessage() может вернуть undefined в некоторых случаях, даже без выбрасывания ошибки.
+    if (!sentMessage) {
+      logger.error(`❌ Сообщение не было отправлено (sentMessage is undefined) на ${normalizedReceiverJid} с ID ${organizationPhoneId}.`);
+      return res.status(500).json({ error: 'Failed to send message: WhatsApp API did not return a message object.', details: 'The message might not have been sent successfully.' });
     }
 
-    const content: AnyMessageContent = { text: message };
+    // 7. Успешная отправка
+    logger.info(`✅ Сообщение "${text}" отправлено на ${normalizedReceiverJid} с ID ${organizationPhoneId}. WhatsApp Message ID: ${sentMessage.key.id}`);
+    return res.status(200).json({ success: true, messageId: sentMessage.key.id });
 
-    logger.info(`Попытка отправить сообщение от пользователя ${sentByUserId} (через аккаунт ${phoneNumber}) на ${jid}: "${message}"`);
-
-    const result = await sock.sendMessage(jid, content);
-
-    // --- Сохранение исходящего сообщения в БД ---
-    // const chatId = await ensureChat(jid, phoneNumber); 
-
-    await prisma.message.create({
-      data: {
-        receivingPhoneJid: phoneNumber,     // Ваш номер телефона (аккаунт, с которого отправлено)
-        remoteJid: jid,                     // JID получателя
-        senderId: sentByUserId,             // <-- ЗДЕСЬ АЙДИ ПОЛЬЗОВАТЕЛЯ (оператора)
-        content: message,
-        type: 'text',
-      },
-    });
-    logger.info(`💾 Исходящее текстовое сообщение (ID оператора: ${sentByUserId}) сохранено в БД.`);
-
-    res.status(200).json({
-      message: 'Сообщение успешно отправлено.',
-      result: result,
-      sentFrom: phoneNumber,
-    });
   } catch (error: any) {
-    logger.error(`Ошибка при отправке текстового сообщения: ${error.message}`);
-    res.status(500).json({
-      error: 'Не удалось отправить текстовое сообщение.',
-      details: error.message,
-    });
-  }
-};
-
-/**
- * Отправляет медиа-сообщение по указанному JID и записывает отправителя.
- * @param req Request - должен содержать { jid: string, type: 'image' | 'video' | 'document' | 'audio', url: string, caption?: string, filename?: string, phoneNumber: string }
- * @param res Response
- */
-export const sendMediaMessage = async (req: Request, res: Response) => {
-  const sentByUserId = res.locals.userId; 
-  const { jid, type, url, caption, filename, phoneNumber } = req.body;
-
-  if (!jid || !type || !url || !phoneNumber || sentByUserId === undefined) {
-    return res.status(400).json({ error: 'Требуются поля jid, type, url, phoneNumber, и пользователь должен быть авторизован.' });
-  }
-
-  try {
-    const sock = getBaileysSock(); 
-
-    if (!sock) {
-      return res.status(404).json({ error: `Аккаунт с номером ${phoneNumber} неактивен или не найден.` });
-    }
-
-    let content: AnyMessageContent;
-    let messageType: string;
-
-    switch (type) {
-      case 'image':
-        content = { image: { url: url }, caption: caption };
-        messageType = 'image';
-        break;
-      case 'video':
-        content = { video: { url: url }, caption: caption };
-        messageType = 'video';
-        break;
-      case 'document':
-        // Baileys requires mimetype for documents
-        // For simplicity, we'll use a generic one if not provided.
-        content = { document: { url: url }, fileName: filename || 'document', mimetype: 'application/octet-stream' };
-        messageType = 'document';
-        break;
-      case 'audio':
-        content = { audio: { url: url } };
-        messageType = 'audio';
-        break;
-      default:
-        return res.status(400).json({ error: 'Неподдерживаемый тип медиа.' });
-    }
-
-    logger.info(`Попытка отправить медиа-сообщение (${type}) от пользователя ${sentByUserId} (через аккаунт ${phoneNumber}) на ${jid}.`);
-
-    const result = await sock.sendMessage(jid, content);
-
-    // --- Сохранение исходящего медиа-сообщения в БД ---
-    // const chatId = await ensureChat(jid, phoneNumber); 
-
-    await prisma.message.create({
-      data: {
-        receivingPhoneJid: phoneNumber,
-        remoteJid: jid,
-        senderId: sentByUserId, // <-- ЗДЕСЬ АЙДИ ПОЛЬЗОВАТЕЛЯ (оператора)
-        content: caption, 
-        type: messageType,
-        mediaUrl: url,
-        filename: filename,
-      },
-    });
-    logger.info(`💾 Исходящее медиа-сообщение (ID оператора: ${sentByUserId}) сохранено в БД.`);
-
-    res.status(200).json({
-      message: `${type} успешно отправлено.`,
-      result: result,
-      sentFrom: phoneNumber,
-    });
-  } catch (error: any) {
-    logger.error(`Ошибка при отправке медиа-сообщения: ${error.message}`);
-    res.status(500).json({
-      error: 'Не удалось отправить медиа-сообщение.',
-      details: error.message,
-    });
+    // 8. Обработка ошибок отправки
+    logger.error(`❌ Критическая ошибка при отправке сообщения на ${normalizedReceiverJid} с ID ${organizationPhoneId}:`, error);
+    return res.status(500).json({ error: 'Failed to send message due to an internal error.', details: error.message });
   }
 };

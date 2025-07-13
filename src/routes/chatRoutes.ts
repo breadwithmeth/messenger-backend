@@ -1,13 +1,13 @@
 // // src/routes/chatRoutes.ts
-// import { Router } from 'express';
-// import { createChat, listChats } from '../controllers/chatController';
-// import { authMiddleware } from '../middlewares/authMiddleware';
+import { Router } from 'express';
+import {  listChats,getChatMessages } from '../controllers/chatController';
+import { authMiddleware } from '../middlewares/authMiddleware';
 
-// const router = Router();
+const router = Router();
 
-// router.use(authMiddleware);
+router.use(authMiddleware);
 
-// router.post('/', createChat);
-// router.get('/', listChats);
+router.get('/', listChats);
+router.get('/:chatId/messages', getChatMessages); // Получить сообщения из конкретного чата
 
-// export default router;
+export default router;

@@ -12,26 +12,107 @@ import makeWASocket, {
   SignalDataTypeMap,
   SignalDataSet,
   AuthenticationCreds,
-  BufferJSON // <--- Этот импорт остается
+  BufferJSON,
+  jidNormalizedUser,
+  isJidGroup,
+  isJidBroadcast,
+  ConnectionState
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import { createAuthDBAdapter, prisma, StoredDataType } from './authStorage';
 import qrcode from 'qrcode-terminal';
 import pino from 'pino';
 import { Buffer } from 'buffer';
+import * as fs from 'fs/promises'; // Для работы с файловой системой (удаление папок)
+import path from 'path'; // Для работы с путями файлов
 
 const logger = pino({ level: 'info' });
 
-let sock: WASocket | null = null;
+// Глобальная Map для хранения активных экземпляров WASocket по organizationPhoneId
+const socks = new Map<number, WASocket>(); 
 
+// Интерфейс для кастомного хранилища сигналов
 interface CustomSignalStorage {
   get<T extends keyof SignalDataTypeMap>(type: T, ids: string[]): Promise<{ [id: string]: SignalDataTypeMap[T]; }>;
   set(data: SignalDataSet): Promise<void>;
   del(keys: string[]): Promise<void>;
 }
 
-export async function startBaileys(organizationId: number, phoneJid: string): Promise<WASocket> {
-  const authDB = createAuthDBAdapter(organizationId, phoneJid);
+/**
+ * Вспомогательная функция для поиска или создания записи чата в БД.
+ * Используется для получения chatId для Message.
+ * @param organizationId ID организации
+ * @param organizationPhoneId ID телефона организации, через который идет этот чат
+ * @param receivingPhoneJid Ваш номер телефона (JID), который участвует в чате
+ * @param remoteJid Идентификатор JID удаленного собеседника
+ * @param name Необязательное имя чата
+ * @returns ID чата из вашей БД.
+ */
+export async function ensureChat(
+  organizationId: number,
+  organizationPhoneId: number,
+  receivingPhoneJid: string,
+  remoteJid: string,
+  name?: string
+): Promise<number> {
+    try {
+        const normalizedRemoteJid = jidNormalizedUser(remoteJid);
+
+        let chat = await prisma.chat.findUnique({
+            where: {
+                organizationId_receivingPhoneJid_remoteJid: {
+                    organizationId,
+                    receivingPhoneJid: jidNormalizedUser(receivingPhoneJid),
+                    remoteJid: normalizedRemoteJid,
+                },
+            },
+        });
+
+        if (!chat) {
+            chat = await prisma.chat.create({
+                data: {
+                    organizationId,
+                    receivingPhoneJid: jidNormalizedUser(receivingPhoneJid),
+                    remoteJid: normalizedRemoteJid,
+                    organizationPhoneId: organizationPhoneId,
+                    name: name || normalizedRemoteJid.split('@')[0],
+                    isGroup: isJidGroup(normalizedRemoteJid),
+                    lastMessageAt: new Date(),
+                },
+            });
+            logger.info(`✅ Создан новый чат для JID: ${normalizedRemoteJid} (Ваш номер: ${receivingPhoneJid}, Организация: ${organizationId}, Phone ID: ${organizationPhoneId}, ID чата: ${chat.id})`);
+        } else {
+             await prisma.chat.update({
+                where: { id: chat.id },
+                data: { lastMessageAt: new Date() },
+            });
+        }
+        return chat.id;
+    } catch (error: any) {
+        logger.error(`❌ Ошибка в ensureChat для JID ${remoteJid} (Ваш номер: ${receivingPhoneJid}, Phone ID: ${organizationPhoneId}):`, error);
+        if (error.stack) {
+            logger.error('Stack trace:', error.stack);
+        }
+        if (error.code && error.meta) {
+            logger.error(`Prisma Error Code: ${error.code}, Meta:`, JSON.stringify(error.meta, null, 2));
+        }
+        throw error;
+    }
+}
+
+/**
+ * Запускает или перезапускает Baileys сессию для указанного телефона организации.
+ * @param organizationId ID организации.
+ * @param organizationPhoneId ID телефона организации в вашей БД.
+ * @param phoneJid JID номера телефона WhatsApp (например, '77051234567@s.whatsapp.net').
+ * @returns Экземпляр WASocket.
+ */
+export async function startBaileys(organizationId: number, organizationPhoneId: number, phoneJid: string): Promise<WASocket> {
+  // Определяем путь к папке с auth-данными для конкретного JID
+  const authFolderPath = `./baileys_auth_info/${phoneJid}`;
+
+  // Создаем адаптер для хранения данных авторизации в вашей БД
+  const authDB = createAuthDBAdapter(organizationId, phoneJid); 
 
   let creds: AuthenticationCreds;
 
@@ -44,30 +125,30 @@ export async function startBaileys(organizationId: number, phoneJid: string): Pr
     if (credsType === 'base64_json') {
       try {
         const decodedCredsJsonString = Buffer.from(credsValueString, 'base64').toString('utf8');
-        // --- ИСПРАВЛЕНО: используем JSON.parse с BufferJSON.reviver ---
         const parsedCreds = JSON.parse(decodedCredsJsonString, BufferJSON.reviver) as AuthenticationCreds;
 
+        // Проверяем полноту загруженных учетных данных
         if (parsedCreds.noiseKey && parsedCreds.signedIdentityKey && parsedCreds.registered !== undefined) {
           creds = parsedCreds;
-          logger.info('✅ Полные учетные данные (creds) успешно загружены и распарсены из БД.');
+          logger.info(`✅ Полные учетные данные (creds) успешно загружены и распарсены из БД для ${phoneJid}.`);
         } else {
-          logger.warn('⚠️ Загруженные creds неполны (отсутствуют noiseKey, signedIdentityKey или registered). Инициализация новых creds.');
-          await authDB.delete('creds');
+          logger.warn(`⚠️ Загруженные creds неполны для ${phoneJid}. Инициализация новых creds.`);
+          await authDB.delete('creds'); // Удаляем неполные creds
           creds = initAuthCreds();
         }
       } catch (e: unknown) {
-        logger.error('⚠️ Ошибка парсинга creds из базы данных (Base64/JSON). Инициализация новых creds:', e);
-        await authDB.delete('creds');
+        logger.error(`⚠️ Ошибка парсинга creds из базы данных (Base64/JSON) для ${phoneJid}. Инициализация новых creds:`, e);
+        await authDB.delete('creds'); // Удаляем некорректные creds
         creds = initAuthCreds();
       }
     } else {
-      logger.warn(`Неожиданный тип creds '${credsType}'. Ожидается 'base64_json'. Удаление старых данных и инициализация новых creds.`);
-      await authDB.delete('creds');
+      logger.warn(`Неожиданный тип creds '${credsType}' для ${phoneJid}. Ожидается 'base64_json'. Удаление старых данных и инициализация новых creds.`);
+      await authDB.delete('creds'); // Удаляем creds с неправильным типом
       creds = initAuthCreds();
     }
   } else {
     creds = initAuthCreds();
-    logger.info('creds не найдены в БД, инициализация новых creds.');
+    logger.info(`creds не найдены в БД для ${phoneJid}, инициализация новых creds.`);
   }
 
   // 2. Создаем SignalStorage для всех остальных ключей (pre-keys, session keys, etc.)
@@ -85,7 +166,6 @@ export async function startBaileys(organizationId: number, phoneJid: string): Pr
           try {
             if (dataType === 'json' || dataType === 'base64_json') {
               const decodedString = dataType === 'base64_json' ? Buffer.from(valueString, 'base64').toString('utf8') : valueString;
-              // --- ИСПРАВЛЕНО: используем JSON.parse с BufferJSON.reviver ---
               data[id] = JSON.parse(decodedString, BufferJSON.reviver) as unknown as SignalDataTypeMap[T];
             } else if (dataType === 'buffer') {
               data[id] = Buffer.from(valueString, 'base64') as unknown as SignalDataTypeMap[T];
@@ -110,13 +190,12 @@ export async function startBaileys(organizationId: number, phoneJid: string): Pr
 
             let valueToStore: string;
             let dataType: StoredDataType;
-            
+
             if (value !== null) {
               if (value instanceof Buffer) {
                 valueToStore = value.toString('base64');
                 dataType = 'buffer';
               } else {
-                // --- ИСПРАВЛЕНО: используем JSON.stringify с BufferJSON.replacer ---
                 valueToStore = Buffer.from(JSON.stringify(value, BufferJSON.replacer), 'utf8').toString('base64');
                 dataType = 'base64_json';
               }
@@ -136,86 +215,170 @@ export async function startBaileys(organizationId: number, phoneJid: string): Pr
     },
   };
 
+  // Создаем кэшируемое хранилище ключей для Baileys
   const signalKeyStore = makeCacheableSignalKeyStore(signalStorage, logger);
 
+  // Формируем объект авторизации для Baileys
   const auth: AuthenticationState = {
     creds,
     keys: signalKeyStore,
   };
 
+  // Получаем последнюю версию WhatsApp Web API
   const { version } = await fetchLatestBaileysVersion();
   logger.info(`Используется WhatsApp Web API версии: ${version.join('.')}`);
 
-  sock = makeWASocket({
+  // Создаем новый экземпляр Baileys WASocket
+  const currentSock = makeWASocket({ 
     version,
     auth,
-    browser: ['Ubuntu', 'Chrome', '22.04.4'],
-    logger: logger,
+    browser: ['Ubuntu', 'Chrome', '22.04.4'], // Устанавливаем информацию о браузере
+    logger: logger, // Используем ваш pino logger
+    // Функция для получения сообщений из кэша или БД (для Baileys)
+    getMessage: async (key) => {
+        logger.debug(`Попытка получить сообщение из getMessage: ${key.id} от ${key.remoteJid}`);
+        const msg = await prisma.message.findUnique({
+            where: { whatsappMessageId: key.id || '' },
+            select: {
+                content: true,
+                type: true,
+                remoteJid: true,
+                senderJid: true,
+                fromMe: true,
+                timestamp: true,
+                mediaUrl: true,
+                mimeType: true,
+                filename: true,
+                size: true
+            }
+        });
+        if (msg) {
+            if (msg.type === 'text') {
+                return { conversation: msg.content };
+            } else if (msg.type === 'image' && msg.mediaUrl) {
+                return { imageMessage: { caption: msg.content || '', mimetype: msg.mimeType || 'image/jpeg' } };
+            }
+            return { conversation: msg.content || 'Сообщение найдено в БД, но тип не поддержан для getMessage.' };
+        }
+        return { conversation: 'Сообщение не найдено в кэше или БД' };
+    }
   });
 
-  sock.ev.on('connection.update', async (update) => {
+  // !!! КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Добавляем созданный сокет в socks Map !!!
+  socks.set(organizationPhoneId, currentSock);
+
+  // Обработчик событий обновления соединения
+  currentSock.ev.on('connection.update', async (update: Partial<ConnectionState>) => { 
     const { connection, lastDisconnect, qr } = update;
 
-    if (qr) {
-      logger.info('🔑 Новый QR-код для подключения:');
-      qrcode.generate(qr, { small: true });
+    logger.info(`[ConnectionUpdate] Status for ${phoneJid}: connection=${connection}, QR_present=${!!qr}`);
+    if (lastDisconnect) {
+      logger.info(`[ConnectionUpdate] lastDisconnect for ${phoneJid}: reason=${(lastDisconnect.error as Boom)?.output?.statusCode || lastDisconnect.error?.message || 'Неизвестно'}`);
     }
 
+    // Если получен QR-код
+    if (qr) {
+      logger.info(`[ConnectionUpdate] QR code received for ${phoneJid}. Length: ${qr.length}`);
+      // Сохраняем QR-код в БД и обновляем статус
+      await prisma.organizationPhone.update({
+        where: { id: organizationPhoneId },
+        data: { qrCode: qr, status: 'pending' },
+      });
+
+      // Выводим QR-код в терминал
+      console.log(`\n======================================================`);
+      console.log(`       QR-КОД ДЛЯ НОМЕРА: ${phoneJid}           `);
+      console.log(`======================================================`);
+      qrcode.generate(qr, { small: true });
+      console.log(`======================================================`);
+      console.log(`  Отсканируйте QR-код с помощью WhatsApp на вашем телефоне.`);
+      console.log(`  (WhatsApp -> Настройки -> Связанные устройства -> Привязка устройства)`);
+      console.log(`======================================================\n`);
+    } else {
+      logger.info(`[ConnectionUpdate] No QR code in this update for ${phoneJid}.`);
+    }
+
+    // Если соединение закрыто
     if (connection === 'close') {
       const shouldReconnect =
         (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-      logger.info(`Соединение закрыто, переподключение: ${shouldReconnect}`);
+      logger.info(`[Connection] Соединение закрыто для ${phoneJid}. Причина: ${lastDisconnect?.error}. Переподключение: ${shouldReconnect}`);
+      
+      // Удаляем сокет из Map перед попыткой переподключения или завершением
+      socks.delete(organizationPhoneId);
+
       if (shouldReconnect) {
+        // Задержка перед попыткой переподключения
         await new Promise(resolve => setTimeout(resolve, 3000));
-        startBaileys(organizationId, phoneJid);
+        logger.info(`[Connection] Попытка переподключения для ${phoneJid}...`);
+        // Рекурсивно вызываем startBaileys для создания новой сессии
+        startBaileys(organizationId, organizationPhoneId, phoneJid);
+      } else {
+          logger.error(`[Connection] Подключение для ${phoneJid} не будет переподключено (Logged out).`);
+          
+          // Удаляем папку с файлами авторизации при выходе из системы
+          try {
+            const fullAuthPath = path.resolve(authFolderPath);
+            const stats = await fs.stat(fullAuthPath).catch(() => null); 
+            if (stats && stats.isDirectory()) {
+              await fs.rm(fullAuthPath, { recursive: true, force: true });
+              logger.info(`✅ Успешно удалена папка авторизации: ${fullAuthPath}`);
+            } else {
+              logger.info(`Папка авторизации ${fullAuthPath} не существует или не является директорией. Пропуск удаления.`);
+            }
+          } catch (error) {
+            logger.error(`❌ Ошибка при удалении папки авторизации ${authFolderPath}: ${error}`);
+          }
+
+          // Обновляем статус в БД на 'logged_out' и очищаем QR-код
+          await prisma.organizationPhone.update({
+              where: { id: organizationPhoneId },
+              data: { status: 'logged_out', lastConnectedAt: new Date(), qrCode: null }, 
+          });
       }
     } else if (connection === 'open') {
-      logger.info(`✅ Подключено к WhatsApp для ${organizationId} / ${phoneJid}`);
+      // Если соединение открыто
+      logger.info(`✅ Подключено к WhatsApp для ${phoneJid} (Организация: ${organizationId}, Phone ID: ${organizationPhoneId})`);
+      // Обновляем статус в БД на 'connected', сохраняем фактический JID и очищаем QR-код
+      await prisma.organizationPhone.update({
+          where: { id: organizationPhoneId },
+          data: { status: 'connected', phoneJid: currentSock?.user?.id || phoneJid, lastConnectedAt: new Date(), qrCode: null }, 
+      });
     }
   });
 
-  sock.ev.on('creds.update', async () => {
-    logger.info('🔐 Учетные данные (creds) обновлены.');
-    // --- ИСПРАВЛЕНО: используем JSON.stringify с BufferJSON.replacer ---
+  // Обработчик обновления учетных данных
+  currentSock.ev.on('creds.update', async () => { 
+    logger.info(`🔐 Учетные данные (creds) обновлены для ${phoneJid}.`);
     const base64Creds = Buffer.from(JSON.stringify(creds, BufferJSON.replacer), 'utf8').toString('base64');
     await authDB.set('creds', base64Creds, 'base64_json');
   });
 
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+  // Обработчик получения новых сообщений
+  currentSock.ev.on('messages.upsert', async ({ messages, type }) => { 
     if (type === 'notify') {
       for (const msg of messages) {
+        // Пропускаем сообщения без контента или если это наше исходящее сообщение, не имеющее видимого контента
         if (!msg.message) continue;
-        if (msg.key.fromMe && !msg.message.conversation && !msg.message.extendedTextMessage) continue; 
+        if (msg.key.fromMe && !msg.message.conversation && !msg.message.extendedTextMessage && !msg.message.imageMessage && !msg.message.videoMessage && !msg.message.documentMessage && !msg.message.audioMessage && !msg.message.stickerMessage) continue;
 
-        const remoteJid = msg.key.remoteJid;
+        const remoteJid = jidNormalizedUser(msg.key.remoteJid || '');
         if (!remoteJid) {
             logger.warn('🚫 Сообщение без remoteJid, пропущено.');
-            continue; 
+            continue;
+        }
+
+        // Пропускаем широковещательные сообщения и статусы
+        if (isJidBroadcast(remoteJid) || remoteJid === 'status@broadcast') {
+            logger.info(`Пропускаем широковещательное сообщение или статус от ${remoteJid}.`);
+            continue;
         }
 
         try {
-            // chatID все еще требуется для связи с моделью Chat
-            let senderType: string;
-            let senderId: number; 
+            const senderJid = jidNormalizedUser(msg.key.fromMe ? (currentSock?.user?.id || phoneJid) : (msg.key.participant || remoteJid));
 
-            if (msg.key.fromMe) {
-                senderType = 'operator';
-            } else {
-                senderType = 'client';
-                const participantJid = msg.key.participant || remoteJid; 
-                const numericPart = parseInt(participantJid.split('@')[0]);
-
-                if (!isNaN(numericPart)) {
-                    senderId = numericPart;
-                } else {
-                    senderId = 0; 
-                    logger.warn(`⚠️ Не удалось получить числовой senderId из JID: ${participantJid}. Установлен ID по умолчанию: ${senderId}`);
-                }
-                logger.info(`↙️ Полученное сообщение от клиента ${senderId} для ${phoneJid} из чата ${remoteJid}`);
-            }
-            
             let content: string | undefined;
-            let messageType: string = "unknown"; 
+            let messageType: string = "unknown";
             let mediaUrl: string | undefined;
             let filename: string | undefined;
             let mimeType: string | undefined;
@@ -223,6 +386,7 @@ export async function startBaileys(organizationId: number, phoneJid: string): Pr
 
             const messageContent = msg.message;
 
+            // Разбор различных типов сообщений
             if (messageContent?.conversation) {
                 content = messageContent.conversation;
                 messageType = "text";
@@ -234,10 +398,6 @@ export async function startBaileys(organizationId: number, phoneJid: string): Pr
                 content = messageContent.imageMessage.caption || undefined;
                 mimeType = messageContent.imageMessage.mimetype || undefined;
                 size = Number(messageContent.imageMessage.fileLength) || undefined;
-                // --- ПЛЕЙСХОЛДЕР ДЛЯ СКАЧИВАНИЯ И ЗАГРУЗКИ МЕДИА ---
-                // const stream = await downloadContentFromMessage(messageContent.imageMessage, 'image');
-                // const buffer = await getBuffer(stream); 
-                // mediaUrl = await uploadToCloudStorage(buffer, mimeType); 
                 logger.info(`  [${messageType}] Содержимое: "${content || 'без подписи'}". MIME: ${mimeType}. Размер: ${size}.`);
             } else if (messageContent?.videoMessage) {
                 messageType = "video";
@@ -274,7 +434,7 @@ export async function startBaileys(organizationId: number, phoneJid: string): Pr
                 content = `Контакты: ${messageContent.contactsArrayMessage.contacts?.map(c => c.displayName || c.vcard).join(', ') || 'пусто'}`;
                 logger.info(`  [${messageType}] Контакты: ${content}`);
             }
-            
+
             if (messageType === "unknown" && Object.keys(messageContent || {}).length > 0) {
                 messageType = Object.keys(messageContent || {})[0];
                 logger.warn(`  [${messageType}] Неподдерживаемый или неизвестный тип сообщения. JID: ${remoteJid}`);
@@ -282,54 +442,160 @@ export async function startBaileys(organizationId: number, phoneJid: string): Pr
                  logger.warn(`  [Неизвестный] Сообщение без опознаваемого типа контента. JID: ${remoteJid}`);
             }
 
+            // Преобразование timestamp в Date
+            const timestampDate = new Date(
+              (typeof msg.messageTimestamp === 'object' && msg.messageTimestamp !== null && 'toNumber' in msg.messageTimestamp
+                ? (msg.messageTimestamp as Long).toNumber()
+                : (msg.messageTimestamp || 0)) * 1000
+            );
+
             // Сохраняем сообщение в БД
             const savedMessage = await prisma.message.create({
                 data: {
-                    receivingPhoneJid: phoneJid, // <-- Прямое использование phoneJid из параметра startBaileys
-                    remoteJid: remoteJid,       // <-- Прямое использование remoteJid из WhatsApp-сообщения
-                    senderId: 0, 
-                    content: content,
+                    chatId: await ensureChat(organizationId, organizationPhoneId, phoneJid, remoteJid), // Вызов ensureChat
+                    organizationPhoneId: organizationPhoneId,
+                    receivingPhoneJid: phoneJid,
+                    remoteJid: remoteJid,
+                    whatsappMessageId: msg.key.id || `_temp_${Date.now()}_${Math.random()}`,
+                    senderJid: senderJid,
+                    fromMe: msg.key.fromMe || false,
+                    content: content || '',
                     type: messageType,
                     mediaUrl: mediaUrl,
                     filename: filename,
                     mimeType: mimeType,
                     size: size,
+                    timestamp: timestampDate,
+                    status: 'received',
+                    organizationId: organizationId,
                 },
             });
-            logger.info(`💾 Сообщение (тип: ${messageType}, ID: ${savedMessage.id}) сохранено в БД  (JID собеседника: ${remoteJid}, Ваш номер: ${phoneJid}).`);
+            logger.info(`💾 Сообщение (тип: ${messageType}, ID: ${savedMessage.id}) сохранено в БД (JID собеседника: ${remoteJid}, Ваш номер: ${phoneJid}, chatId: ${savedMessage.chatId}).`);
 
-        } catch (error: unknown) {
-            logger.error(`❌ Ошибка при сохранении сообщения в БД для JID ${remoteJid} (Ваш номер: ${phoneJid}):`, error);
+        } catch (error:any) {
+            logger.error(`❌ Ошибка при сохранении сообщения в БД для JID ${remoteJid} (Ваш номер: ${phoneJid}):`);
+            if (error instanceof Error) {
+                logger.error('Сообщение об ошибке:', error.message);
+                if (error.stack) {
+                    logger.error('Stack trace:', error.stack);
+                }
+                if ('code' in error && 'meta' in error && typeof error.code === 'string') {
+                    logger.error(`Prisma Error Code: ${error.code}, Meta:`, JSON.stringify(error.meta, null, 2));
+                }
+            } else {
+                logger.error('Неизвестная ошибка:', error);
+            }
         }
-      }}
+      }
+    }
   });
 
-  return sock;
+  return currentSock; // Возвращаем созданный сокет
 }
 
-export function getBaileysSock(): WASocket {
+/**
+ * Возвращает активный экземпляр WASocket по ID телефона организации.
+ * @param organizationPhoneId ID телефона организации.
+ * @returns Экземпляр WASocket или null, если не найден.
+ */
+export function getBaileysSock(organizationPhoneId: number): WASocket | null {
+  logger.info(`[getBaileysSock] Запрошен organizationPhoneId: ${organizationPhoneId}`);
+  logger.info(`[getBaileysSock] Ключи в socks Map: [${Array.from(socks.keys()).join(', ')}]`);
+  const sock = socks.get(organizationPhoneId);
   if (!sock) {
-    throw new Error('Baileys socket не инициализирован. Пожалуйста, сначала вызовите startBaileys().');
+    logger.warn(`[getBaileysSock] Сокет не найден для organizationPhoneId: ${organizationPhoneId}`);
+  } else {
+    logger.info(`[getBaileysSock] Сокет найден для organizationPhoneId: ${organizationPhoneId}. JID сокета: ${sock.user?.id || 'Неизвестно'}`);
   }
-  return sock;
+  return sock || null;
 }
 
+/**
+ * Отправляет сообщение через Baileys сокет.
+ * @param sock Экземпляр WASocket.
+ * @param jid JID получателя.
+ * @param content Содержимое сообщения.
+ */
 export async function sendMessage(
+  sock: WASocket,
   jid: string,
   content: AnyMessageContent,
-  options?: { quoted?: WAMessage }
-): Promise<any> {
-  const client = getBaileysSock();
-  return await client.sendMessage(jid, content, options);
+  organizationId: number, // Добавляем organizationId
+  organizationPhoneId: number, // Добавляем organizationPhoneId
+  senderJid: string // Добавляем senderJid (ваш номер)
+) {
+  if (!sock || !sock.user) {
+    throw new Error('Baileys socket is not connected or user is not defined.');
+  }
+
+  try {
+    const sentMessage = await sock.sendMessage(jid, content);
+
+    // --- НАЧАЛО НОВОГО КОДА ДЛЯ СОХРАНЕНИЯ ---
+    if (sentMessage) {
+      const remoteJid = jidNormalizedUser(jid); // JID получателя
+      const type = 'text'; // Предполагаем текстовое сообщение, но можно расширить
+      const messageContent = (content as { text?: string })?.text || '';
+
+      // Получаем chatId для сохранения сообщения
+      const chatId = await ensureChat(organizationId, organizationPhoneId, senderJid, remoteJid);
+
+      await prisma.message.create({
+        data: {
+          chatId: chatId,
+          organizationPhoneId: organizationPhoneId,
+          receivingPhoneJid: senderJid, // Ваш номер телефона
+          remoteJid: remoteJid, // JID получателя
+          whatsappMessageId: sentMessage.key.id || `_out_${Date.now()}_${Math.random()}`,
+          senderJid: jidNormalizedUser(sock.user?.id || senderJid), // JID отправителя (ваш аккаунт)
+          fromMe: true, // Это сообщение отправлено "от меня"
+          content: messageContent,
+          type: type,
+          timestamp: new Date(),
+          status: 'sent', // Статус "отправлено"
+          organizationId: organizationId,
+          // Добавьте сюда поля для медиа, если sendMessage будет поддерживать их
+          // mediaUrl: ...,
+          // filename: ...,
+          // mimeType: ...,
+          // size: ...,
+        },
+      });
+      logger.info(`✅ Исходящее сообщение "${messageContent}" (ID: ${sentMessage.key.id}) сохранено в БД. Chat ID: ${chatId}`);
+    } else {
+      logger.warn(`⚠️ Исходящее сообщение на ${jid} не было сохранено: sentMessage is undefined.`);
+    }
+    // --- КОНЕЦ НОВОГО КОДА ДЛЯ СОХРАНЕНИЯ ---
+
+    return sentMessage;
+  } catch (error: any) {
+    logger.error(`❌ Ошибка при отправке и/или сохранении исходящего сообщения на ${jid}:`, error);
+    throw error; // Перебрасываем ошибку дальше
+  }
 }
 
+
+// Обработчик сигнала завершения процесса (например, Ctrl+C)
 process.on('SIGINT', async () => {
   logger.info('Получен сигнал SIGINT. Закрытие Baileys...');
-  if (sock) {
-    await sock.end(new Error('Приложение завершает работу: SIGINT получен.'));
-    logger.info('Baileys socket закрыт.');
+  // Итерируем по всем активным сокетам и закрываем их
+  for (const sockToClose of socks.values()) {
+    // Проверяем, существует ли сокет и находится ли его WebSocket в состоянии OPEN (числовое значение 1)
+    if (sockToClose && (sockToClose.ws as any).readyState === 1) { 
+      try {
+        await sockToClose.end(new Error('Приложение завершает работу: SIGINT получен.'));
+        logger.info(`Baileys socket для JID ${sockToClose.user?.id || 'неизвестно'} закрыт.`);
+      } catch (e) {
+        logger.error(`Ошибка при закрытии сокета: ${e}`);
+      }
+    } else if (sockToClose) {
+        logger.info(`Baileys socket для JID ${sockToClose.user?.id || 'неизвестно'} не был в состоянии OPEN (readyState: ${(sockToClose.ws as any)?.readyState}).`);
+    }
   }
-  await prisma.$disconnect();
+  socks.clear(); // Очищаем Map после попытки закрытия всех сокетов
+  logger.info('Все Baileys сокеты закрыты.');
+
+  await prisma.$disconnect(); // Отключаемся от Prisma Client
   logger.info('Prisma Client отключен.');
-  process.exit(0);
+  process.exit(0); // Завершаем процесс
 });

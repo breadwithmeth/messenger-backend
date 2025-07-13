@@ -17,6 +17,7 @@ export function authMiddleware(req: AuthRequest, res: Response, next: NextFuncti
     const payload = jwt.verify(token, JWT_SECRET) as { userId: number; organizationId: number };
     req.user = payload;
     res.locals.userId = payload.userId;
+    res.locals.organizationId = payload.organizationId;
     next();
   } catch {
     res.status(401).json({ error: 'Неверный токен' });

@@ -1,47 +1,58 @@
-// import prisma from '../config/prisma';
+// src/services/chatService.ts
+import { prisma } from '../config/authStorage';
+import pino from 'pino';
 
-// export async function createChat(
-//   organizationId: number,
-//   clientId: number,
-//   operatorId: number,
-//   status: string = 'open'
-// ) {
-//   return prisma.chat.create({
-//     data: {
-//       organizationId,
-//       clientId,
-//       operatorId,
-//       status,
-//     },
-//   });
-// }
+const logger = pino({ level: 'info' });
 
-// export async function getChatsByOrganization(organizationId: number) {
-//   return prisma.chat.findMany({
-//     where: { organizationId },
-//     orderBy: { createdAt: 'desc' },
-//   });
-// }
+export async function getChatsByOrganizationSortedByLastMessage(organizationId: number) {
+  try {
+    const chats = await prisma.chat.findMany({
+      where: {
+        organizationId: organizationId,
+      },
+      orderBy: {
+        lastMessageAt: 'desc', // Сортируем чаты по дате последнего сообщения (новые сверху)
+      },
+      include: {
+        organizationPhone: { // Включаем информацию о телефоне организации
+          select: {
+            id: true,
+            phoneJid: true,
+            displayName: true,
+          },
+        },
+        // --- ИЗМЕНЕНИЕ ЗДЕСЬ: Добавляем orderBy для messages, чтобы получить последнее ---
+        messages: {
+          take: 1, // Берем только одно сообщение
+          orderBy: {
+            timestamp: 'desc', // Сортируем сообщения в чате по убыванию времени (самое новое будет первым)
+          },
+          select: {
+            id: true,
+            content: true,
+            senderJid: true,
+            timestamp: true,
+            fromMe: true,
+            type: true,
+          },
+        },
+        // --- КОНЕЦ ИЗМЕНЕНИЯ ---
+      },
+    });
 
-// export async function getChatById(id: number) {
-//   return prisma.chat.findUnique({
-//     where: { id },
-//   });
-// }
+    logger.info(`✅ Получено ${chats.length} чатов для организации ${organizationId}.`);
 
-// export async function updateChat(id: number, data: Partial<{
-//   clientId: number;
-//   operatorId: number;
-//   status: string;
-// }>) {
-//   return prisma.chat.update({
-//     where: { id },
-//     data,
-//   });
-// }
+    // Если вы хотите, чтобы последнее сообщение было легко доступно как `chat.lastMessage`,
+    // можно слегка преобразовать результат.
+    const chatsWithLastMessage = chats.map(chat => ({
+      ...chat,
+      lastMessage: chat.messages.length > 0 ? chat.messages[0] : null,
+      messages: undefined, // Удаляем исходный массив messages, чтобы избежать дублирования
+    }));
 
-// export async function deleteChat(id: number) {
-//   return prisma.chat.delete({
-//     where: { id },
-//   });
-// }
+    return chatsWithLastMessage;
+  } catch (error: any) {
+    logger.error(`❌ Ошибка в getChatsByOrganizationSortedByLastMessage для организации ${organizationId}:`, error);
+    throw error; // Перебрасываем ошибку для обработки в контроллере
+  }
+}

@@ -12,17 +12,19 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
 model BaileysAuthState {
   id             Int      @id @default(autoincrement())
   organizationId Int
   phoneJid       String
-  key            String   // ключ, например "creds" или "pre-key:xyz"
+  key            String // ключ, например "creds" или "pre-key:xyz"
   value          Bytes?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   @@unique([organizationId, phoneJid, key])
 }
+
 model BaileysAuth {
   organizationId Int
   phoneJid       String
@@ -33,72 +35,96 @@ model BaileysAuth {
   @@id([organizationId, phoneJid, key]) // Составной первичный ключ
   @@map("baileys_auth") // Имя таблицы в базе данных
 }
+
 model Session {
-  id             Int      @id @default(autoincrement())
+  id             Int    @id @default(autoincrement())
   organizationId Int
   phoneJid       String
 
-  status         String   // connected, disconnected
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  status    String // connected, disconnected
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([organizationId, phoneJid])
 }
 
-
 model Organization {
-  id        Int       @id @default(autoincrement())
+  id        Int      @id @default(autoincrement())
   name      String
-  createdAt DateTime  @default(now())
+  createdAt DateTime @default(now())
 
-  users     User[]
-
+  users   User[]
+  Chat    Chat[]
+  phones  OrganizationPhone[] // <--- связь с номерами
+  Message Message[]
 }
 
 model User {
-  id             Int       @id @default(autoincrement())
+  id             Int          @id @default(autoincrement())
   organization   Organization @relation(fields: [organizationId], references: [id])
   organizationId Int
-  email          String     @unique
+  email          String       @unique
   passwordHash   String
   name           String?
-  role           String     @default("operator") // or 'admin'
-  createdAt      DateTime   @default(now())
+  role           String       @default("operator") // or 'admin'
+  createdAt      DateTime     @default(now())
 
+  Chat Chat[] @relation("ChatUsers")
 }
 
 model Client {
-  id        Int       @id @default(autoincrement())
-  phoneJid  String    @unique // e.g. 79001112233@s.whatsapp.net
+  id        Int      @id @default(autoincrement())
+  phoneJid  String   @unique // e.g. 79001112233@s.whatsapp.net
   name      String?
-  createdAt DateTime  @default(now())
+  createdAt DateTime @default(now())
 
-  metadata  ClientMetadata[]
+  metadata ClientMetadata[]
+
+  Chat Chat[] @relation("ChatClients")
 }
-
-
 
 model Message {
-  id          Int      @id @default(autoincrement())
-  receivingPhoneJid String   // Поле для быстрой фильтрации по вашему аккаунту
-  remoteJid   String   // Идентификатор WhatsApp JID собеседника
-  senderId    Int      // manually resolve: either from clients or users
+  id                 Int       @id @default(autoincrement())
+  chat               Chat      @relation(fields: [chatId], references: [id])
+  chatId             Int       @default(1) // <-- Добавлено @default(1)
+                                           // !!! ВАЖНО: Убедитесь, что в Chat есть запись с id=1.
+                                           // ИЛИ: Если у вас есть 2 записи с NULL chatId,
+                                           // этот default НЕ исправит их автоматически правильно.
+                                           // Это самый проблемный момент.
+                                           // Вам придется либо удалить эти 2 записи, либо вручную присвоить им chatId,
+                                           // прежде чем запускать эту миграцию, если вы хотите правильных данных.
+                                           // Если вы просто хотите, чтобы миграция прошла, и готовы принять
+                                           // некорректные связи для этих 2х сообщений, то можно оставить.
 
-  content     String?  // text of the message
-  type        String   @default("text") // text, image, file, audio, etc.
-  mediaUrl    String?  // URL to media (if any)
-  filename    String?  // Optional filename for attachments
-  mimeType    String?  // Optional MIME type (e.g., image/jpeg)
-  size        Int?     // Optional size in bytes
+  organizationPhone  OrganizationPhone @relation(fields: [organizationPhoneId], references: [id])
+  organizationPhoneId Int      @default(1) // <-- Добавлено @default(1)
+                                           // !!! ВАЖНО: Убедитесь, что в OrganizationPhone есть запись с id=1.
 
-  createdAt   DateTime @default(now())
+  receivingPhoneJid  String
+  remoteJid          String
+  whatsappMessageId  String?   @unique
+  // !!! ВАЖНО: Для whatsappMessageId, который должен быть @unique,
+  // простой @default не подойдет, если у вас уже есть строки, которым нужен уникальный ID.
+  // Это все еще самый сложный случай.
+  // Ниже я предлагаю способ с временным дефолтом, но это снова вернет вас к ручной правке SQL.
+  // Либо вам нужно будет вручную удалить существующие строки с NULL whatsappMessageId,
+  // если вы не можете присвоить им уникальные значения.
 
-  events      MessageEvent[]
+  senderJid          String   @default("") // <-- Добавлено @default("")
+  fromMe             Boolean  @default(false) // <-- Добавлено @default(false)
+  content            String    @db.Text @default("") // <-- Добавлено @default("") для обработки существующих NULL
+  type               String
+  mediaUrl           String?
+  filename           String?
+  mimeType           String?
+  size               Int?
+  timestamp          DateTime @default(now()) // <-- Добавлено @default(now())
+  status             String    @default("pending")
+  organizationId     Int      @default(1) // <-- Добавлено @default(1)
+                                           // !!! ВАЖНО: Убедитесь, что в Organization есть запись с id=1.
+
+  organization       Organization @relation(fields: [organizationId], references: [id])
 }
-
-
-
-
 model ClientMetadata {
   id        Int      @id @default(autoincrement())
   client    Client   @relation(fields: [clientId], references: [id])
@@ -108,12 +134,51 @@ model ClientMetadata {
   createdAt DateTime @default(now())
 }
 
+// model MessageEvent {
+//   id        Int      @id @default(autoincrement())
+//   message   Message  @relation(fields: [messageId], references: [id])
+//   messageId Int
+//   status    String // sent / delivered / read
+//   eventAt   DateTime @default(now())
+// }
+
+model Chat {
+  id                  Int          @id @default(autoincrement())
+  organization        Organization @relation(fields: [organizationId], references: [id])
+  organizationId      Int
+  name                String?
+  createdAt           DateTime     @default(now())
+  receivingPhoneJid   String
+  remoteJid           String
+  organizationPhoneId Int          @default(1) // <-- Добавлено @default(1)
+                                               // !!! ВАЖНО: Убедитесь, что в OrganizationPhone есть запись с id=1
+                                               // или укажите другой существующий ID.
+  organizationPhone   OrganizationPhone @relation(fields: [organizationPhoneId], references: [id])
+  isGroup             Boolean      @default(false)
+  lastMessageAt       DateTime?
+
+  clients             Client[]     @relation("ChatClients")
+  users               User[]       @relation("ChatUsers")
+  messages            Message[]
+
+  @@unique([organizationId, receivingPhoneJid, remoteJid])
+}
 
 
-model MessageEvent {
-  id         Int     @id @default(autoincrement())
-  message    Message @relation(fields: [messageId], references: [id])
-  messageId  Int
-  status     String  // sent / delivered / read
-  eventAt    DateTime @default(now())
+model OrganizationPhone {
+  id              Int            @id @default(autoincrement())
+  organization    Organization   @relation(fields: [organizationId], references: [id])
+  organizationId  Int
+  phoneJid        String         @unique // например, 79001112233@s.whatsapp.net
+  displayName     String?        // для подписи или отображения
+  status          String         @default("pending") // pending, connected, logged_out, etc.
+  lastConnectedAt DateTime?
+  createdAt       DateTime       @default(now())
+  qrCode          String? 
+  updatedAt       DateTime       @updatedAt @default(now()) // <-- Добавлено @default(now())
+                                                           // @updatedAt уже автоматически обновляет,
+                                                           // но @default(now()) помогает при миграции для существующих строк.
+
+  chats           Chat[] // Связь с моделью Chat
+  messages        Message[] // Связь с моделью Message
 }
