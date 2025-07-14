@@ -16,7 +16,9 @@ import makeWASocket, {
   jidNormalizedUser,
   isJidGroup,
   isJidBroadcast,
-  ConnectionState
+  ConnectionState,
+  downloadContentFromMessage, // <--- ДОБАВИТЬ
+  MediaType, // <--- ДОБАВИТЬ
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import { createAuthDBAdapter, prisma, StoredDataType } from './authStorage';
@@ -36,6 +38,44 @@ interface CustomSignalStorage {
   get<T extends keyof SignalDataTypeMap>(type: T, ids: string[]): Promise<{ [id: string]: SignalDataTypeMap[T]; }>;
   set(data: SignalDataSet): Promise<void>;
   del(keys: string[]): Promise<void>;
+}
+
+// --- НОВАЯ ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ---
+/**
+ * Скачивает медиа из сообщения и сохраняет его локально.
+ * @param messageContent Содержимое сообщения (например, imageMessage).
+ * @param type Тип медиа ('image', 'video', 'audio', 'document').
+ * @param originalFilename Имя файла (для документов).
+ * @returns Путь к сохраненному файлу для использования в URL.
+ */
+async function downloadAndSaveMedia(
+  messageContent: any,
+  type: MediaType,
+  originalFilename?: string
+): Promise<string | undefined> {
+  try {
+    const stream = await downloadContentFromMessage(messageContent, type);
+    let buffer = Buffer.from([]);
+    for await (const chunk of stream) {
+      buffer = Buffer.concat([buffer, chunk]);
+    }
+
+    const mediaDir = path.join(__dirname, '..', '..', 'public', 'media');
+    await fs.mkdir(mediaDir, { recursive: true });
+
+    const extension = path.extname(originalFilename || '') || `.${messageContent.mimetype?.split('/')[1] || 'bin'}`;
+    const uniqueFilename = `${Date.now()}-${Math.round(Math.random() * 1E9)}${extension}`;
+    const filePath = path.join(mediaDir, uniqueFilename);
+
+    await fs.writeFile(filePath, buffer);
+    logger.info(`✅ Медиафайл сохранен: ${filePath}`);
+
+    // Возвращаем относительный URL-путь
+    return `/media/${uniqueFilename}`;
+  } catch (error) {
+    logger.error('❌ Ошибка при скачивании или сохранении медиа:', error);
+    return undefined;
+  }
 }
 
 /**
@@ -359,8 +399,14 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
     if (type === 'notify') {
       for (const msg of messages) {
         // Пропускаем сообщения без контента или если это наше исходящее сообщение, не имеющее видимого контента
-        if (!msg.message) continue;
-        if (msg.key.fromMe && !msg.message.conversation && !msg.message.extendedTextMessage && !msg.message.imageMessage && !msg.message.videoMessage && !msg.message.documentMessage && !msg.message.audioMessage && !msg.message.stickerMessage) continue;
+        if (!msg.message) {
+            logger.info(`[Message Upsert] Пропущено сообщение без контента (ID: ${msg.key.id})`);
+            continue;
+        }
+        if (msg.key.fromMe && !msg.message.conversation && !msg.message.extendedTextMessage && !msg.message.imageMessage && !msg.message.videoMessage && !msg.message.documentMessage && !msg.message.audioMessage && !msg.message.stickerMessage) {
+            logger.info(`[Message Upsert] Пропущено исходящее системное сообщение (ID: ${msg.key.id})`);
+            continue;
+        }
 
         const remoteJid = jidNormalizedUser(msg.key.remoteJid || '');
         if (!remoteJid) {
@@ -383,21 +429,45 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
             let filename: string | undefined;
             let mimeType: string | undefined;
             let size: number | undefined;
+            // --- НОВЫЕ ПЕРЕМЕННЫЕ ДЛЯ ОТВЕТОВ ---
+            let quotedMessageId: string | undefined;
+            let quotedContent: string | undefined;
 
             const messageContent = msg.message;
-
+            console.log(messageContent.extendedTextMessage?.contextInfo?.quotedMessage)
             // Разбор различных типов сообщений
             if (messageContent?.conversation) {
                 content = messageContent.conversation;
                 messageType = "text";
+                logger.info(`  [${messageType}] Содержимое: "${content}"`);
             } else if (messageContent?.extendedTextMessage) {
                 content = messageContent.extendedTextMessage.text || undefined;
                 messageType = "text";
+                
+                // --- НАЧАЛО: ОБРАБОТКА ОТВЕТА ---
+                const contextInfo = messageContent.extendedTextMessage.contextInfo;
+                if (contextInfo?.quotedMessage) {
+                    quotedMessageId = contextInfo.stanzaId ?? undefined;
+                    const qm = contextInfo.quotedMessage;
+                    // Получаем текст из разных возможных полей цитируемого сообщения
+                    quotedContent = qm.conversation || 
+                                    qm.extendedTextMessage?.text ||
+                                    qm.imageMessage?.caption ||
+                                    qm.videoMessage?.caption ||
+                                    qm.documentMessage?.fileName ||
+                                    '[Медиафайл]'; // Плейсхолдер для медиа без текста
+                    logger.info(`  [reply] Ответ на сообщение ID: ${quotedMessageId}`);
+                }
+                // --- КОНЕЦ: ОБРАБОТКА ОТВЕТА ---
+
+                logger.info(`  [${messageType}] Содержимое: "${content}"`);
             } else if (messageContent?.imageMessage) {
                 messageType = "image";
                 content = messageContent.imageMessage.caption || undefined;
                 mimeType = messageContent.imageMessage.mimetype || undefined;
                 size = Number(messageContent.imageMessage.fileLength) || undefined;
+                // --- СКАЧИВАНИЕ И СОХРАНЕНИЕ ФОТО ---
+                mediaUrl = await downloadAndSaveMedia(messageContent.imageMessage, 'image');
                 logger.info(`  [${messageType}] Содержимое: "${content || 'без подписи'}". MIME: ${mimeType}. Размер: ${size}.`);
             } else if (messageContent?.videoMessage) {
                 messageType = "video";
@@ -410,11 +480,15 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
                 filename = messageContent.documentMessage.fileName || undefined;
                 mimeType = messageContent.documentMessage.mimetype || undefined;
                 size = Number(messageContent.documentMessage.fileLength) || undefined;
+                // --- СКАЧИВАНИЕ И СОХРАНЕНИЕ ДОКУМЕНТА ---
+                mediaUrl = await downloadAndSaveMedia(messageContent.documentMessage, 'document', filename);
                 logger.info(`  [${messageType}] Документ: "${filename || 'без имени'}". MIME: ${mimeType}. Размер: ${size}.`);
             } else if (messageContent?.audioMessage) {
                 messageType = "audio";
                 mimeType = messageContent.audioMessage.mimetype || undefined;
                 size = Number(messageContent.audioMessage.fileLength) || undefined;
+                // --- СКАЧИВАНИЕ И СОХРАНЕНИЕ АУДИО ---
+                mediaUrl = await downloadAndSaveMedia(messageContent.audioMessage, 'audio');
                 logger.info(`  [${messageType}] Аудио. MIME: ${mimeType}. Размер: ${size}.`);
             } else if (messageContent?.stickerMessage) {
                 messageType = "sticker";
@@ -425,6 +499,10 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
                 messageType = "location";
                 content = `Latitude: ${messageContent.locationMessage.degreesLatitude}, Longitude: ${messageContent.locationMessage.degreesLongitude}`;
                 logger.info(`  [${messageType}] Локация: ${content}`);
+            } else if (messageContent?.liveLocationMessage) {
+                messageType = "live_location";
+                content = `Live Location: Capt=${messageContent.liveLocationMessage.caption || 'N/A'}, Seq=${messageContent.liveLocationMessage.sequenceNumber}`;
+                logger.info(`  [${messageType}] ${content}`);
             } else if (messageContent?.contactMessage) {
                 messageType = "contact";
                 content = `Контакт: ${messageContent.contactMessage.displayName || messageContent.contactMessage.vcard}`;
@@ -433,6 +511,19 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
                 messageType = "contacts_array";
                 content = `Контакты: ${messageContent.contactsArrayMessage.contacts?.map(c => c.displayName || c.vcard).join(', ') || 'пусто'}`;
                 logger.info(`  [${messageType}] Контакты: ${content}`);
+            } else if (messageContent?.reactionMessage) {
+                messageType = "reaction";
+                content = `Реакция "${messageContent.reactionMessage.text}" на сообщение ${messageContent.reactionMessage.key?.id}`;
+                logger.info(`  [${messageType}] ${content}`);
+            } else if (messageContent?.protocolMessage) {
+                messageType = "protocol";
+                content = `Системное сообщение (тип: ${messageContent.protocolMessage.type})`;
+                logger.info(`  [${messageType}] ${content}`);
+            } else if (messageContent?.call) {
+                messageType = "call";
+                const callId = messageContent.call.callKey ? Buffer.from(messageContent.call.callKey).toString('hex') : 'unknown';
+                content = `Звонок от ${senderJid} (ID: ${callId})`;
+                logger.info(`  [${messageType}] ${content}`);
             }
 
             if (messageType === "unknown" && Object.keys(messageContent || {}).length > 0) {
@@ -440,6 +531,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
                 logger.warn(`  [${messageType}] Неподдерживаемый или неизвестный тип сообщения. JID: ${remoteJid}`);
             } else if (messageType === "unknown") {
                  logger.warn(`  [Неизвестный] Сообщение без опознаваемого типа контента. JID: ${remoteJid}`);
+                 continue; // Пропускаем сохранение полностью пустых сообщений
             }
 
             // Преобразование timestamp в Date
@@ -468,6 +560,9 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
                     timestamp: timestampDate,
                     status: 'received',
                     organizationId: organizationId,
+                    // --- СОХРАНЕНИЕ ДАННЫХ ОТВЕТА ---
+                    quotedMessageId: quotedMessageId,
+                    quotedContent: quotedContent,
                 },
             });
             logger.info(`💾 Сообщение (тип: ${messageType}, ID: ${savedMessage.id}) сохранено в БД (JID собеседника: ${remoteJid}, Ваш номер: ${phoneJid}, chatId: ${savedMessage.chatId}).`);

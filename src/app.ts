@@ -6,6 +6,7 @@ import messageRoutes from './routes/messageRoutes';
 import waRoutes from './routes/waRoutes';
 import errorHandler from './middlewares/errorHandler'; // Corrected import path
 import cors from 'cors';
+import path from 'path'; // <--- ДОБАВИТЬ
 import { startBaileys } from './config/baileys';
 import prisma from './config/prisma';
 import pino from 'pino'; // Добавьте импорт pino
@@ -18,6 +19,10 @@ const logger = pino({ level: 'info' }); // Инициализируйте logger
 
 app.use(express.json());
 app.use(cors());
+
+// --- ДОБАВИТЬ: Раздача статических файлов ---
+app.use(express.static(path.join(__dirname, '..', 'public')));
+
 app.use('/api/auth', authRoutes);
 app.use('/api/organizations', organizationRoutes);
 app.use('/api/chats', chatRoutes);

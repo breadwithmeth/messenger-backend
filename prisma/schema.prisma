@@ -84,46 +84,34 @@ model Client {
 }
 
 model Message {
-  id                 Int       @id @default(autoincrement())
-  chat               Chat      @relation(fields: [chatId], references: [id])
-  chatId             Int       @default(1) // <-- Добавлено @default(1)
-                                           // !!! ВАЖНО: Убедитесь, что в Chat есть запись с id=1.
-                                           // ИЛИ: Если у вас есть 2 записи с NULL chatId,
-                                           // этот default НЕ исправит их автоматически правильно.
-                                           // Это самый проблемный момент.
-                                           // Вам придется либо удалить эти 2 записи, либо вручную присвоить им chatId,
-                                           // прежде чем запускать эту миграцию, если вы хотите правильных данных.
-                                           // Если вы просто хотите, чтобы миграция прошла, и готовы принять
-                                           // некорректные связи для этих 2х сообщений, то можно оставить.
+  id                  Int               @id @default(autoincrement())
+  organizationId      Int
+  organization        Organization      @relation(fields: [organizationId], references: [id])
+  organizationPhoneId Int
+  organizationPhone   OrganizationPhone @relation(fields: [organizationPhoneId], references: [id])
+  chatId              Int
+  chat                Chat              @relation(fields: [chatId], references: [id])
 
-  organizationPhone  OrganizationPhone @relation(fields: [organizationPhoneId], references: [id])
-  organizationPhoneId Int      @default(1) // <-- Добавлено @default(1)
-                                           // !!! ВАЖНО: Убедитесь, что в OrganizationPhone есть запись с id=1.
+  whatsappMessageId String    @unique
+  receivingPhoneJid String
+  remoteJid         String
+  senderJid         String
+  fromMe              Boolean
+  content             String
+  type                String    @default("text")
+  mediaUrl            String?
+  filename            String?
+  mimeType            String?
+  size                Int?
+  timestamp           DateTime
+  status              String // received, sent, delivered, read
 
-  receivingPhoneJid  String
-  remoteJid          String
-  whatsappMessageId  String?   @unique
-  // !!! ВАЖНО: Для whatsappMessageId, который должен быть @unique,
-  // простой @default не подойдет, если у вас уже есть строки, которым нужен уникальный ID.
-  // Это все еще самый сложный случай.
-  // Ниже я предлагаю способ с временным дефолтом, но это снова вернет вас к ручной правке SQL.
-  // Либо вам нужно будет вручную удалить существующие строки с NULL whatsappMessageId,
-  // если вы не можете присвоить им уникальные значения.
+  // --- НОВЫЕ ПОЛЯ ДЛЯ ОТВЕТОВ ---
+  quotedMessageId     String? // ID цитируемого сообщения в WhatsApp
+  quotedContent       String? // Текст цитируемого сообщения
 
-  senderJid          String   @default("") // <-- Добавлено @default("")
-  fromMe             Boolean  @default(false) // <-- Добавлено @default(false)
-  content            String    @db.Text @default("") // <-- Добавлено @default("") для обработки существующих NULL
-  type               String
-  mediaUrl           String?
-  filename           String?
-  mimeType           String?
-  size               Int?
-  timestamp          DateTime @default(now()) // <-- Добавлено @default(now())
-  status             String    @default("pending")
-  organizationId     Int      @default(1) // <-- Добавлено @default(1)
-                                           // !!! ВАЖНО: Убедитесь, что в Organization есть запись с id=1.
-
-  organization       Organization @relation(fields: [organizationId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt @default(now())
 }
 model ClientMetadata {
   id        Int      @id @default(autoincrement())
@@ -182,3 +170,4 @@ model OrganizationPhone {
   chats           Chat[] // Связь с моделью Chat
   messages        Message[] // Связь с моделью Message
 }
+
