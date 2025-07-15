@@ -2,10 +2,10 @@
   "name": "messenger-backend",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "dist/app.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "tsc",
+    "lint": "eslint . --ext .ts",
     "start": "node dist/server.js",
     "dev": "nodemon src/server.ts"
   },
