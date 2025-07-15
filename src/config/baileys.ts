@@ -518,12 +518,20 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
                  continue; // Пропускаем сохранение полностью пустых сообщений
             }
 
-            // Преобразование timestamp в Date
-            const timestampDate = new Date(
-              (typeof msg.messageTimestamp === 'object' && msg.messageTimestamp !== null && 'toNumber' in msg.messageTimestamp
-                ? (msg.messageTimestamp as Long).toNumber()
-                : (msg.messageTimestamp || 0)) * 1000
-            );
+            // --- ИСПРАВЛЕНО: Более надежная обработка timestamp ---
+            let timestampInSeconds: number;
+            const ts = msg.messageTimestamp;
+            if (typeof ts === 'number') {
+              timestampInSeconds = ts;
+            } else if (ts && typeof ts === 'object' && typeof (ts as any).toNumber === 'function') {
+              // Это объект Long, преобразуем его в число
+              timestampInSeconds = (ts as any).toNumber();
+            } else {
+              // Запасной вариант, если timestamp не пришел или в неизвестном формате
+              timestampInSeconds = Math.floor(Date.now() / 1000);
+            }
+            const timestampDate = new Date(timestampInSeconds * 1000);
+
 
             // Сохраняем сообщение в БД
             const savedMessage = await prisma.message.create({
@@ -544,7 +552,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
                     timestamp: timestampDate,
                     status: 'received',
                     organizationId: organizationId,
-                    // --- СОХРАНЕНИЕ ДАННЫХ ОТВЕТА ---
+                    // --- СОХРАНЕНИЕ ДАННЫХ ОТВЕТОВ ---
                     quotedMessageId: quotedMessageId,
                     quotedContent: quotedContent,
                 },

@@ -3,6 +3,8 @@
     "module": "commonjs",
     "esModuleInterop": true,
     "target": "es6",
+    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
     "moduleResolution": "node",
     "sourceMap": true,
     "outDir": "dist"
