@@ -141,97 +141,76 @@ export async function ensureChat(
 }
 
 /**
- * Запускает или перезапускает Baileys сессию для указанного телефона организации.
+ * Хук для управления состоянием аутентификации Baileys с использованием базы данных.
+ * Загружает, сохраняет и управляет учетными данными и ключами сигналов.
  * @param organizationId ID организации.
- * @param organizationPhoneId ID телефона организации в вашей БД.
- * @param phoneJid JID номера телефона WhatsApp (например, '77051234567@s.whatsapp.net').
- * @returns Экземпляр WASocket.
+ * @param phoneJid JID номера телефона.
+ * @returns Объект с `state` (для makeWASocket) и `saveCreds` (для обработчика 'creds.update').
  */
-export async function startBaileys(organizationId: number, organizationPhoneId: number, phoneJid: string): Promise<WASocket> {
-  // Определяем путь к папке с auth-данными для конкретного JID
-  const authFolderPath = `./baileys_auth_info/${phoneJid}`;
+export async function useDBAuthState(organizationId: number, phoneJid: string): Promise<{ state: AuthenticationState; saveCreds: () => Promise<void>; }> {
+  // Извлекаем только номер из полного JID для использования в качестве ключа
+  const key = phoneJid.split('@')[0].split(':')[0];
+  const authDB = createAuthDBAdapter(organizationId, key);
 
-  // Создаем адаптер для хранения данных авторизации в вашей БД
-  const authDB = createAuthDBAdapter(organizationId, phoneJid); 
-
+  // 1. Загрузка и инициализация creds
   let creds: AuthenticationCreds;
-
-  // 1. Попытка загрузить весь объект creds из БД
   const storedCredsData = await authDB.get('creds');
-  if (storedCredsData) {
-    const credsValueString = storedCredsData.value;
-    const credsType = storedCredsData.type;
-
-    if (credsType === 'base64_json') {
-      try {
-        const decodedCredsJsonString = Buffer.from(credsValueString, 'base64').toString('utf8');
-        const parsedCreds = JSON.parse(decodedCredsJsonString, BufferJSON.reviver) as AuthenticationCreds;
-
-        // Проверяем полноту загруженных учетных данных
-        if (parsedCreds.noiseKey && parsedCreds.signedIdentityKey && parsedCreds.registered !== undefined) {
-          creds = parsedCreds;
-          logger.info(`✅ Полные учетные данные (creds) успешно загружены и распарсены из БД для ${phoneJid}.`);
-        } else {
-          logger.warn(`⚠️ Загруженные creds неполны для ${phoneJid}. Инициализация новых creds.`);
-          await authDB.delete('creds'); // Удаляем неполные creds
-          creds = initAuthCreds();
-        }
-      } catch (e: unknown) {
-        logger.error(`⚠️ Ошибка парсинга creds из базы данных (Base64/JSON) для ${phoneJid}. Инициализация новых creds:`, e);
-        await authDB.delete('creds'); // Удаляем некорректные creds
+  if (storedCredsData && storedCredsData.type === 'base64_json') {
+    try {
+      const decodedCredsJsonString = Buffer.from(storedCredsData.value, 'base64').toString('utf8');
+      const parsedCreds = JSON.parse(decodedCredsJsonString, BufferJSON.reviver) as AuthenticationCreds;
+      // Проверка на полноту данных
+      if (parsedCreds.noiseKey && parsedCreds.signedIdentityKey && parsedCreds.registered !== undefined) {
+        creds = parsedCreds;
+        logger.info(`✅ Учетные данные (creds) успешно загружены из БД для ${key}.`);
+      } else {
+        logger.warn(`⚠️ Загруженные creds неполны для ${key}. Инициализация новых.`);
         creds = initAuthCreds();
       }
-    } else {
-      logger.warn(`Неожиданный тип creds '${credsType}' для ${phoneJid}. Ожидается 'base64_json'. Удаление старых данных и инициализация новых creds.`);
-      await authDB.delete('creds'); // Удаляем creds с неправильным типом
+    } catch (e) {
+      logger.error(`⚠️ Ошибка парсинга creds из БД для ${key}. Инициализация новых.`, e);
       creds = initAuthCreds();
     }
   } else {
     creds = initAuthCreds();
-    logger.info(`creds не найдены в БД для ${phoneJid}, инициализация новых creds.`);
+    logger.info(`creds не найдены в БД для ${key}, инициализация новых.`);
   }
 
-  // 2. Создаем SignalStorage для всех остальных ключей (pre-keys, session keys, etc.)
-  const signalStorage: CustomSignalStorage = {
-    async get<T extends keyof SignalDataTypeMap>(type: T, ids: string[]): Promise<{ [id: string]: SignalDataTypeMap[T]; }> {
-      const data: { [id: string]: SignalDataTypeMap[T]; } = {};
-      for (const id of ids.filter(id => id)) {
+  // 2. Создание хранилища ключей (SignalStore)
+  const keys = {
+    async get<T extends keyof SignalDataTypeMap>(type: T, ids: string[]): Promise<{ [id: string]: SignalDataTypeMap[T] }> {
+      const data: { [id: string]: SignalDataTypeMap[T] } = {};
+      for (const id of ids.filter(Boolean)) {
         const dbKey = `${type}-${id}`;
         const storedData = await authDB.get(dbKey);
-
         if (storedData) {
-          const valueString = storedData.value;
-          const dataType = storedData.type;
-
           try {
-            if (dataType === 'json' || dataType === 'base64_json') {
-              const decodedString = dataType === 'base64_json' ? Buffer.from(valueString, 'base64').toString('utf8') : valueString;
-              data[id] = JSON.parse(decodedString, BufferJSON.reviver) as unknown as SignalDataTypeMap[T];
-            } else if (dataType === 'buffer') {
-              data[id] = Buffer.from(valueString, 'base64') as unknown as SignalDataTypeMap[T];
+            if (storedData.type === 'base64_json') {
+              const decoded = Buffer.from(storedData.value, 'base64').toString('utf8');
+              data[id] = JSON.parse(decoded, BufferJSON.reviver);
+            } else if (storedData.type === 'buffer') {
+               data[id] = Buffer.from(storedData.value, 'base64') as any;
             }
           } catch (e) {
             logger.warn(`Ошибка при получении/парсинге ключа ${dbKey}:`, e);
+            delete data[id]; // Удаляем невалидные данные
           }
         }
       }
       return data;
     },
-
     async set(data: SignalDataSet): Promise<void> {
-      for (const _key in data) {
-        const type = _key as string;
-        const subData = data[_key as keyof SignalDataTypeMap];
-
-        if (subData) {
-          for (const id in subData) {
+      const tasks: Promise<void>[] = [];
+      for (const key in data) {
+        const type = key as keyof SignalDataTypeMap;
+        const typeData = data[type];
+        if (typeData) {
+          for (const id in typeData) {
+            const value = (typeData as any)[id];
             const dbKey = `${type}-${id}`;
-            const value = subData[id];
-
-            let valueToStore: string;
-            let dataType: StoredDataType;
-
-            if (value !== null) {
+            if (value) {
+              let valueToStore: string;
+              let dataType: StoredDataType;
               if (value instanceof Buffer) {
                 valueToStore = value.toString('base64');
                 dataType = 'buffer';
@@ -239,30 +218,39 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
                 valueToStore = Buffer.from(JSON.stringify(value, BufferJSON.replacer), 'utf8').toString('base64');
                 dataType = 'base64_json';
               }
-              await authDB.set(dbKey, valueToStore, dataType);
+              tasks.push(authDB.set(dbKey, valueToStore, dataType));
             } else {
-              await authDB.delete(dbKey);
+              tasks.push(authDB.delete(dbKey));
             }
           }
         }
       }
-    },
-
-    async del(keys: string[]): Promise<void> {
-      for (const key of keys) {
-        await authDB.delete(key);
-      }
-    },
+      await Promise.all(tasks);
+    }
   };
 
-  // Создаем кэшируемое хранилище ключей для Baileys
-  const signalKeyStore = makeCacheableSignalKeyStore(signalStorage, logger);
-
-  // Формируем объект авторизации для Baileys
-  const auth: AuthenticationState = {
-    creds,
-    keys: signalKeyStore,
+  return {
+    state: {
+      creds,
+      keys: makeCacheableSignalKeyStore(keys, logger),
+    },
+    saveCreds: async () => {
+      logger.info(`🔐 Сохранение обновленных creds в БД для ${key}.`);
+      const base64Creds = Buffer.from(JSON.stringify(creds, BufferJSON.replacer), 'utf8').toString('base64');
+      await authDB.set('creds', base64Creds, 'base64_json');
+    },
   };
+}
+
+/**
+ * Запускает или перезапускает Baileys сессию для указанного телефона организации.
+ * @param organizationId ID организации.
+ * @param organizationPhoneId ID телефона организации в вашей БД.
+ * @param phoneJid JID номера телефона WhatsApp (например, '77051234567@s.whatsapp.net').
+ * @returns Экземпляр WASocket.
+ */
+export async function startBaileys(organizationId: number, organizationPhoneId: number, phoneJid: string): Promise<WASocket> {
+  const { state, saveCreds } = await useDBAuthState(organizationId, phoneJid);
 
   // Получаем последнюю версию WhatsApp Web API
   const { version } = await fetchLatestBaileysVersion();
@@ -271,7 +259,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
   // Создаем новый экземпляр Baileys WASocket
   const currentSock = makeWASocket({ 
     version,
-    auth,
+    auth: state, // Используем состояние из useDBAuthState
     browser: ['Ubuntu', 'Chrome', '22.04.4'], // Устанавливаем информацию о браузере
     logger: logger, // Используем ваш pino logger
     // Функция для получения сообщений из кэша или БД (для Baileys)
@@ -354,21 +342,21 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
         // Рекурсивно вызываем startBaileys для создания новой сессии
         startBaileys(organizationId, organizationPhoneId, phoneJid);
       } else {
-          logger.error(`[Connection] Подключение для ${phoneJid} не будет переподключено (Logged out).`);
+          logger.error(`[Connection] Подключение для ${phoneJid} не будет переподключено (Logged out). Очистка данных сессии...`);
+          // --- ДОБАВЛЕНО: Детальный лог ошибки ---
+          logger.error(`[Connection] Детали ошибки 'lastDisconnect' для ${phoneJid}:`, lastDisconnect);
           
-          // Удаляем папку с файлами авторизации при выходе из системы
-          try {
-            const fullAuthPath = path.resolve(authFolderPath);
-            const stats = await fs.stat(fullAuthPath).catch(() => null); 
-            if (stats && stats.isDirectory()) {
-              await fs.rm(fullAuthPath, { recursive: true, force: true });
-              logger.info(`✅ Успешно удалена папка авторизации: ${fullAuthPath}`);
-            } else {
-              logger.info(`Папка авторизации ${fullAuthPath} не существует или не является директорией. Пропуск удаления.`);
+          // --- ИСПРАВЛЕНО: Используем только номер для ключа, как в useDBAuthState ---
+          const key = phoneJid.split('@')[0].split(':')[0];
+
+          // Очищаем данные сессии из БД по правильному ключу
+          await prisma.baileysAuth.deleteMany({
+            where: {
+              organizationId: organizationId,
+              phoneJid: key, // Используем только номер
             }
-          } catch (error) {
-            logger.error(`❌ Ошибка при удалении папки авторизации ${authFolderPath}: ${error}`);
-          }
+          });
+          logger.info(`✅ Данные сессии для ${key} удалены из БД.`);
 
           // Обновляем статус в БД на 'logged_out' и очищаем QR-код
           await prisma.organizationPhone.update({
@@ -388,11 +376,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
   });
 
   // Обработчик обновления учетных данных
-  currentSock.ev.on('creds.update', async () => { 
-    logger.info(`🔐 Учетные данные (creds) обновлены для ${phoneJid}.`);
-    const base64Creds = Buffer.from(JSON.stringify(creds, BufferJSON.replacer), 'utf8').toString('base64');
-    await authDB.set('creds', base64Creds, 'base64_json');
-  });
+  currentSock.ev.on('creds.update', saveCreds); // Используем saveCreds для сохранения
 
   // Обработчик получения новых сообщений
   currentSock.ev.on('messages.upsert', async ({ messages, type }) => { 

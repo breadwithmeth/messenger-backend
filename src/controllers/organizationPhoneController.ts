@@ -80,7 +80,7 @@ export async function listOrganizationPhones(req: Request, res: Response) {
                 updatedAt: true,
             }
         });
-        logger.info(`✅ Получено ${phones.length} телефонов для организации ${organizationId}.`);
+        // logger.info(`✅ Получено ${phones.length} телефонов для организации ${organizationId}.`);
         res.status(200).json(phones);
     } catch (error: any) {
         logger.error(`❌ Ошибка при получении списка телефонов для организации ${organizationId}:`, error);
