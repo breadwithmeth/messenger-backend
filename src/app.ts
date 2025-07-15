@@ -12,6 +12,8 @@ import prisma from './config/prisma';
 import pino from 'pino'; // Добавьте импорт pino
 import { startWaSession } from './services/waService'; // Импортируйте startWaSession
 import organizationPhoneRoutes from './routes/organizationPhoneRoutes';
+import accountRoutes from './routes/accountRoutes';
+import userRoutes from './routes/userRoutes'; // <-- Добавить
 
 
 const app = express();
@@ -29,6 +31,8 @@ app.use('/api/chats', chatRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/wa', waRoutes);
 app.use('/api/organization-phones', organizationPhoneRoutes); 
+app.use('/api/accounts', accountRoutes);
+app.use('/api/users', userRoutes); // <-- Добавить
 
 // Глобальный обработчик ошибок
 app.use(errorHandler);
