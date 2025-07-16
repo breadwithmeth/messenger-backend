@@ -609,7 +609,8 @@ export async function sendMessage(
   content: AnyMessageContent,
   organizationId: number, // Добавляем organizationId
   organizationPhoneId: number, // Добавляем organizationPhoneId
-  senderJid: string // Добавляем senderJid (ваш номер)
+  senderJid: string, // Добавляем senderJid (ваш номер)
+  userId?: number // <-- ДОБАВЛЕН userId (опционально)
 ) {
   if (!sock || !sock.user) {
     throw new Error('Baileys socket is not connected or user is not defined.');
@@ -627,26 +628,43 @@ export async function sendMessage(
       // Получаем chatId для сохранения сообщения
       const chatId = await ensureChat(organizationId, organizationPhoneId, senderJid, remoteJid);
 
+      // --- НАЧАЛО: УЛУЧШЕННАЯ ПРОВЕРКА И ЛОГИРОВАНИЕ userId ---
+      logger.info(`[sendMessage] Проверка userId перед сохранением. Полученное значение: ${userId}, тип: ${typeof userId}`);
+
+      const messageData: any = {
+        chatId: chatId,
+        organizationPhoneId: organizationPhoneId,
+        receivingPhoneJid: senderJid,
+        remoteJid: remoteJid,
+        whatsappMessageId: sentMessage.key.id || `_out_${Date.now()}_${Math.random()}`,
+        senderJid: jidNormalizedUser(sock.user?.id || senderJid),
+        fromMe: true,
+        content: messageContent,
+        type: type,
+        timestamp: new Date(),
+        status: 'sent',
+        organizationId: organizationId,
+      };
+
+      // Присваиваем senderUserId только если userId является числом
+      if (typeof userId === 'number' && !isNaN(userId)) {
+        messageData.senderUserId = userId;
+      } else {
+        logger.warn(`[sendMessage] userId не является числом (значение: ${userId}). senderUserId не будет установлен.`);
+      }
+      // --- КОНЕЦ: УЛУЧШЕННАЯ ПРОВЕРКА И ЛОГИРОВАНИЕ userId ---
+
+      // --- ОТЛАДОЧНЫЙ ЛОГ ---
+      logger.info({
+          msg: '[sendMessage] Data to be saved to DB',
+          data: messageData,
+          receivedUserId: userId,
+          isUserIdNumber: typeof userId === 'number'
+      }, 'Полные данные для сохранения исходящего сообщения.');
+
+
       await prisma.message.create({
-        data: {
-          chatId: chatId,
-          organizationPhoneId: organizationPhoneId,
-          receivingPhoneJid: senderJid, // Ваш номер телефона
-          remoteJid: remoteJid, // JID получателя
-          whatsappMessageId: sentMessage.key.id || `_out_${Date.now()}_${Math.random()}`,
-          senderJid: jidNormalizedUser(sock.user?.id || senderJid), // JID отправителя (ваш аккаунт)
-          fromMe: true, // Это сообщение отправлено "от меня"
-          content: messageContent,
-          type: type,
-          timestamp: new Date(),
-          status: 'sent', // Статус "отправлено"
-          organizationId: organizationId,
-          // Добавьте сюда поля для медиа, если sendMessage будет поддерживать их
-          // mediaUrl: ...,
-          // filename: ...,
-          // mimeType: ...,
-          // size: ...,
-        },
+        data: messageData,
       });
       logger.info(`✅ Исходящее сообщение "${messageContent}" (ID: ${sentMessage.key.id}) сохранено в БД. Chat ID: ${chatId}`);
     } else {

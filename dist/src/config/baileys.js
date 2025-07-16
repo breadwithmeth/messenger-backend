@@ -642,7 +642,8 @@ function getBaileysSock(organizationPhoneId) {
  */
 function sendMessage(sock, jid, content, organizationId, // Добавляем organizationId
 organizationPhoneId, // Добавляем organizationPhoneId
-senderJid // Добавляем senderJid (ваш номер)
+senderJid, // Добавляем senderJid (ваш номер)
+userId // <-- ДОБАВЛЕН userId (опционально)
 ) {
     return __awaiter(this, void 0, void 0, function* () {
         var _a;
@@ -658,26 +659,33 @@ senderJid // Добавляем senderJid (ваш номер)
                 const messageContent = (content === null || content === void 0 ? void 0 : content.text) || '';
                 // Получаем chatId для сохранения сообщения
                 const chatId = yield ensureChat(organizationId, organizationPhoneId, senderJid, remoteJid);
+                const messageData = {
+                    chatId: chatId,
+                    organizationPhoneId: organizationPhoneId,
+                    receivingPhoneJid: senderJid, // Ваш номер телефона
+                    remoteJid: remoteJid, // JID получателя
+                    whatsappMessageId: sentMessage.key.id || `_out_${Date.now()}_${Math.random()}`,
+                    senderJid: (0, baileys_1.jidNormalizedUser)(((_a = sock.user) === null || _a === void 0 ? void 0 : _a.id) || senderJid), // JID отправителя (ваш аккаунт)
+                    fromMe: true, // Это сообщение отправлено "от меня"
+                    content: messageContent,
+                    type: type,
+                    timestamp: new Date(),
+                    status: 'sent', // Статус "отправлено"
+                    organizationId: organizationId,
+                    senderUserId: userId, // <-- СОХРАНЕНИЕ ID ПОЛЬЗОВАТЕЛЯ
+                    // Добавьте сюда поля для медиа, если sendMessage будет поддерживать их
+                    // mediaUrl: ...,
+                    // filename: ...,
+                    // mimeType: ...,
+                    // size: ...,
+                };
+                // --- ОТЛАДОЧНЫЙ ЛОГ ---
+                logger.info({
+                    msg: '[sendMessage] Data to be saved to DB',
+                    data: messageData
+                }, 'Полные данные для сохранения исходящего сообщения.');
                 yield authStorage_1.prisma.message.create({
-                    data: {
-                        chatId: chatId,
-                        organizationPhoneId: organizationPhoneId,
-                        receivingPhoneJid: senderJid, // Ваш номер телефона
-                        remoteJid: remoteJid, // JID получателя
-                        whatsappMessageId: sentMessage.key.id || `_out_${Date.now()}_${Math.random()}`,
-                        senderJid: (0, baileys_1.jidNormalizedUser)(((_a = sock.user) === null || _a === void 0 ? void 0 : _a.id) || senderJid), // JID отправителя (ваш аккаунт)
-                        fromMe: true, // Это сообщение отправлено "от меня"
-                        content: messageContent,
-                        type: type,
-                        timestamp: new Date(),
-                        status: 'sent', // Статус "отправлено"
-                        organizationId: organizationId,
-                        // Добавьте сюда поля для медиа, если sendMessage будет поддерживать их
-                        // mediaUrl: ...,
-                        // filename: ...,
-                        // mimeType: ...,
-                        // size: ...,
-                    },
+                    data: messageData,
                 });
                 logger.info(`✅ Исходящее сообщение "${messageContent}" (ID: ${sentMessage.key.id}) сохранено в БД. Chat ID: ${chatId}`);
             }

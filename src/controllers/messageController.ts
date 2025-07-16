@@ -10,7 +10,9 @@ const logger = pino({ level: 'info' });
 
 export const sendTextMessage = async (req: Request, res: Response) => {
   const { organizationPhoneId, receiverJid, text } = req.body;
-const organizationId = res.locals.organizationId; 
+  const organizationId = res.locals.organizationId;
+  const userId = res.locals.userId; // <--- ПОЛУЧАЕМ ID ПОЛЬЗОВАТЕЛЯ
+
   // 1. Валидация входных данных
   if (!organizationPhoneId || !receiverJid || !text) {
     logger.warn('[sendTextMessage] Отсутствуют необходимые параметры: organizationPhoneId, receiverJid или text.');
@@ -53,14 +55,16 @@ const organizationId = res.locals.organizationId;
   const senderJid = organizationPhone.phoneJid;
   // 5. Попытка отправить сообщение
   try {
- const sentMessage = await sendMessage(
+    const sentMessage = await sendMessage(
       sock,
       normalizedReceiverJid,
       { text },
-      organizationId,      // Передаем organizationId
-      organizationPhoneId, // Передаем organizationPhoneId
-      senderJid            // Передаем JID вашего номера
+      organizationId,
+      organizationPhoneId,
+      senderJid,
+      userId // <--- ПЕРЕДАЕМ ID ПОЛЬЗОВАТЕЛЯ
     );
+
     // 6. Проверка, что sentMessage не undefined
     // sock.sendMessage() может вернуть undefined в некоторых случаях, даже без выбрасывания ошибки.
     if (!sentMessage) {

@@ -28,9 +28,10 @@ function main() {
         }
         const user = yield prisma.user.create({
             data: {
-                email: 'admin@example.com',
+                email: 'admin@naliv.kz',
                 passwordHash: hashed,
-                organizationId: organization.id
+                organizationId: organization.id,
+                role: 'admin',
             }
         });
         console.log('✅ User created:', user);

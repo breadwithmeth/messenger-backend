@@ -22,6 +22,9 @@ const logger = (0, pino_1.default)({ level: 'info' });
 const sendTextMessage = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { organizationPhoneId, receiverJid, text } = req.body;
     const organizationId = res.locals.organizationId;
+    const userId = res.locals.userId; // <--- ПОЛУЧАЕМ ID ПОЛЬЗОВАТЕЛЯ
+    // --- ОТЛАДОЧНЫЙ ЛОГ ---
+    logger.info(`[sendTextMessage] Attempting to send message. organizationId: ${organizationId}, userId: ${userId}, organizationPhoneId: ${organizationPhoneId}`);
     // 1. Валидация входных данных
     if (!organizationPhoneId || !receiverJid || !text) {
         logger.warn('[sendTextMessage] Отсутствуют необходимые параметры: organizationPhoneId, receiverJid или text.');
@@ -59,9 +62,7 @@ const sendTextMessage = (req, res) => __awaiter(void 0, void 0, void 0, function
     const senderJid = organizationPhone.phoneJid;
     // 5. Попытка отправить сообщение
     try {
-        const sentMessage = yield (0, baileys_1.sendMessage)(sock, normalizedReceiverJid, { text }, organizationId, // Передаем organizationId
-        organizationPhoneId, // Передаем organizationPhoneId
-        senderJid // Передаем JID вашего номера
+        const sentMessage = yield (0, baileys_1.sendMessage)(sock, normalizedReceiverJid, { text }, organizationId, organizationPhoneId, senderJid, userId // <--- ПЕРЕДАЕМ ID ПОЛЬЗОВАТЕЛЯ
         );
         // 6. Проверка, что sentMessage не undefined
         // sock.sendMessage() может вернуть undefined в некоторых случаях, даже без выбрасывания ошибки.

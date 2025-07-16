@@ -112,33 +112,19 @@ const getChatMessages = (req, res) => __awaiter(void 0, void 0, void 0, function
                 chatId: chatId,
                 organizationId: organizationId, // Дополнительная проверка на принадлежность сообщения организации
             },
+            include: {
+                // Включаем информацию о пользователе, который отправил сообщение
+                senderUser: {
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true, // Можно добавить другие нужные поля
+                    },
+                },
+            },
             orderBy: {
                 timestamp: 'asc', // Сортируем по возрастанию времени для хронологического порядка
             },
-            // Явно выбираем все поля, чтобы убедиться, что новые данные (ответы, медиа) включены
-            select: {
-                id: true,
-                organizationId: true,
-                organizationPhoneId: true,
-                chatId: true,
-                whatsappMessageId: true,
-                receivingPhoneJid: true,
-                remoteJid: true,
-                senderJid: true,
-                fromMe: true,
-                content: true,
-                type: true,
-                mediaUrl: true,
-                filename: true,
-                mimeType: true,
-                size: true,
-                timestamp: true,
-                status: true,
-                quotedMessageId: true,
-                quotedContent: true,
-                createdAt: true,
-                updatedAt: true,
-            }
         });
         logger.info(`[getChatMessages] Успешно получено ${messages.length} сообщений для чата ${chatId} организации ${organizationId}.`);
         res.status(200).json({ messages });

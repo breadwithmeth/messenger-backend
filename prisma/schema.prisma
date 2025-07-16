@@ -69,7 +69,11 @@ model User {
   role           String       @default("operator") // or 'admin'
   createdAt      DateTime     @default(now())
 
-  Chat Chat[] @relation("ChatUsers")
+  // --- НОВОЕ ПОЛЕ ---
+  // Связь с сообщениями, отправленными этим пользователем
+  sentMessages   Message[]
+
+  chats          Chat[]       @relation("ChatUsers")
 }
 
 model Client {
@@ -104,9 +108,13 @@ model Message {
   mimeType            String?
   size                Int?
   timestamp           DateTime
-  status              String // received, sent, delivered, read
+  status              String   @default("pending") // e.g., pending, sent, delivered, read
 
-  // --- НОВЫЕ ПОЛЯ ДЛЯ ОТВЕТОВ ---
+  // ID пользователя-оператора, который отправил это сообщение (если применимо)
+  senderUserId      Int?
+  senderUser        User?    @relation(fields: [senderUserId], references: [id], onDelete: SetNull)
+
+  // Поля для ответов
   quotedMessageId     String? // ID цитируемого сообщения в WhatsApp
   quotedContent       String? // Текст цитируемого сообщения
 
