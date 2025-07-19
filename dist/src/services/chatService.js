@@ -24,15 +24,25 @@ function getChatsByOrganizationSortedByLastMessage(organizationId) {
                 where: {
                     organizationId: organizationId,
                 },
-                orderBy: {
-                    lastMessageAt: 'desc', // Сортируем чаты по дате последнего сообщения (новые сверху)
-                },
+                orderBy: [
+                    { priority: 'desc' }, // Сначала по приоритету
+                    { unreadCount: 'desc' }, // Затем по количеству непрочитанных
+                    { lastMessageAt: 'desc' }, // Затем по дате последнего сообщения
+                ],
                 include: {
                     organizationPhone: {
                         select: {
                             id: true,
                             phoneJid: true,
                             displayName: true,
+                        },
+                    },
+                    // Включаем информацию о назначенном операторе
+                    assignedUser: {
+                        select: {
+                            id: true,
+                            name: true,
+                            email: true,
                         },
                     },
                     // --- ИЗМЕНЕНИЕ ЗДЕСЬ: Добавляем orderBy для messages, чтобы получить последнее ---
@@ -48,6 +58,7 @@ function getChatsByOrganizationSortedByLastMessage(organizationId) {
                             timestamp: true,
                             fromMe: true,
                             type: true,
+                            isReadByOperator: true,
                         },
                     },
                     // --- КОНЕЦ ИЗМЕНЕНИЯ ---

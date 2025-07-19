@@ -4,6 +4,10 @@ import organizationRoutes from './routes/organizationRoutes';
 import chatRoutes from './routes/chatRoutes';
 import messageRoutes from './routes/messageRoutes';
 import waRoutes from './routes/waRoutes';
+import chatAssignmentRoutes from './routes/chatAssignmentRoutes';
+import messageReadRoutes from './routes/messageReadRoutes';
+import unreadRoutes from './routes/unreadRoutes';
+import mediaRoutes from './routes/mediaRoutes';
 import errorHandler from './middlewares/errorHandler'; // Corrected import path
 import cors from 'cors';
 import path from 'path'; // <--- ДОБАВИТЬ
@@ -22,6 +26,13 @@ const logger = pino({ level: 'info' }); // Инициализируйте logger
 app.use(express.json());
 app.use(cors());
 
+// --- ДОБАВЛЯЕМ ОБЩЕЕ ЛОГИРОВАНИЕ ВСЕХ ЗАПРОСОВ ---
+app.use((req, res, next) => {
+  console.log(`🌐 INCOMING REQUEST: ${req.method} ${req.originalUrl}`);
+  console.log(`🌐 Headers:`, req.headers);
+  next();
+});
+
 // --- ДОБАВИТЬ: Раздача статических файлов ---
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
@@ -33,6 +44,12 @@ app.use('/api/wa', waRoutes);
 app.use('/api/organization-phones', organizationPhoneRoutes); 
 app.use('/api/accounts', accountRoutes);
 app.use('/api/users', userRoutes); // <-- Добавить
+app.use('/api/chat-assignment', chatAssignmentRoutes); // Новые маршруты для назначения чатов
+app.use('/api/message-read', messageReadRoutes); // Новые маршруты для непрочитанных сообщений
+console.log('🔄 Подключаем unread маршруты...');
+app.use('/api/unread', unreadRoutes); // Маршруты для управления непрочитанными сообщениями
+console.log('✅ Unread маршруты подключены');
+app.use('/api/media', mediaRoutes); // Маршруты для загрузки и отправки медиафайлов
 
 // Глобальный обработчик ошибок
 app.use(errorHandler);

@@ -10,6 +10,6 @@ const router = (0, express_1.Router)();
 router.post('/send-text', authMiddleware_1.authMiddleware, messageController_1.sendTextMessage);
 // Маршрут для отправки медиа-сообщений
 // Также защищен authMiddleware
-// router.post('/send-media', authMiddleware, sendMediaMessage);
+router.post('/send-media', authMiddleware_1.authMiddleware, messageController_1.sendMediaMessage);
 exports.default = router;
 //# sourceMappingURL=messageRoutes.js.map

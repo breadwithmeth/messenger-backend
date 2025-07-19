@@ -73,6 +73,9 @@ model User {
   // Связь с сообщениями, отправленными этим пользователем
   sentMessages   Message[]
 
+  // Связь с назначенными чатами (как оператор)
+  assignedChats  Chat[]       @relation("AssignedChats")
+
   chats          Chat[]       @relation("ChatUsers")
 }
 
@@ -109,6 +112,10 @@ model Message {
   size                Int?
   timestamp           DateTime
   status              String   @default("pending") // e.g., pending, sent, delivered, read
+
+  // Поле для отметки как прочитанное оператором
+  isReadByOperator    Boolean  @default(false)
+  readAt              DateTime? // Когда сообщение было прочитано оператором
 
   // ID пользователя-оператора, который отправил это сообщение (если применимо)
   senderUserId      Int?
@@ -152,6 +159,20 @@ model Chat {
   organizationPhone   OrganizationPhone @relation(fields: [organizationPhoneId], references: [id])
   isGroup             Boolean      @default(false)
   lastMessageAt       DateTime?
+
+  // Поля для назначения чатов операторам
+  assignedUserId      Int?         // ID оператора, которому назначен чат
+  assignedUser        User?        @relation("AssignedChats", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  assignedAt          DateTime?    // Когда чат был назначен
+  
+  // Статус чата
+  status              String       @default("open") // open, closed, pending
+  
+  // Приоритет чата
+  priority            String       @default("normal") // low, normal, high, urgent
+  
+  // Количество непрочитанных сообщений для оператора
+  unreadCount         Int          @default(0)
 
   clients             Client[]     @relation("ChatClients")
   users               User[]       @relation("ChatUsers")

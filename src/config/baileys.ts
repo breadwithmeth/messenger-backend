@@ -534,9 +534,11 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
 
 
             // Сохраняем сообщение в БД
+            const chatId = await ensureChat(organizationId, organizationPhoneId, phoneJid, remoteJid);
+            
             const savedMessage = await prisma.message.create({
                 data: {
-                    chatId: await ensureChat(organizationId, organizationPhoneId, phoneJid, remoteJid), // Вызов ensureChat
+                    chatId: chatId,
                     organizationPhoneId: organizationPhoneId,
                     receivingPhoneJid: phoneJid,
                     remoteJid: remoteJid,
@@ -552,11 +554,36 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
                     timestamp: timestampDate,
                     status: 'received',
                     organizationId: organizationId,
+                    // Входящие сообщения по умолчанию не прочитаны оператором
+                    isReadByOperator: msg.key.fromMe || false, // Исходящие считаем прочитанными
                     // --- СОХРАНЕНИЕ ДАННЫХ ОТВЕТОВ ---
                     quotedMessageId: quotedMessageId,
                     quotedContent: quotedContent,
                 },
             });
+
+            // Увеличиваем счетчик непрочитанных сообщений для входящих сообщений
+            if (!msg.key.fromMe) {
+                await prisma.chat.update({
+                    where: { id: chatId },
+                    data: {
+                        unreadCount: {
+                            increment: 1,
+                        },
+                        lastMessageAt: timestampDate,
+                    },
+                });
+                logger.info(`📬 Увеличен счетчик непрочитанных для чата ${chatId}`);
+            } else {
+                // Для исходящих сообщений только обновляем время последнего сообщения
+                await prisma.chat.update({
+                    where: { id: chatId },
+                    data: {
+                        lastMessageAt: timestampDate,
+                    },
+                });
+            }
+
             logger.info(`💾 Сообщение (тип: ${messageType}, ID: ${savedMessage.id}) сохранено в БД (JID собеседника: ${remoteJid}, Ваш номер: ${phoneJid}, chatId: ${savedMessage.chatId}).`);
 
         } catch (error:any) {
@@ -610,7 +637,12 @@ export async function sendMessage(
   organizationId: number, // Добавляем organizationId
   organizationPhoneId: number, // Добавляем organizationPhoneId
   senderJid: string, // Добавляем senderJid (ваш номер)
-  userId?: number // <-- ДОБАВЛЕН userId (опционально)
+  userId?: number, // <-- ДОБАВЛЕН userId (опционально)
+  mediaInfo?: { // <-- ДОБАВЛЕНА информация о медиафайле
+    mediaUrl?: string;
+    filename?: string;
+    size?: number;
+  }
 ) {
   if (!sock || !sock.user) {
     throw new Error('Baileys socket is not connected or user is not defined.');
@@ -619,11 +651,53 @@ export async function sendMessage(
   try {
     const sentMessage = await sock.sendMessage(jid, content);
 
+    // Логирование mediaInfo для отладки
+    logger.info(`[sendMessage] Получена информация о медиафайле:`, {
+      mediaInfo,
+      hasMediaUrl: !!mediaInfo?.mediaUrl,
+      hasFilename: !!mediaInfo?.filename,
+      hasSize: !!mediaInfo?.size
+    });
+
     // --- НАЧАЛО НОВОГО КОДА ДЛЯ СОХРАНЕНИЯ ---
     if (sentMessage) {
       const remoteJid = jidNormalizedUser(jid); // JID получателя
-      const type = 'text'; // Предполагаем текстовое сообщение, но можно расширить
-      const messageContent = (content as { text?: string })?.text || '';
+      
+      // Определяем тип и содержимое сообщения
+      let messageType = 'text';
+      let messageContent = '';
+      let mediaUrl: string | undefined = mediaInfo?.mediaUrl; // Используем переданную информацию
+      let filename: string | undefined = mediaInfo?.filename; // Используем переданную информацию
+      let mimeType: string | undefined;
+      let size: number | undefined = mediaInfo?.size; // Используем переданную информацию
+
+      // Анализируем содержимое для определения типа
+      if ((content as any).text) {
+        messageType = 'text';
+        messageContent = (content as any).text;
+      } else if ((content as any).image) {
+        messageType = 'image';
+        messageContent = (content as any).caption || '';
+        mimeType = 'image/jpeg'; // По умолчанию
+      } else if ((content as any).video) {
+        messageType = 'video';
+        messageContent = (content as any).caption || '';
+        mimeType = 'video/mp4'; // По умолчанию
+      } else if ((content as any).document) {
+        messageType = 'document';
+        filename = filename || (content as any).fileName || 'document'; // Приоритет переданному filename
+        messageContent = (content as any).caption || '';
+        mimeType = 'application/octet-stream'; // По умолчанию
+      } else if ((content as any).audio) {
+        messageType = 'audio';
+        mimeType = (content as any).mimetype || 'audio/mp4';
+      } else if ((content as any).sticker) {
+        messageType = 'sticker';
+        mimeType = 'image/webp';
+      } else {
+        // Для других типов сообщений
+        messageContent = JSON.stringify(content);
+      }
 
       // Получаем chatId для сохранения сообщения
       const chatId = await ensureChat(organizationId, organizationPhoneId, senderJid, remoteJid);
@@ -640,7 +714,11 @@ export async function sendMessage(
         senderJid: jidNormalizedUser(sock.user?.id || senderJid),
         fromMe: true,
         content: messageContent,
-        type: type,
+        type: messageType,
+        mediaUrl: mediaUrl,
+        filename: filename,
+        mimeType: mimeType,
+        size: size,
         timestamp: new Date(),
         status: 'sent',
         organizationId: organizationId,
@@ -659,14 +737,21 @@ export async function sendMessage(
           msg: '[sendMessage] Data to be saved to DB',
           data: messageData,
           receivedUserId: userId,
-          isUserIdNumber: typeof userId === 'number'
+          isUserIdNumber: typeof userId === 'number',
+          mediaInfo: {
+            originalMediaUrl: mediaInfo?.mediaUrl,
+            originalFilename: mediaInfo?.filename,
+            originalSize: mediaInfo?.size,
+            finalMediaUrl: messageData.mediaUrl,
+            finalFilename: messageData.filename,
+            finalSize: messageData.size
+          }
       }, 'Полные данные для сохранения исходящего сообщения.');
-
 
       await prisma.message.create({
         data: messageData,
       });
-      logger.info(`✅ Исходящее сообщение "${messageContent}" (ID: ${sentMessage.key.id}) сохранено в БД. Chat ID: ${chatId}`);
+      logger.info(`✅ Исходящее сообщение "${messageContent}" (ID: ${sentMessage.key.id}) сохранено в БД. Chat ID: ${chatId}, Type: ${messageType}`);
     } else {
       logger.warn(`⚠️ Исходящее сообщение на ${jid} не было сохранено: sentMessage is undefined.`);
     }

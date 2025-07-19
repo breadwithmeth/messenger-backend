@@ -82,3 +82,167 @@ export const sendTextMessage = async (req: Request, res: Response) => {
     return res.status(500).json({ error: 'Failed to send message due to an internal error.', details: error.message });
   }
 };
+
+/**
+ * Отправляет медиафайл (изображение, видео, документ, аудио)
+ */
+export const sendMediaMessage = async (req: Request, res: Response) => {
+  const { organizationPhoneId, receiverJid, mediaType, mediaPath, caption, filename } = req.body;
+  const organizationId = res.locals.organizationId;
+  const userId = res.locals.userId;
+
+  // 1. Валидация входных данных
+  if (!organizationPhoneId || !receiverJid || !mediaType || !mediaPath) {
+    logger.warn('[sendMediaMessage] Отсутствуют необходимые параметры: organizationPhoneId, receiverJid, mediaType или mediaPath.');
+    return res.status(400).json({ error: 'Missing organizationPhoneId, receiverJid, mediaType, or mediaPath' });
+  }
+
+  // 2. Проверка типа медиа
+  const allowedMediaTypes = ['image', 'video', 'document', 'audio'];
+  if (!allowedMediaTypes.includes(mediaType)) {
+    logger.warn(`[sendMediaMessage] Неподдерживаемый тип медиа: "${mediaType}"`);
+    return res.status(400).json({ error: `Unsupported media type. Allowed types: ${allowedMediaTypes.join(', ')}` });
+  }
+
+  // 3. Нормализация JID получателя
+  const normalizedReceiverJid = jidNormalizedUser(receiverJid);
+  if (!normalizedReceiverJid) {
+    logger.error(`[sendMediaMessage] Некорректный или ненормализуемый receiverJid: "${receiverJid}".`);
+    return res.status(400).json({ error: 'Invalid receiverJid provided. Could not normalize WhatsApp ID.' });
+  }
+
+  // 4. Получение Baileys сокета
+  const sock = getBaileysSock(organizationPhoneId);
+  if (!sock || !sock.user) {
+    logger.warn(`[sendMediaMessage] Попытка отправить медиа, но сокет для ID ${organizationPhoneId} не готов.`);
+    const status = sock ? 'connecting/closed' : 'not found';
+    return res.status(503).json({ 
+      error: `WhatsApp аккаунт (ID: ${organizationPhoneId}) еще не полностью подключен. Текущий статус: ${status}. Попробуйте позже.`,
+    });
+  }
+
+  // 5. Получение информации об отправителе
+  const organizationPhone = await prisma.organizationPhone.findUnique({
+    where: { id: organizationPhoneId, organizationId: organizationId },
+    select: { phoneJid: true }
+  });
+
+  if (!organizationPhone || !organizationPhone.phoneJid) {
+    logger.error(`[sendMediaMessage] Не удалось найти phoneJid для organizationPhoneId: ${organizationPhoneId}`);
+    return res.status(404).json({ error: 'Sender WhatsApp account not found or not configured.' });
+  }
+
+  const senderJid = organizationPhone.phoneJid;
+
+  try {
+    // 6. Подготовка контента для отправки
+    let messageContent: any;
+
+    // Проверяем, является ли mediaPath URL или локальным путем
+    const isUrl = mediaPath.startsWith('http://') || mediaPath.startsWith('https://');
+    
+    if (isUrl) {
+      // Если это URL, отправляем как ссылку
+      switch (mediaType) {
+        case 'image':
+          messageContent = {
+            image: { url: mediaPath },
+            caption: caption || '',
+          };
+          break;
+        case 'video':
+          messageContent = {
+            video: { url: mediaPath },
+            caption: caption || '',
+          };
+          break;
+        case 'document':
+          messageContent = {
+            document: { url: mediaPath },
+            fileName: filename || 'document',
+            caption: caption || '',
+          };
+          break;
+        case 'audio':
+          messageContent = {
+            audio: { url: mediaPath },
+            mimetype: 'audio/mp4', // или другой подходящий MIME тип
+          };
+          break;
+      }
+    } else {
+      // Если это локальный путь, читаем файл
+      const fs = require('fs');
+      const path = require('path');
+      
+      // Определяем полный путь к файлу
+      const fullPath = path.isAbsolute(mediaPath) ? mediaPath : path.join(process.cwd(), mediaPath);
+      
+      // Проверяем существование файла
+      if (!fs.existsSync(fullPath)) {
+        logger.error(`[sendMediaMessage] Файл не найден: ${fullPath}`);
+        return res.status(404).json({ error: 'Media file not found' });
+      }
+
+      // Читаем файл
+      const fileBuffer = fs.readFileSync(fullPath);
+      
+      switch (mediaType) {
+        case 'image':
+          messageContent = {
+            image: fileBuffer,
+            caption: caption || '',
+          };
+          break;
+        case 'video':
+          messageContent = {
+            video: fileBuffer,
+            caption: caption || '',
+          };
+          break;
+        case 'document':
+          messageContent = {
+            document: fileBuffer,
+            fileName: filename || path.basename(fullPath),
+            caption: caption || '',
+          };
+          break;
+        case 'audio':
+          messageContent = {
+            audio: fileBuffer,
+            mimetype: 'audio/mp4',
+          };
+          break;
+      }
+    }
+
+    // 7. Отправка медиафайла
+    const sentMessage = await sendMessage(
+      sock,
+      normalizedReceiverJid,
+      messageContent,
+      organizationId,
+      organizationPhoneId,
+      senderJid,
+      userId
+    );
+
+    if (!sentMessage) {
+      logger.error(`❌ Медиафайл не был отправлен (sentMessage is undefined) на ${normalizedReceiverJid}`);
+      return res.status(500).json({ error: 'Failed to send media: WhatsApp API did not return a message object.' });
+    }
+
+    // 8. Успешная отправка
+    logger.info(`✅ Медиафайл типа "${mediaType}" отправлен на ${normalizedReceiverJid} с ID ${organizationPhoneId}. WhatsApp Message ID: ${sentMessage.key.id}`);
+    return res.status(200).json({ 
+      success: true, 
+      messageId: sentMessage.key.id,
+      mediaType: mediaType,
+      caption: caption || null,
+    });
+
+  } catch (error: any) {
+    logger.error(`❌ Критическая ошибка при отправке медиафайла на ${normalizedReceiverJid}:`, error);
+    return res.status(500).json({ error: 'Failed to send media due to an internal error.', details: error.message });
+  }
+};

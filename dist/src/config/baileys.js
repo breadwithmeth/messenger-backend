@@ -570,9 +570,10 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                         }
                         const timestampDate = new Date(timestampInSeconds * 1000);
                         // Сохраняем сообщение в БД
+                        const chatId = yield ensureChat(organizationId, organizationPhoneId, phoneJid, remoteJid);
                         const savedMessage = yield authStorage_1.prisma.message.create({
                             data: {
-                                chatId: yield ensureChat(organizationId, organizationPhoneId, phoneJid, remoteJid), // Вызов ensureChat
+                                chatId: chatId,
                                 organizationPhoneId: organizationPhoneId,
                                 receivingPhoneJid: phoneJid,
                                 remoteJid: remoteJid,
@@ -588,11 +589,35 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                                 timestamp: timestampDate,
                                 status: 'received',
                                 organizationId: organizationId,
+                                // Входящие сообщения по умолчанию не прочитаны оператором
+                                isReadByOperator: msg.key.fromMe || false, // Исходящие считаем прочитанными
                                 // --- СОХРАНЕНИЕ ДАННЫХ ОТВЕТОВ ---
                                 quotedMessageId: quotedMessageId,
                                 quotedContent: quotedContent,
                             },
                         });
+                        // Увеличиваем счетчик непрочитанных сообщений для входящих сообщений
+                        if (!msg.key.fromMe) {
+                            yield authStorage_1.prisma.chat.update({
+                                where: { id: chatId },
+                                data: {
+                                    unreadCount: {
+                                        increment: 1,
+                                    },
+                                    lastMessageAt: timestampDate,
+                                },
+                            });
+                            logger.info(`📬 Увеличен счетчик непрочитанных для чата ${chatId}`);
+                        }
+                        else {
+                            // Для исходящих сообщений только обновляем время последнего сообщения
+                            yield authStorage_1.prisma.chat.update({
+                                where: { id: chatId },
+                                data: {
+                                    lastMessageAt: timestampDate,
+                                },
+                            });
+                        }
                         logger.info(`💾 Сообщение (тип: ${messageType}, ID: ${savedMessage.id}) сохранено в БД (JID собеседника: ${remoteJid}, Ваш номер: ${phoneJid}, chatId: ${savedMessage.chatId}).`);
                     }
                     catch (error) {
@@ -643,8 +668,8 @@ function getBaileysSock(organizationPhoneId) {
 function sendMessage(sock, jid, content, organizationId, // Добавляем organizationId
 organizationPhoneId, // Добавляем organizationPhoneId
 senderJid, // Добавляем senderJid (ваш номер)
-userId // <-- ДОБАВЛЕН userId (опционально)
-) {
+userId, // <-- ДОБАВЛЕН userId (опционально)
+mediaInfo) {
     return __awaiter(this, void 0, void 0, function* () {
         var _a;
         if (!sock || !sock.user) {
@@ -652,42 +677,105 @@ userId // <-- ДОБАВЛЕН userId (опционально)
         }
         try {
             const sentMessage = yield sock.sendMessage(jid, content);
+            // Логирование mediaInfo для отладки
+            logger.info(`[sendMessage] Получена информация о медиафайле:`, {
+                mediaInfo,
+                hasMediaUrl: !!(mediaInfo === null || mediaInfo === void 0 ? void 0 : mediaInfo.mediaUrl),
+                hasFilename: !!(mediaInfo === null || mediaInfo === void 0 ? void 0 : mediaInfo.filename),
+                hasSize: !!(mediaInfo === null || mediaInfo === void 0 ? void 0 : mediaInfo.size)
+            });
             // --- НАЧАЛО НОВОГО КОДА ДЛЯ СОХРАНЕНИЯ ---
             if (sentMessage) {
                 const remoteJid = (0, baileys_1.jidNormalizedUser)(jid); // JID получателя
-                const type = 'text'; // Предполагаем текстовое сообщение, но можно расширить
-                const messageContent = (content === null || content === void 0 ? void 0 : content.text) || '';
+                // Определяем тип и содержимое сообщения
+                let messageType = 'text';
+                let messageContent = '';
+                let mediaUrl = mediaInfo === null || mediaInfo === void 0 ? void 0 : mediaInfo.mediaUrl; // Используем переданную информацию
+                let filename = mediaInfo === null || mediaInfo === void 0 ? void 0 : mediaInfo.filename; // Используем переданную информацию
+                let mimeType;
+                let size = mediaInfo === null || mediaInfo === void 0 ? void 0 : mediaInfo.size; // Используем переданную информацию
+                // Анализируем содержимое для определения типа
+                if (content.text) {
+                    messageType = 'text';
+                    messageContent = content.text;
+                }
+                else if (content.image) {
+                    messageType = 'image';
+                    messageContent = content.caption || '';
+                    mimeType = 'image/jpeg'; // По умолчанию
+                }
+                else if (content.video) {
+                    messageType = 'video';
+                    messageContent = content.caption || '';
+                    mimeType = 'video/mp4'; // По умолчанию
+                }
+                else if (content.document) {
+                    messageType = 'document';
+                    filename = filename || content.fileName || 'document'; // Приоритет переданному filename
+                    messageContent = content.caption || '';
+                    mimeType = 'application/octet-stream'; // По умолчанию
+                }
+                else if (content.audio) {
+                    messageType = 'audio';
+                    mimeType = content.mimetype || 'audio/mp4';
+                }
+                else if (content.sticker) {
+                    messageType = 'sticker';
+                    mimeType = 'image/webp';
+                }
+                else {
+                    // Для других типов сообщений
+                    messageContent = JSON.stringify(content);
+                }
                 // Получаем chatId для сохранения сообщения
                 const chatId = yield ensureChat(organizationId, organizationPhoneId, senderJid, remoteJid);
+                // --- НАЧАЛО: УЛУЧШЕННАЯ ПРОВЕРКА И ЛОГИРОВАНИЕ userId ---
+                logger.info(`[sendMessage] Проверка userId перед сохранением. Полученное значение: ${userId}, тип: ${typeof userId}`);
                 const messageData = {
                     chatId: chatId,
                     organizationPhoneId: organizationPhoneId,
-                    receivingPhoneJid: senderJid, // Ваш номер телефона
-                    remoteJid: remoteJid, // JID получателя
+                    receivingPhoneJid: senderJid,
+                    remoteJid: remoteJid,
                     whatsappMessageId: sentMessage.key.id || `_out_${Date.now()}_${Math.random()}`,
-                    senderJid: (0, baileys_1.jidNormalizedUser)(((_a = sock.user) === null || _a === void 0 ? void 0 : _a.id) || senderJid), // JID отправителя (ваш аккаунт)
-                    fromMe: true, // Это сообщение отправлено "от меня"
+                    senderJid: (0, baileys_1.jidNormalizedUser)(((_a = sock.user) === null || _a === void 0 ? void 0 : _a.id) || senderJid),
+                    fromMe: true,
                     content: messageContent,
-                    type: type,
+                    type: messageType,
+                    mediaUrl: mediaUrl,
+                    filename: filename,
+                    mimeType: mimeType,
+                    size: size,
                     timestamp: new Date(),
-                    status: 'sent', // Статус "отправлено"
+                    status: 'sent',
                     organizationId: organizationId,
-                    senderUserId: userId, // <-- СОХРАНЕНИЕ ID ПОЛЬЗОВАТЕЛЯ
-                    // Добавьте сюда поля для медиа, если sendMessage будет поддерживать их
-                    // mediaUrl: ...,
-                    // filename: ...,
-                    // mimeType: ...,
-                    // size: ...,
                 };
+                // Присваиваем senderUserId только если userId является числом
+                if (typeof userId === 'number' && !isNaN(userId)) {
+                    messageData.senderUserId = userId;
+                }
+                else {
+                    logger.warn(`[sendMessage] userId не является числом (значение: ${userId}). senderUserId не будет установлен.`);
+                }
+                // --- КОНЕЦ: УЛУЧШЕННАЯ ПРОВЕРКА И ЛОГИРОВАНИЕ userId ---
                 // --- ОТЛАДОЧНЫЙ ЛОГ ---
                 logger.info({
                     msg: '[sendMessage] Data to be saved to DB',
-                    data: messageData
+                    data: messageData,
+                    receivedUserId: userId,
+                    isUserIdNumber: typeof userId === 'number',
+                    mediaInfo: {
+                        originalMediaUrl: mediaInfo === null || mediaInfo === void 0 ? void 0 : mediaInfo.mediaUrl,
+                        originalFilename: mediaInfo === null || mediaInfo === void 0 ? void 0 : mediaInfo.filename,
+                        originalSize: mediaInfo === null || mediaInfo === void 0 ? void 0 : mediaInfo.size,
+                        finalMediaUrl: messageData.mediaUrl,
+                        finalFilename: messageData.filename,
+                        finalSize: messageData.size
+                    }
                 }, 'Полные данные для сохранения исходящего сообщения.');
                 yield authStorage_1.prisma.message.create({
                     data: messageData,
                 });
-                logger.info(`✅ Исходящее сообщение "${messageContent}" (ID: ${sentMessage.key.id}) сохранено в БД. Chat ID: ${chatId}`);
+                logger.info(`✅ Исходящее сообщение "${messageContent}" (ID: ${sentMessage.key.id}) сохранено в БД. Chat ID: ${chatId}, Type: ${messageType}`);
             }
             else {
                 logger.warn(`⚠️ Исходящее сообщение на ${jid} не было сохранено: sentMessage is undefined.`);
