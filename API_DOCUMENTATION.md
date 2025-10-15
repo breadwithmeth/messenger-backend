@@ -39,8 +39,13 @@ Authorization: Bearer YOUR_JWT_TOKEN
     - status: open | pending | closed (опц.)
     - assigned: 'true' | 'false' (опц.) — только назначенные/неназначенные
     - priority: low | normal | high | urgent (опц.)
+    - includeProfile: true|false (опц.) — добавляет displayName из Chat.name
   - Сортировка: по unreadCount desc, затем lastMessageAt desc
   - Ответ: { chats: [...], total: number }
+- GET /api/chats/:remoteJid/profile?organizationPhoneId=ID
+  - Описание: вернуть фото профиля для собеседника (если доступно по приватности)
+  - Ответ: { jid, photoUrl|null }
+
 
 - GET /api/chats/:chatId/messages
   - Описание: сообщения конкретного чата (хронологически по возрастанию timestamp)
@@ -172,6 +177,30 @@ Authorization: Bearer YOUR_JWT_TOKEN
 - POST /api/wa/start — запуск новой WA-сессии (см. waSessionController)
 
 ---
+
+Деплой и запуск
+
+Вариант A: Docker Compose (локально/сервер)
+- Требования: Docker, Docker Compose
+- Файлы: Dockerfile, docker-compose.yml, .dockerignore
+- Шаги:
+  1) Собрать и поднять всё: docker compose up -d --build
+  2) API будет доступен на http://localhost:3000
+  3) Prisma применит миграции автоматически на старте контейнера
+
+Вариант B: Docker (только образ API)
+- Собрать: docker build -t messenger-backend:latest .
+- Запустить с внешним Postgres:
+  docker run -p 3000:3000 \
+    -e DATABASE_URL="postgresql://USER:PASS@HOST:5432/DB?schema=public" \
+    -e JWT_SECRET="your-secret" \
+    messenger-backend:latest
+
+Примечания по окружению
+- PORT (дефолт 3000)
+- DATABASE_URL (PostgreSQL)
+- JWT_SECRET (обязателен для прод)
+
 
 Ошибки (общие коды)
 - 400 — некорректные параметры

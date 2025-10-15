@@ -1,0 +1,12 @@
+node_modules
+npm-debug.log
+Dockerfile
+.git
+.gitignore
+.vscode
+dist
+baileys_auth_files
+*.log
+*.local
+*.env
+.env
