@@ -98,34 +98,118 @@ export async function ensureChat(
     try {
         const normalizedRemoteJid = jidNormalizedUser(remoteJid);
 
-        let chat = await prisma.chat.findUnique({
-            where: {
-                organizationId_receivingPhoneJid_remoteJid: {
-                    organizationId,
-                    receivingPhoneJid: jidNormalizedUser(receivingPhoneJid),
-                    remoteJid: normalizedRemoteJid,
-                },
-            },
-        });
+        // 1) Вычисляем канонический myJid (receivingPhoneJid) с учетом всех доступных источников
+        let myJidNormalized: string | undefined;
+        const candidates: Array<string | undefined> = [
+          receivingPhoneJid,
+          // JID текущего активного сокета для этого organizationPhoneId, если есть
+          socks.get(organizationPhoneId)?.user?.id,
+        ];
+        // Пробуем добрать JID из OrganizationPhone
+        try {
+          const orgPhone = await prisma.organizationPhone.findUnique({
+            where: { id: organizationPhoneId },
+            select: { phoneJid: true },
+          });
+          if (orgPhone?.phoneJid) {
+            candidates.push(orgPhone.phoneJid);
+          }
+        } catch (e) {
+          logger.warn(`[ensureChat] Не удалось получить OrganizationPhone(${organizationPhoneId}) для нормализации JID: ${String(e)}`);
+        }
 
-        if (!chat) {
-            chat = await prisma.chat.create({
-                data: {
-                    organizationId,
-                    receivingPhoneJid: jidNormalizedUser(receivingPhoneJid),
-                    remoteJid: normalizedRemoteJid,
-                    organizationPhoneId: organizationPhoneId,
-                    name: name || normalizedRemoteJid.split('@')[0],
-                    isGroup: isJidGroup(normalizedRemoteJid),
-                    lastMessageAt: new Date(),
+        for (const c of candidates) {
+          if (c && typeof c === 'string' && c.trim()) {
+            const norm = jidNormalizedUser(c);
+            if (norm) { myJidNormalized = norm; break; }
+          }
+        }
+
+        if (!myJidNormalized) {
+          // В крайнем случае используем исходное значение, даже если оно пустое — но лучше залогируем
+          logger.warn(`[ensureChat] receivingPhoneJid не удалось нормализовать. Поступившее значение: "${receivingPhoneJid}". Будет использовано пустое значение, что может привести к дублям.`);
+          myJidNormalized = '' as any; // осознанно допускаем пустую строку, ниже попытаемся слить её при первой возможности
+        }
+
+        // 2) Пытаемся найти чат по уникальному ключу (если JID известен)
+        let chat = myJidNormalized
+          ? await prisma.chat.findUnique({
+              where: {
+                organizationId_receivingPhoneJid_remoteJid: {
+                  organizationId,
+                  receivingPhoneJid: myJidNormalized,
+                  remoteJid: normalizedRemoteJid,
                 },
+              },
+            })
+          : null;
+
+        // 3) Если не нашли и ранее мог быть создан чат с пустым receivingPhoneJid — попробуем его найти и обновить
+        if (!chat) {
+          const emptyChat = await prisma.chat.findFirst({
+            where: {
+              organizationId,
+              remoteJid: normalizedRemoteJid,
+              receivingPhoneJid: '',
+            },
+          });
+
+          if (emptyChat && myJidNormalized) {
+            chat = await prisma.chat.update({
+              where: { id: emptyChat.id },
+              data: {
+                receivingPhoneJid: myJidNormalized,
+                organizationPhoneId,
+                lastMessageAt: new Date(),
+              },
             });
-            logger.info(`✅ Создан новый чат для JID: ${normalizedRemoteJid} (Ваш номер: ${receivingPhoneJid}, Организация: ${organizationId}, Phone ID: ${organizationPhoneId}, ID чата: ${chat.id})`);
+            logger.info(`🔄 Обновлён чат #${chat.id}: установлен receivingPhoneJid=${myJidNormalized} вместо пустого (remoteJid=${normalizedRemoteJid}).`);
+          }
+        }
+
+        // 4) Если по-прежнему не нашли — создаём новый
+        if (!chat) {
+          try {
+            chat = await prisma.chat.create({
+              data: {
+                organizationId,
+                receivingPhoneJid: myJidNormalized,
+                remoteJid: normalizedRemoteJid,
+                organizationPhoneId: organizationPhoneId,
+                name: name || normalizedRemoteJid.split('@')[0],
+                isGroup: isJidGroup(normalizedRemoteJid),
+                lastMessageAt: new Date(),
+              },
+            });
+            logger.info(`✅ Создан новый чат для JID: ${normalizedRemoteJid} (Ваш номер: ${myJidNormalized || '(пусто)'}, Организация: ${organizationId}, Phone ID: ${organizationPhoneId}, ID чата: ${chat.id})`);
+          } catch (e: any) {
+            // Возможна гонка и уникальный конфликт — пробуем перечитать
+            if (e?.code === 'P2002') {
+              const existing = await prisma.chat.findUnique({
+                where: {
+                  organizationId_receivingPhoneJid_remoteJid: {
+                    organizationId,
+                    receivingPhoneJid: myJidNormalized,
+                    remoteJid: normalizedRemoteJid,
+                  },
+                },
+              });
+              if (existing) {
+                chat = existing;
+                logger.info(`♻️ Найден уже существующий чат после конфликта уникальности: #${chat.id}`);
+              } else {
+                throw e;
+              }
+            } else {
+              throw e;
+            }
+          }
         } else {
-             await prisma.chat.update({
-                where: { id: chat.id },
-                data: { lastMessageAt: new Date() },
-            });
+          // 5) Обновим lastMessageAt для найденного чата
+          await prisma.chat.update({
+            where: { id: chat.id },
+            data: { lastMessageAt: new Date(), organizationPhoneId },
+          });
         }
         return chat.id;
     } catch (error: any) {
@@ -378,6 +462,17 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
   // Обработчик обновления учетных данных
   currentSock.ev.on('creds.update', saveCreds); // Используем saveCreds для сохранения
 
+  // Совместимость с v7: обработчик обновлений LID маппинга (в 6.7.x событие не генерируется)
+  try {
+    (currentSock.ev as any).on?.('lid-mapping.update', (mapping: any) => {
+      logger.info(`[LID] lid-mapping.update: ${JSON.stringify(mapping)}`);
+      // Здесь можно задействовать currentSock.signalRepository?.lidMapping?.storeLIDPNMappings(mapping)
+      // но API может отличаться между версиями — оставляем как информативный лог
+    });
+  } catch (e) {
+    logger.debug('LID mapping event handler not supported in this version');
+  }
+
   // Обработчик получения новых сообщений
   currentSock.ev.on('messages.upsert', async ({ messages, type }) => { 
     if (type === 'notify') {
@@ -392,7 +487,9 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
             continue;
         }
 
-        const remoteJid = jidNormalizedUser(msg.key.remoteJid || '');
+  // v7: поддержка LID alt-идентификаторов. В 6.7.x этих полей нет, поэтому используем fallback.
+  const rawRemote: string = (msg.key as any).remoteJidAlt ?? msg.key.remoteJid ?? '';
+  const remoteJid = jidNormalizedUser(rawRemote);
         if (!remoteJid) {
             logger.warn('🚫 Сообщение без remoteJid, пропущено.');
             continue;
@@ -405,7 +502,8 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
         }
 
         try {
-            const senderJid = jidNormalizedUser(msg.key.fromMe ? (currentSock?.user?.id || phoneJid) : (msg.key.participant || remoteJid));
+            const rawParticipant: string = (msg.key as any).participantAlt ?? msg.key.participant ?? remoteJid;
+            const senderJid = jidNormalizedUser(msg.key.fromMe ? (currentSock?.user?.id || phoneJid) : rawParticipant);
 
             let content: string | undefined;
             let messageType: string = "unknown";
@@ -534,13 +632,14 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
 
 
             // Сохраняем сообщение в БД
-            const chatId = await ensureChat(organizationId, organizationPhoneId, phoneJid, remoteJid);
+            const myJid = jidNormalizedUser(currentSock?.user?.id || phoneJid) || '';
+            const chatId = await ensureChat(organizationId, organizationPhoneId, myJid, remoteJid);
             
             const savedMessage = await prisma.message.create({
                 data: {
                     chatId: chatId,
                     organizationPhoneId: organizationPhoneId,
-                    receivingPhoneJid: phoneJid,
+                    receivingPhoneJid: myJid,
                     remoteJid: remoteJid,
                     whatsappMessageId: msg.key.id || `_temp_${Date.now()}_${Math.random()}`,
                     senderJid: senderJid,
@@ -699,8 +798,9 @@ export async function sendMessage(
         messageContent = JSON.stringify(content);
       }
 
-      // Получаем chatId для сохранения сообщения
-      const chatId = await ensureChat(organizationId, organizationPhoneId, senderJid, remoteJid);
+  // Получаем chatId для сохранения сообщения
+  const myJid = jidNormalizedUser(sock.user?.id || senderJid) || '';
+  const chatId = await ensureChat(organizationId, organizationPhoneId, myJid, remoteJid);
 
       // --- НАЧАЛО: УЛУЧШЕННАЯ ПРОВЕРКА И ЛОГИРОВАНИЕ userId ---
       logger.info(`[sendMessage] Проверка userId перед сохранением. Полученное значение: ${userId}, тип: ${typeof userId}`);
@@ -708,10 +808,10 @@ export async function sendMessage(
       const messageData: any = {
         chatId: chatId,
         organizationPhoneId: organizationPhoneId,
-        receivingPhoneJid: senderJid,
+  receivingPhoneJid: myJid,
         remoteJid: remoteJid,
-        whatsappMessageId: sentMessage.key.id || `_out_${Date.now()}_${Math.random()}`,
-        senderJid: jidNormalizedUser(sock.user?.id || senderJid),
+  whatsappMessageId: sentMessage.key.id || `_out_${Date.now()}_${Math.random()}`,
+  senderJid: myJid,
         fromMe: true,
         content: messageContent,
         type: messageType,

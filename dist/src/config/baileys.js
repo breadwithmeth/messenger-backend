@@ -291,6 +291,7 @@ function useDBAuthState(organizationId, phoneJid) {
  */
 function startBaileys(organizationId, organizationPhoneId, phoneJid) {
     return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b;
         const { state, saveCreds } = yield useDBAuthState(organizationId, phoneJid);
         // Получаем последнюю версию WhatsApp Web API
         const { version } = yield (0, baileys_1.fetchLatestBaileysVersion)();
@@ -408,9 +409,20 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
         }));
         // Обработчик обновления учетных данных
         currentSock.ev.on('creds.update', saveCreds); // Используем saveCreds для сохранения
+        // Совместимость с v7: обработчик обновлений LID маппинга (в 6.7.x событие не генерируется)
+        try {
+            (_b = (_a = currentSock.ev).on) === null || _b === void 0 ? void 0 : _b.call(_a, 'lid-mapping.update', (mapping) => {
+                logger.info(`[LID] lid-mapping.update: ${JSON.stringify(mapping)}`);
+                // Здесь можно задействовать currentSock.signalRepository?.lidMapping?.storeLIDPNMappings(mapping)
+                // но API может отличаться между версиями — оставляем как информативный лог
+            });
+        }
+        catch (e) {
+            logger.debug('LID mapping event handler not supported in this version');
+        }
         // Обработчик получения новых сообщений
         currentSock.ev.on('messages.upsert', (_a) => __awaiter(this, [_a], void 0, function* ({ messages, type }) {
-            var _b, _c, _d, _e, _f, _g, _h, _j, _k, _l;
+            var _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q;
             if (type === 'notify') {
                 for (const msg of messages) {
                     // Пропускаем сообщения без контента или если это наше исходящее сообщение, не имеющее видимого контента
@@ -422,7 +434,9 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                         logger.info(`[Message Upsert] Пропущено исходящее системное сообщение (ID: ${msg.key.id})`);
                         continue;
                     }
-                    const remoteJid = (0, baileys_1.jidNormalizedUser)(msg.key.remoteJid || '');
+                    // v7: поддержка LID alt-идентификаторов. В 6.7.x этих полей нет, поэтому используем fallback.
+                    const rawRemote = (_c = (_b = msg.key.remoteJidAlt) !== null && _b !== void 0 ? _b : msg.key.remoteJid) !== null && _c !== void 0 ? _c : '';
+                    const remoteJid = (0, baileys_1.jidNormalizedUser)(rawRemote);
                     if (!remoteJid) {
                         logger.warn('🚫 Сообщение без remoteJid, пропущено.');
                         continue;
@@ -433,7 +447,8 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                         continue;
                     }
                     try {
-                        const senderJid = (0, baileys_1.jidNormalizedUser)(msg.key.fromMe ? (((_b = currentSock === null || currentSock === void 0 ? void 0 : currentSock.user) === null || _b === void 0 ? void 0 : _b.id) || phoneJid) : (msg.key.participant || remoteJid));
+                        const rawParticipant = (_e = (_d = msg.key.participantAlt) !== null && _d !== void 0 ? _d : msg.key.participant) !== null && _e !== void 0 ? _e : remoteJid;
+                        const senderJid = (0, baileys_1.jidNormalizedUser)(msg.key.fromMe ? (((_f = currentSock === null || currentSock === void 0 ? void 0 : currentSock.user) === null || _f === void 0 ? void 0 : _f.id) || phoneJid) : rawParticipant);
                         let content;
                         let messageType = "unknown";
                         let mediaUrl;
@@ -444,7 +459,7 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                         let quotedMessageId;
                         let quotedContent;
                         const messageContent = msg.message;
-                        console.log((_d = (_c = messageContent.extendedTextMessage) === null || _c === void 0 ? void 0 : _c.contextInfo) === null || _d === void 0 ? void 0 : _d.quotedMessage);
+                        console.log((_h = (_g = messageContent.extendedTextMessage) === null || _g === void 0 ? void 0 : _g.contextInfo) === null || _h === void 0 ? void 0 : _h.quotedMessage);
                         // Разбор различных типов сообщений
                         if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.conversation) {
                             content = messageContent.conversation;
@@ -457,14 +472,14 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                             // --- НАЧАЛО: ОБРАБОТКА ОТВЕТА ---
                             const contextInfo = messageContent.extendedTextMessage.contextInfo;
                             if (contextInfo === null || contextInfo === void 0 ? void 0 : contextInfo.quotedMessage) {
-                                quotedMessageId = (_e = contextInfo.stanzaId) !== null && _e !== void 0 ? _e : undefined;
+                                quotedMessageId = (_j = contextInfo.stanzaId) !== null && _j !== void 0 ? _j : undefined;
                                 const qm = contextInfo.quotedMessage;
                                 // Получаем текст из разных возможных полей цитируемого сообщения
                                 quotedContent = qm.conversation ||
-                                    ((_f = qm.extendedTextMessage) === null || _f === void 0 ? void 0 : _f.text) ||
-                                    ((_g = qm.imageMessage) === null || _g === void 0 ? void 0 : _g.caption) ||
-                                    ((_h = qm.videoMessage) === null || _h === void 0 ? void 0 : _h.caption) ||
-                                    ((_j = qm.documentMessage) === null || _j === void 0 ? void 0 : _j.fileName) ||
+                                    ((_k = qm.extendedTextMessage) === null || _k === void 0 ? void 0 : _k.text) ||
+                                    ((_l = qm.imageMessage) === null || _l === void 0 ? void 0 : _l.caption) ||
+                                    ((_m = qm.videoMessage) === null || _m === void 0 ? void 0 : _m.caption) ||
+                                    ((_o = qm.documentMessage) === null || _o === void 0 ? void 0 : _o.fileName) ||
                                     '[Медиафайл]'; // Плейсхолдер для медиа без текста
                                 logger.info(`  [reply] Ответ на сообщение ID: ${quotedMessageId}`);
                             }
@@ -527,12 +542,12 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                         }
                         else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.contactsArrayMessage) {
                             messageType = "contacts_array";
-                            content = `Контакты: ${((_k = messageContent.contactsArrayMessage.contacts) === null || _k === void 0 ? void 0 : _k.map(c => c.displayName || c.vcard).join(', ')) || 'пусто'}`;
+                            content = `Контакты: ${((_p = messageContent.contactsArrayMessage.contacts) === null || _p === void 0 ? void 0 : _p.map(c => c.displayName || c.vcard).join(', ')) || 'пусто'}`;
                             logger.info(`  [${messageType}] Контакты: ${content}`);
                         }
                         else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.reactionMessage) {
                             messageType = "reaction";
-                            content = `Реакция "${messageContent.reactionMessage.text}" на сообщение ${(_l = messageContent.reactionMessage.key) === null || _l === void 0 ? void 0 : _l.id}`;
+                            content = `Реакция "${messageContent.reactionMessage.text}" на сообщение ${(_q = messageContent.reactionMessage.key) === null || _q === void 0 ? void 0 : _q.id}`;
                             logger.info(`  [${messageType}] ${content}`);
                         }
                         else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.protocolMessage) {
