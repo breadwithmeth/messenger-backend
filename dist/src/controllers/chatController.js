@@ -34,7 +34,7 @@ function listChats(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
         try {
             const organizationId = res.locals.organizationId;
-            const { status, assigned, priority } = req.query;
+            const { status, assigned, priority, includeProfile } = req.query;
             if (!organizationId) {
                 logger.warn('[listChats] organizationId не определен в res.locals.');
                 return res.status(400).json({ error: 'organizationId обязателен' });
@@ -97,8 +97,27 @@ function listChats(req, res) {
                     { lastMessageAt: 'desc' },
                 ],
             });
-            // Преобразуем результат для удобства использования
-            const chatsWithLastMessage = chats.map(chat => (Object.assign(Object.assign({}, chat), { lastMessage: chat.messages.length > 0 ? chat.messages[0] : null, messages: undefined })));
+            // Преобразуем результат и, по желанию, обогащаем профилем
+            const wantProfile = String(includeProfile).toLowerCase() === 'true';
+            const chatsWithLastMessage = yield Promise.all(chats.map((chat) => __awaiter(this, void 0, void 0, function* () {
+                const base = Object.assign(Object.assign({}, chat), { lastMessage: chat.messages.length > 0 ? chat.messages[0] : null });
+                delete base.messages;
+                if (wantProfile) {
+                    try {
+                        // Имя собеседника: используем Chat.name, оно теперь заполняется из pushName
+                        base.displayName = chat.name || null;
+                        // Фото профиля: потребует JID собеседника, это chat.remoteJid
+                        // Чтобы избежать прямой зависимости на Baileys здесь, можно сделать легкий прокси в waService,
+                        // но для простоты вернем только поле, которое фронт может запросить отдельным вызовом.
+                        base.profilePhotoUrl = null; // заполняется отдельным endpoint либо lazy-загрузкой
+                    }
+                    catch (e) {
+                        base.displayName = base.displayName || null;
+                        base.profilePhotoUrl = null;
+                    }
+                }
+                return base;
+            })));
             res.json({
                 chats: chatsWithLastMessage,
                 total: chats.length,

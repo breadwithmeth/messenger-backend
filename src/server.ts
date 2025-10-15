@@ -4,7 +4,7 @@ import { startWaSession } from './services/waService'; // Импортируйт
 import pino from 'pino'; // Добавьте импорт pino
 import { prisma } from './config/authStorage'; // Импортируйте prisma
 
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT || 3000;
 
 const server = http.createServer(app);
 const logger = pino({ level: 'info' }); // Инициализируйте logger

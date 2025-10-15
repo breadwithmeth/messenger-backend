@@ -17,7 +17,7 @@ const app_1 = __importDefault(require("./app"));
 const waService_1 = require("./services/waService"); // Импортируйте startWaSession
 const pino_1 = __importDefault(require("pino")); // Добавьте импорт pino
 const authStorage_1 = require("./config/authStorage"); // Импортируйте prisma
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT || 3000;
 const server = http_1.default.createServer(app_1.default);
 const logger = (0, pino_1.default)({ level: 'info' }); // Инициализируйте logger
 function initializeConnectedSessions() {

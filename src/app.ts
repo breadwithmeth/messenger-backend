@@ -18,6 +18,7 @@ import { startWaSession } from './services/waService'; // Импортируйт
 import organizationPhoneRoutes from './routes/organizationPhoneRoutes';
 import accountRoutes from './routes/accountRoutes';
 import userRoutes from './routes/userRoutes'; // <-- Добавить
+import contactRoutes from './routes/contactRoutes';
 
 
 const app = express();
@@ -44,12 +45,18 @@ app.use('/api/wa', waRoutes);
 app.use('/api/organization-phones', organizationPhoneRoutes); 
 app.use('/api/accounts', accountRoutes);
 app.use('/api/users', userRoutes); // <-- Добавить
+app.use('/api', contactRoutes);
 app.use('/api/chat-assignment', chatAssignmentRoutes); // Новые маршруты для назначения чатов
 app.use('/api/message-read', messageReadRoutes); // Новые маршруты для непрочитанных сообщений
 console.log('🔄 Подключаем unread маршруты...');
 app.use('/api/unread', unreadRoutes); // Маршруты для управления непрочитанными сообщениями
 console.log('✅ Unread маршруты подключены');
 app.use('/api/media', mediaRoutes); // Маршруты для загрузки и отправки медиафайлов
+
+// 404 JSON для несуществующих маршрутов
+app.use((req, res) => {
+  res.status(404).json({ error: 'Not Found', method: req.method, path: req.originalUrl });
+});
 
 // Глобальный обработчик ошибок
 app.use(errorHandler);

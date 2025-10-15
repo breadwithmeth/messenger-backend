@@ -20,6 +20,7 @@ const pino_1 = __importDefault(require("pino")); // Добавьте импор�
 const organizationPhoneRoutes_1 = __importDefault(require("./routes/organizationPhoneRoutes"));
 const accountRoutes_1 = __importDefault(require("./routes/accountRoutes"));
 const userRoutes_1 = __importDefault(require("./routes/userRoutes")); // <-- Добавить
+const contactRoutes_1 = __importDefault(require("./routes/contactRoutes"));
 const app = (0, express_1.default)();
 const logger = (0, pino_1.default)({ level: 'info' }); // Инициализируйте logger
 app.use(express_1.default.json());
@@ -40,12 +41,17 @@ app.use('/api/wa', waRoutes_1.default);
 app.use('/api/organization-phones', organizationPhoneRoutes_1.default);
 app.use('/api/accounts', accountRoutes_1.default);
 app.use('/api/users', userRoutes_1.default); // <-- Добавить
+app.use('/api', contactRoutes_1.default);
 app.use('/api/chat-assignment', chatAssignmentRoutes_1.default); // Новые маршруты для назначения чатов
 app.use('/api/message-read', messageReadRoutes_1.default); // Новые маршруты для непрочитанных сообщений
 console.log('🔄 Подключаем unread маршруты...');
 app.use('/api/unread', unreadRoutes_1.default); // Маршруты для управления непрочитанными сообщениями
 console.log('✅ Unread маршруты подключены');
 app.use('/api/media', mediaRoutes_1.default); // Маршруты для загрузки и отправки медиафайлов
+// 404 JSON для несуществующих маршрутов
+app.use((req, res) => {
+    res.status(404).json({ error: 'Not Found', method: req.method, path: req.originalUrl });
+});
 // Глобальный обработчик ошибок
 app.use(errorHandler_1.default);
 exports.default = app;

@@ -205,10 +205,14 @@ export async function ensureChat(
             }
           }
         } else {
-          // 5) Обновим lastMessageAt для найденного чата
+          // 5) Обновим lastMessageAt и при необходимости имя/organizationPhoneId
+          const updateData: any = { lastMessageAt: new Date(), organizationPhoneId };
+          if (name && typeof name === 'string' && name.trim() && name !== chat.name) {
+            updateData.name = name.trim();
+          }
           await prisma.chat.update({
             where: { id: chat.id },
-            data: { lastMessageAt: new Date(), organizationPhoneId },
+            data: updateData,
           });
         }
         return chat.id;
@@ -633,7 +637,8 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
 
             // Сохраняем сообщение в БД
             const myJid = jidNormalizedUser(currentSock?.user?.id || phoneJid) || '';
-            const chatId = await ensureChat(organizationId, organizationPhoneId, myJid, remoteJid);
+            const contactName = msg.pushName || undefined;
+            const chatId = await ensureChat(organizationId, organizationPhoneId, myJid, remoteJid, contactName);
             
             const savedMessage = await prisma.message.create({
                 data: {

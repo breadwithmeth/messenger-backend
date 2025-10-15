@@ -24,7 +24,7 @@ const logger = pino({ level: 'info' });
 export async function listChats(req: Request, res: Response) {
   try {
     const organizationId = res.locals.organizationId;
-    const { status, assigned, priority } = req.query;
+    const { status, assigned, priority, includeProfile } = req.query;
     
     if (!organizationId) {
       logger.warn('[listChats] organizationId не определен в res.locals.');
@@ -93,11 +93,30 @@ export async function listChats(req: Request, res: Response) {
       ],
     });
 
-    // Преобразуем результат для удобства использования
-    const chatsWithLastMessage = chats.map(chat => ({
-      ...chat,
-      lastMessage: chat.messages.length > 0 ? chat.messages[0] : null,
-      messages: undefined, // Убираем массив messages из ответа
+    // Преобразуем результат и, по желанию, обогащаем профилем
+    const wantProfile = String(includeProfile).toLowerCase() === 'true';
+    const chatsWithLastMessage = await Promise.all(chats.map(async (chat) => {
+      const base: any = {
+        ...chat,
+        lastMessage: chat.messages.length > 0 ? chat.messages[0] : null,
+      };
+      delete base.messages;
+
+      if (wantProfile) {
+        try {
+          // Имя собеседника: используем Chat.name, оно теперь заполняется из pushName
+          base.displayName = chat.name || null;
+          // Фото профиля: потребует JID собеседника, это chat.remoteJid
+          // Чтобы избежать прямой зависимости на Baileys здесь, можно сделать легкий прокси в waService,
+          // но для простоты вернем только поле, которое фронт может запросить отдельным вызовом.
+          base.profilePhotoUrl = null; // заполняется отдельным endpoint либо lazy-загрузкой
+        } catch (e) {
+          base.displayName = base.displayName || null;
+          base.profilePhotoUrl = null;
+        }
+      }
+
+      return base;
     }));
 
     res.json({
