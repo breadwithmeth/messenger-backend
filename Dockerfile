@@ -24,6 +24,8 @@ RUN npm run build
 FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+ENV PRISMA_CLIENT_ENGINE_TYPE=library
+ENV PRISMA_CLI_QUERY_ENGINE_TYPE=library
 
 COPY package*.json ./
 RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev; fi
