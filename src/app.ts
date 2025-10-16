@@ -9,7 +9,7 @@ import messageReadRoutes from './routes/messageReadRoutes';
 import unreadRoutes from './routes/unreadRoutes';
 import mediaRoutes from './routes/mediaRoutes';
 import errorHandler from './middlewares/errorHandler'; // Corrected import path
-import cors from 'cors';
+import cors, { CorsOptions } from 'cors';
 import path from 'path'; // <--- ДОБАВИТЬ
 import { startBaileys } from './config/baileys';
 import prisma from './config/prisma';
@@ -25,7 +25,25 @@ const app = express();
 const logger = pino({ level: 'info' }); // Инициализируйте logger
 
 app.use(express.json());
-app.use(cors());
+
+// --- Расширенная настройка CORS ---
+const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+const corsOptions: CorsOptions = {
+  // Если список не задан, отражаем Origin (для dev/prod) — безопаснее, чем '*', когда нужны credentials
+  origin: allowedOrigins.length
+    ? (origin, callback) => {
+        if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+        return callback(new Error('Not allowed by CORS'));
+      }
+    : true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+  credentials: true,
+  optionsSuccessStatus: 204,
+};
+app.use(cors(corsOptions));
+// Обрабатываем preflight для всех роутов
+app.options('*', cors(corsOptions));
 
 // --- ДОБАВЛЯЕМ ОБЩЕЕ ЛОГИРОВАНИЕ ВСЕХ ЗАПРОСОВ ---
 app.use((req, res, next) => {
@@ -36,6 +54,11 @@ app.use((req, res, next) => {
 
 // --- ДОБАВИТЬ: Раздача статических файлов ---
 app.use(express.static(path.join(__dirname, '..', 'public')));
+
+// Простой healthcheck (и для проверки CORS в проде)
+app.get('/health', (_req, res) => {
+  res.status(200).json({ ok: true, ts: new Date().toISOString() });
+});
 
 app.use('/api/auth', authRoutes);
 app.use('/api/organizations', organizationRoutes);

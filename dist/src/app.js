@@ -24,7 +24,25 @@ const contactRoutes_1 = __importDefault(require("./routes/contactRoutes"));
 const app = (0, express_1.default)();
 const logger = (0, pino_1.default)({ level: 'info' }); // Инициализируйте logger
 app.use(express_1.default.json());
-app.use((0, cors_1.default)());
+// --- Расширенная настройка CORS ---
+const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+const corsOptions = {
+    // Если список не задан, отражаем Origin (для dev/prod) — безопаснее, чем '*', когда нужны credentials
+    origin: allowedOrigins.length
+        ? (origin, callback) => {
+            if (!origin || allowedOrigins.includes(origin))
+                return callback(null, true);
+            return callback(new Error('Not allowed by CORS'));
+        }
+        : true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    credentials: true,
+    optionsSuccessStatus: 204,
+};
+app.use((0, cors_1.default)(corsOptions));
+// Обрабатываем preflight для всех роутов
+app.options('*', (0, cors_1.default)(corsOptions));
 // --- ДОБАВЛЯЕМ ОБЩЕЕ ЛОГИРОВАНИЕ ВСЕХ ЗАПРОСОВ ---
 app.use((req, res, next) => {
     console.log(`🌐 INCOMING REQUEST: ${req.method} ${req.originalUrl}`);
@@ -33,6 +51,10 @@ app.use((req, res, next) => {
 });
 // --- ДОБАВИТЬ: Раздача статических файлов ---
 app.use(express_1.default.static(path_1.default.join(__dirname, '..', 'public')));
+// Простой healthcheck (и для проверки CORS в проде)
+app.get('/health', (_req, res) => {
+    res.status(200).json({ ok: true, ts: new Date().toISOString() });
+});
 app.use('/api/auth', authRoutes_1.default);
 app.use('/api/organizations', organizationRoutes_1.default);
 app.use('/api/chats', chatRoutes_1.default);
