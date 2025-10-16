@@ -13,7 +13,8 @@ RUN apk add --no-cache openssl libc6-compat
 COPY tsconfig.json ./
 COPY prisma ./prisma
 COPY src ./src
-COPY public ./public
+# public может отсутствовать в репозитории — создадим директорию заранее
+RUN mkdir -p public/media
 
 # Generate Prisma Client and build TS
 RUN npx prisma generate
@@ -35,7 +36,8 @@ RUN npm i -g prisma@^6.11.1
 
 # Copy built artifacts and runtime assets
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/public ./public
+# Папка public может быть пустой — создадим, чтобы статика обслуживалась корректно
+RUN mkdir -p public/media
 COPY --from=builder /app/prisma ./prisma
 
 EXPOSE 3000

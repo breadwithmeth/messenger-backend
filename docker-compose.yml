@@ -23,6 +23,9 @@ services:
     ports:
       - "3000:3000"
     restart: unless-stopped
+    volumes:
+      - public_data:/app/public
 
 volumes:
   db_data:
+  public_data:
