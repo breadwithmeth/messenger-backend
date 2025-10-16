@@ -40,7 +40,10 @@ COPY --from=builder /app/dist ./dist
 RUN mkdir -p public/media
 COPY --from=builder /app/prisma ./prisma
 
+# Generate Prisma Client in runtime image (ensures @prisma/client is initialized)
+RUN prisma generate
+
 EXPOSE 3000
 
 # Apply DB migrations and start server
-CMD ["sh", "-c", "until prisma migrate deploy; do echo 'DB not ready, retrying...'; sleep 3; done; node dist/src/server.js"]
+CMD ["sh", "-c", "prisma generate && until prisma migrate deploy; do echo 'DB not ready, retrying...'; sleep 3; done; node dist/src/server.js"]
