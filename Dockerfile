@@ -6,6 +6,9 @@ WORKDIR /app
 COPY package*.json ./
 RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
+# Prisma build-time requirements on Alpine
+RUN apk add --no-cache openssl libc6-compat
+
 # Copy sources
 COPY tsconfig.json ./
 COPY prisma ./prisma
@@ -38,4 +41,4 @@ COPY --from=builder /app/prisma ./prisma
 EXPOSE 3000
 
 # Apply DB migrations and start server
-CMD ["sh", "-c", "prisma migrate deploy && node dist/src/server.js"]
+CMD ["sh", "-c", "until prisma migrate deploy; do echo 'DB not ready, retrying...'; sleep 3; done; node dist/src/server.js"]
