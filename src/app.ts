@@ -42,8 +42,14 @@ const corsOptions: CorsOptions = {
   optionsSuccessStatus: 204,
 };
 app.use(cors(corsOptions));
-// Обрабатываем preflight для всех роутов
-app.options('*', cors(corsOptions));
+// Обрабатываем preflight без паттерна '*', который ломается в Express 5/path-to-regexp
+app.use((req, res, next) => {
+  if (req.method === 'OPTIONS') {
+    // cors(corsOptions) уже проставил заголовки — возвращаем 204
+    return res.sendStatus(204);
+  }
+  next();
+});
 
 // --- ДОБАВЛЯЕМ ОБЩЕЕ ЛОГИРОВАНИЕ ВСЕХ ЗАПРОСОВ ---
 app.use((req, res, next) => {
