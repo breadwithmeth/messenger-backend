@@ -88,8 +88,8 @@ export async function listChats(req: Request, res: Response) {
         },
       },
       orderBy: [
-        { unreadCount: 'desc' }, // Сначала чаты с непрочитанными
-        { lastMessageAt: 'desc' },
+        { lastMessageAt: 'desc' }, // Сначала самые свежие по времени последнего сообщения
+        { unreadCount: 'desc' }, // При одинаковом времени - непрочитанные выше
       ],
     });
 
