@@ -76,6 +76,9 @@ model User {
   // Связь с назначенными чатами (как оператор)
   assignedChats  Chat[]       @relation("AssignedChats")
 
+  // Связь с историей изменений тикетов
+  ticketHistory  TicketHistory[]
+
   chats          Chat[]       @relation("ChatUsers")
 }
 
@@ -160,25 +163,65 @@ model Chat {
   isGroup             Boolean      @default(false)
   lastMessageAt       DateTime?
 
+  // === ТИКЕТ-СИСТЕМА ===
+  
+  // Номер тикета (уникальный в рамках организации)
+  ticketNumber        Int?         // Например: #12345
+  
   // Поля для назначения чатов операторам
   assignedUserId      Int?         // ID оператора, которому назначен чат
   assignedUser        User?        @relation("AssignedChats", fields: [assignedUserId], references: [id], onDelete: SetNull)
   assignedAt          DateTime?    // Когда чат был назначен
   
-  // Статус чата
-  status              String       @default("open") // open, closed, pending
+  // Статус тикета (расширенный)
+  status              String       @default("new") // new, open, in_progress, resolved, closed, pending
   
   // Приоритет чата
   priority            String       @default("normal") // low, normal, high, urgent
   
+  // Теги/категории (JSON массив)
+  tags                String?      // JSON массив строк, например: ["техподдержка", "продажи"]
+  
+  // Категория тикета
+  category            String?      // Например: "техподдержка", "продажи", "возврат"
+  
+  // Описание/тема тикета
+  subject             String?      // Краткое описание проблемы
+  
   // Количество непрочитанных сообщений для оператора
   unreadCount         Int          @default(0)
+  
+  // Время первого ответа
+  firstResponseAt     DateTime?    // Когда оператор впервые ответил
+  
+  // Время решения
+  resolvedAt          DateTime?    // Когда тикет был решён
+  
+  // Время закрытия
+  closedAt            DateTime?    // Когда тикет был закрыт
+  
+  // Причина закрытия
+  closeReason         String?      // Например: "решено", "дубликат", "спам"
+  
+  // Оценка клиента (1-5)
+  customerRating      Int?         // Рейтинг от клиента после закрытия
+  
+  // Заметки оператора (внутренние)
+  internalNotes       String?      // Приватные заметки для операторов
+  
+  // Обновлено
+  updatedAt           DateTime     @updatedAt
 
   clients             Client[]     @relation("ChatClients")
   users               User[]       @relation("ChatUsers")
   messages            Message[]
+  ticketHistory       TicketHistory[] // История изменений тикета
 
   @@unique([organizationId, receivingPhoneJid, remoteJid])
+  @@unique([organizationId, ticketNumber]) // Уникальный номер тикета в рамках организации
+  @@index([status]) // Индекс для быстрого поиска по статусу
+  @@index([priority]) // Индекс для быстрого поиска по приоритету
+  @@index([category]) // Индекс для быстрого поиска по категории
 }
 
 
@@ -200,3 +243,32 @@ model OrganizationPhone {
   messages        Message[] // Связь с моделью Message
 }
 
+// История изменений тикетов (аудит)
+model TicketHistory {
+  id              Int      @id @default(autoincrement())
+  chat            Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  chatId          Int
+  
+  // Кто внёс изменение
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userId          Int?
+  
+  // Тип изменения
+  changeType      String   // status_changed, assigned, priority_changed, tag_added, tag_removed, note_added, etc.
+  
+  // Старое значение
+  oldValue        String?  // JSON или текст
+  
+  // Новое значение
+  newValue        String?  // JSON или текст
+  
+  // Описание изменения
+  description     String?  // Текстовое описание для пользователя
+  
+  // Когда произошло изменение
+  createdAt       DateTime @default(now())
+
+  @@index([chatId])
+  @@index([changeType])
+  @@index([createdAt])
+}

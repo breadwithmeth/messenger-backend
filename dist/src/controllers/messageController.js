@@ -13,7 +13,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendMediaMessage = exports.sendTextMessage = void 0;
+exports.sendMessageByTicket = exports.sendMediaMessage = exports.sendTextMessage = void 0;
 const baileys_1 = require("../config/baileys");
 const baileys_2 = require("@whiskeysockets/baileys");
 const pino_1 = __importDefault(require("pino"));
@@ -219,4 +219,79 @@ const sendMediaMessage = (req, res) => __awaiter(void 0, void 0, void 0, functio
     }
 });
 exports.sendMediaMessage = sendMediaMessage;
+/**
+ * Отправить текстовое сообщение по номеру тикета
+ */
+const sendMessageByTicket = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const organizationId = res.locals.organizationId;
+        const userId = res.locals.userId;
+        const { ticketNumber, text } = req.body;
+        // Валидация
+        if (!organizationId) {
+            logger.warn('[sendMessageByTicket] Несанкционированный доступ: organizationId не определен в res.locals.');
+            return res.status(401).json({ error: 'Несанкционированный доступ: organizationId не определен.' });
+        }
+        if (!ticketNumber || isNaN(parseInt(ticketNumber))) {
+            logger.warn(`[sendMessageByTicket] Некорректный ticketNumber: "${ticketNumber}". Ожидалось число.`);
+            return res.status(400).json({ error: 'Некорректный ticketNumber. Ожидалось число.' });
+        }
+        if (!text || typeof text !== 'string' || text.trim() === '') {
+            logger.warn('[sendMessageByTicket] Отсутствует или пустой параметр text.');
+            return res.status(400).json({ error: 'Параметр text обязателен и не должен быть пустым.' });
+        }
+        // Находим чат по ticketNumber
+        const chat = yield authStorage_1.prisma.chat.findFirst({
+            where: {
+                ticketNumber: parseInt(ticketNumber),
+                organizationId: organizationId,
+            },
+            select: {
+                id: true,
+                remoteJid: true,
+                receivingPhoneJid: true,
+                organizationPhoneId: true,
+            },
+        });
+        if (!chat) {
+            logger.warn(`[sendMessageByTicket] Тикет с номером ${ticketNumber} не найден или не принадлежит организации ${organizationId}.`);
+            return res.status(404).json({ error: 'Тикет не найден или не принадлежит вашей организации.' });
+        }
+        if (!chat.remoteJid || !chat.receivingPhoneJid || !chat.organizationPhoneId) {
+            logger.error(`[sendMessageByTicket] У тикета ${ticketNumber} отсутствуют необходимые данные (remoteJid, receivingPhoneJid или organizationPhoneId).`);
+            return res.status(500).json({ error: 'У тикета отсутствуют необходимые данные для отправки сообщения.' });
+        }
+        // Получаем сокет Baileys
+        const sock = (0, baileys_1.getBaileysSock)(chat.organizationPhoneId);
+        if (!sock || !sock.user) {
+            logger.warn(`[sendMessageByTicket] Сокет для organizationPhoneId ${chat.organizationPhoneId} не готов.`);
+            return res.status(503).json({
+                error: `WhatsApp аккаунт не готов к отправке сообщений. Попробуйте позже.`,
+                details: 'Socket not ready or user not authenticated.'
+            });
+        }
+        // Нормализуем JID получателя
+        const normalizedReceiverJid = (0, baileys_2.jidNormalizedUser)(chat.remoteJid);
+        if (!normalizedReceiverJid) {
+            logger.error(`[sendMessageByTicket] Некорректный remoteJid: "${chat.remoteJid}".`);
+            return res.status(500).json({ error: 'Некорректный remoteJid в базе данных.' });
+        }
+        // Отправляем сообщение
+        const sentMessage = yield (0, baileys_1.sendMessage)(sock, normalizedReceiverJid, { text }, organizationId, chat.organizationPhoneId, chat.receivingPhoneJid, userId);
+        if (!sentMessage) {
+            logger.error(`[sendMessageByTicket] Сообщение не было отправлено (sentMessage is undefined) для тикета ${ticketNumber}.`);
+            return res.status(500).json({ error: 'Не удалось отправить сообщение.', details: 'The message might not have been sent successfully.' });
+        }
+        logger.info(`[sendMessageByTicket] Сообщение отправлено в тикет ${ticketNumber}. WhatsApp Message ID: ${sentMessage.key.id}`);
+        res.status(200).json({ success: true, messageId: sentMessage.key.id, ticketNumber: parseInt(ticketNumber) });
+    }
+    catch (error) {
+        logger.error(`[sendMessageByTicket] Ошибка при отправке сообщения в тикет:`, error);
+        res.status(500).json({
+            error: 'Не удалось отправить сообщение в тикет.',
+            details: error.message,
+        });
+    }
+});
+exports.sendMessageByTicket = sendMessageByTicket;
 //# sourceMappingURL=messageController.js.map

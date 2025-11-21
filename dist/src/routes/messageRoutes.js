@@ -11,5 +11,8 @@ router.post('/send-text', authMiddleware_1.authMiddleware, messageController_1.s
 // Маршрут для отправки медиа-сообщений
 // Также защищен authMiddleware
 router.post('/send-media', authMiddleware_1.authMiddleware, messageController_1.sendMediaMessage);
+// Маршрут для отправки сообщения по номеру тикета
+// Упрощенный API - нужен только ticketNumber и text
+router.post('/send-by-ticket', authMiddleware_1.authMiddleware, messageController_1.sendMessageByTicket);
 exports.default = router;
 //# sourceMappingURL=messageRoutes.js.map

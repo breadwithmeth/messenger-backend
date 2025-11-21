@@ -145,7 +145,7 @@ export const getChatMessages = async (req: Request, res: Response) => {
 
   try {
     // Проверяем, что чат принадлежит данной организации, чтобы предотвратить доступ к чужим чатам
-    const chat = await prisma.chat.findUnique({
+    const chat = await prisma.chat.findFirst({
       where: {
         id: chatId,
         organizationId: organizationId,

@@ -142,7 +142,7 @@ const getChatMessages = (req, res) => __awaiter(void 0, void 0, void 0, function
     }
     try {
         // Проверяем, что чат принадлежит данной организации, чтобы предотвратить доступ к чужим чатам
-        const chat = yield authStorage_1.prisma.chat.findUnique({
+        const chat = yield authStorage_1.prisma.chat.findFirst({
             where: {
                 id: chatId,
                 organizationId: organizationId,

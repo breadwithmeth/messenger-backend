@@ -13,6 +13,7 @@ const chatAssignmentRoutes_1 = __importDefault(require("./routes/chatAssignmentR
 const messageReadRoutes_1 = __importDefault(require("./routes/messageReadRoutes"));
 const unreadRoutes_1 = __importDefault(require("./routes/unreadRoutes"));
 const mediaRoutes_1 = __importDefault(require("./routes/mediaRoutes"));
+const ticketRoutes_1 = __importDefault(require("./routes/ticketRoutes"));
 const errorHandler_1 = __importDefault(require("./middlewares/errorHandler")); // Corrected import path
 const cors_1 = __importDefault(require("cors"));
 const path_1 = __importDefault(require("path")); // <--- ДОБАВИТЬ
@@ -76,6 +77,7 @@ console.log('🔄 Подключаем unread маршруты...');
 app.use('/api/unread', unreadRoutes_1.default); // Маршруты для управления непрочитанными сообщениями
 console.log('✅ Unread маршруты подключены');
 app.use('/api/media', mediaRoutes_1.default); // Маршруты для загрузки и отправки медиафайлов
+app.use('/api/tickets', ticketRoutes_1.default); // Маршруты для тикет-системы
 // 404 JSON для несуществующих маршрутов
 app.use((req, res) => {
     res.status(404).json({ error: 'Not Found', method: req.method, path: req.originalUrl });

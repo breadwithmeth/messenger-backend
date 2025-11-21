@@ -8,6 +8,7 @@ import chatAssignmentRoutes from './routes/chatAssignmentRoutes';
 import messageReadRoutes from './routes/messageReadRoutes';
 import unreadRoutes from './routes/unreadRoutes';
 import mediaRoutes from './routes/mediaRoutes';
+import ticketRoutes from './routes/ticketRoutes';
 import errorHandler from './middlewares/errorHandler'; // Corrected import path
 import cors, { CorsOptions } from 'cors';
 import path from 'path'; // <--- ДОБАВИТЬ
@@ -81,6 +82,7 @@ console.log('🔄 Подключаем unread маршруты...');
 app.use('/api/unread', unreadRoutes); // Маршруты для управления непрочитанными сообщениями
 console.log('✅ Unread маршруты подключены');
 app.use('/api/media', mediaRoutes); // Маршруты для загрузки и отправки медиафайлов
+app.use('/api/tickets', ticketRoutes); // Маршруты для тикет-системы
 
 // 404 JSON для несуществующих маршрутов
 app.use((req, res) => {

@@ -170,6 +170,18 @@ export async function ensureChat(
         // 4) Если по-прежнему не нашли — создаём новый
         if (!chat) {
           try {
+            // Генерируем следующий номер тикета для организации
+            const lastTicket = await prisma.chat.findFirst({
+              where: { 
+                organizationId,
+                ticketNumber: { not: null }
+              },
+              orderBy: { ticketNumber: 'desc' },
+              select: { ticketNumber: true },
+            });
+            
+            const nextTicketNumber = (lastTicket?.ticketNumber || 0) + 1;
+            
             chat = await prisma.chat.create({
               data: {
                 organizationId,
@@ -179,9 +191,13 @@ export async function ensureChat(
                 name: name || normalizedRemoteJid.split('@')[0],
                 isGroup: isJidGroup(normalizedRemoteJid),
                 lastMessageAt: new Date(),
+                // Тикет-система: автоматически создаем тикет для нового чата
+                ticketNumber: nextTicketNumber,
+                status: 'new',
+                priority: 'medium',
               },
             });
-            logger.info(`✅ Создан новый чат для JID: ${normalizedRemoteJid} (Ваш номер: ${myJidNormalized || '(пусто)'}, Организация: ${organizationId}, Phone ID: ${organizationPhoneId}, ID чата: ${chat.id})`);
+            logger.info(`✅ Создан новый чат для JID: ${normalizedRemoteJid} (Ваш номер: ${myJidNormalized || '(пусто)'}, Организация: ${organizationId}, Phone ID: ${organizationPhoneId}, ID чата: ${chat.id}, Тикет #${nextTicketNumber})`);
           } catch (e: any) {
             // Возможна гонка и уникальный конфликт — пробуем перечитать
             if (e?.code === 'P2002') {
@@ -210,6 +226,30 @@ export async function ensureChat(
           if (name && typeof name === 'string' && name.trim() && name !== chat.name) {
             updateData.name = name.trim();
           }
+          
+          // Если чат был закрыт - создаем новый тикет и меняем статус на 'new'
+          if (chat.status === 'closed') {
+            // Генерируем следующий номер тикета для организации
+            const lastTicket = await prisma.chat.findFirst({
+              where: { 
+                organizationId,
+                ticketNumber: { not: null }
+              },
+              orderBy: { ticketNumber: 'desc' },
+              select: { ticketNumber: true },
+            });
+            
+            const nextTicketNumber = (lastTicket?.ticketNumber || 0) + 1;
+            
+            updateData.ticketNumber = nextTicketNumber;
+            updateData.status = 'new';
+            updateData.priority = 'medium';
+            updateData.assignedUserId = null; // Сбрасываем назначение
+            updateData.closedAt = null;
+            
+            logger.info(`🔄 Чат #${chat.id} был закрыт - создан новый тикет #${nextTicketNumber} (статус изменен: closed → new)`);
+          }
+          
           await prisma.chat.update({
             where: { id: chat.id },
             data: updateData,
@@ -350,6 +390,9 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
     auth: state, // Используем состояние из useDBAuthState
     browser: ['Ubuntu', 'Chrome', '22.04.4'], // Устанавливаем информацию о браузере
     logger: logger, // Используем ваш pino logger
+    // ИСПРАВЛЕНИЕ: Отключаем автоматическую синхронизацию app state для предотвращения ошибок дешифрования
+    syncFullHistory: false, // Отключаем полную синхронизацию истории
+    shouldSyncHistoryMessage: () => false, // Отключаем синхронизацию сообщений
     // Функция для получения сообщений из кэша или БД (для Baileys)
     getMessage: async (key) => {
         logger.debug(`Попытка получить сообщение из getMessage: ${key.id} от ${key.remoteJid}`);
@@ -465,6 +508,40 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
 
   // Обработчик обновления учетных данных
   currentSock.ev.on('creds.update', saveCreds); // Используем saveCreds для сохранения
+
+  // ИСПРАВЛЕНИЕ: Добавляем обработчик ошибок синхронизации app state
+  currentSock.ev.on('connection.update', async (update) => {
+    // Перехватываем ошибки синхронизации app state
+    if (update.lastDisconnect?.error) {
+      const error = update.lastDisconnect.error as any;
+      
+      // Проверяем на ошибки дешифрования в app state
+      if (error?.message?.includes('bad decrypt') || 
+          error?.message?.includes('error:1C800064') ||
+          error?.name === 'critical_unblock_low') {
+        logger.warn(`⚠️ Обнаружена ошибка дешифрования app state для ${phoneJid}. Очистка поврежденных данных...`);
+        
+        const key = phoneJid.split('@')[0].split(':')[0];
+        
+        // Удаляем поврежденные ключи app state из БД
+        try {
+          await prisma.baileysAuth.deleteMany({
+            where: {
+              organizationId: organizationId,
+              phoneJid: key,
+              key: {
+                startsWith: 'app-state-sync-'
+              }
+            }
+          });
+          
+          logger.info(`✅ Поврежденные данные app state для ${key} удалены. Соединение продолжит работу без истории синхронизации.`);
+        } catch (e) {
+          logger.error(`❌ Ошибка при удалении поврежденных данных app state:`, e);
+        }
+      }
+    }
+  });
 
   // Совместимость с v7: обработчик обновлений LID маппинга (в 6.7.x событие не генерируется)
   try {

@@ -1,7 +1,7 @@
 // src/routes/messageRoutes.ts
 
 import { Router } from 'express';
-import { sendTextMessage, sendMediaMessage } from '../controllers/messageController';
+import { sendTextMessage, sendMediaMessage, sendMessageByTicket } from '../controllers/messageController';
 import { authMiddleware } from '../middlewares/authMiddleware'; // Импортируем middleware
 
 const router = Router();
@@ -13,5 +13,9 @@ router.post('/send-text', authMiddleware, sendTextMessage);
 // Маршрут для отправки медиа-сообщений
 // Также защищен authMiddleware
 router.post('/send-media', authMiddleware, sendMediaMessage);
+
+// Маршрут для отправки сообщения по номеру тикета
+// Упрощенный API - нужен только ticketNumber и text
+router.post('/send-by-ticket', authMiddleware, sendMessageByTicket);
 
 export default router;

@@ -199,6 +199,16 @@ function ensureChat(organizationId, organizationPhoneId, receivingPhoneJid, remo
             // 4) Если по-прежнему не нашли — создаём новый
             if (!chat) {
                 try {
+                    // Генерируем следующий номер тикета для организации
+                    const lastTicket = yield authStorage_1.prisma.chat.findFirst({
+                        where: {
+                            organizationId,
+                            ticketNumber: { not: null }
+                        },
+                        orderBy: { ticketNumber: 'desc' },
+                        select: { ticketNumber: true },
+                    });
+                    const nextTicketNumber = ((lastTicket === null || lastTicket === void 0 ? void 0 : lastTicket.ticketNumber) || 0) + 1;
                     chat = yield authStorage_1.prisma.chat.create({
                         data: {
                             organizationId,
@@ -208,9 +218,13 @@ function ensureChat(organizationId, organizationPhoneId, receivingPhoneJid, remo
                             name: name || normalizedRemoteJid.split('@')[0],
                             isGroup: (0, baileys_1.isJidGroup)(normalizedRemoteJid),
                             lastMessageAt: new Date(),
+                            // Тикет-система: автоматически создаем тикет для нового чата
+                            ticketNumber: nextTicketNumber,
+                            status: 'new',
+                            priority: 'medium',
                         },
                     });
-                    logger.info(`✅ Создан новый чат для JID: ${normalizedRemoteJid} (Ваш номер: ${myJidNormalized || '(пусто)'}, Организация: ${organizationId}, Phone ID: ${organizationPhoneId}, ID чата: ${chat.id})`);
+                    logger.info(`✅ Создан новый чат для JID: ${normalizedRemoteJid} (Ваш номер: ${myJidNormalized || '(пусто)'}, Организация: ${organizationId}, Phone ID: ${organizationPhoneId}, ID чата: ${chat.id}, Тикет #${nextTicketNumber})`);
                 }
                 catch (e) {
                     // Возможна гонка и уникальный конфликт — пробуем перечитать
@@ -242,6 +256,25 @@ function ensureChat(organizationId, organizationPhoneId, receivingPhoneJid, remo
                 const updateData = { lastMessageAt: new Date(), organizationPhoneId };
                 if (name && typeof name === 'string' && name.trim() && name !== chat.name) {
                     updateData.name = name.trim();
+                }
+                // Если чат был закрыт - создаем новый тикет и меняем статус на 'new'
+                if (chat.status === 'closed') {
+                    // Генерируем следующий номер тикета для организации
+                    const lastTicket = yield authStorage_1.prisma.chat.findFirst({
+                        where: {
+                            organizationId,
+                            ticketNumber: { not: null }
+                        },
+                        orderBy: { ticketNumber: 'desc' },
+                        select: { ticketNumber: true },
+                    });
+                    const nextTicketNumber = ((lastTicket === null || lastTicket === void 0 ? void 0 : lastTicket.ticketNumber) || 0) + 1;
+                    updateData.ticketNumber = nextTicketNumber;
+                    updateData.status = 'new';
+                    updateData.priority = 'medium';
+                    updateData.assignedUserId = null; // Сбрасываем назначение
+                    updateData.closedAt = null;
+                    logger.info(`🔄 Чат #${chat.id} был закрыт - создан новый тикет #${nextTicketNumber} (статус изменен: closed → new)`);
                 }
                 yield authStorage_1.prisma.chat.update({
                     where: { id: chat.id },
