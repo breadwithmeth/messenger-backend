@@ -13,7 +13,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getMessageStats = exports.getUnreadCount = exports.markMessagesAsRead = void 0;
+exports.markTicketMessagesAsRead = exports.getMessageStats = exports.getUnreadCount = exports.markMessagesAsRead = void 0;
 const authStorage_1 = require("../config/authStorage");
 const pino_1 = __importDefault(require("pino"));
 const logger = (0, pino_1.default)({ level: 'info' });
@@ -246,4 +246,75 @@ const getMessageStats = (req, res) => __awaiter(void 0, void 0, void 0, function
     }
 });
 exports.getMessageStats = getMessageStats;
+/**
+ * Отмечает все сообщения в тикете как прочитанные (по номеру тикета)
+ */
+const markTicketMessagesAsRead = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const organizationId = res.locals.organizationId;
+    const userId = res.locals.userId;
+    const ticketNumber = parseInt(req.params.ticketNumber, 10);
+    if (!organizationId || !userId) {
+        logger.warn('[markTicketMessagesAsRead] organizationId или userId не определены в res.locals.');
+        return res.status(401).json({ error: 'Несанкционированный доступ' });
+    }
+    if (isNaN(ticketNumber)) {
+        logger.warn(`[markTicketMessagesAsRead] Некорректный ticketNumber: "${req.params.ticketNumber}"`);
+        return res.status(400).json({ error: 'Некорректный номер тикета' });
+    }
+    try {
+        // Находим чат по номеру тикета
+        const chat = yield authStorage_1.prisma.chat.findFirst({
+            where: {
+                ticketNumber: ticketNumber,
+                organizationId: organizationId,
+            },
+        });
+        if (!chat) {
+            logger.warn(`[markTicketMessagesAsRead] Тикет #${ticketNumber} не найден для организации ${organizationId}`);
+            return res.status(404).json({ error: `Тикет #${ticketNumber} не найден` });
+        }
+        // Получаем количество непрочитанных сообщений перед обновлением
+        const unreadCount = yield authStorage_1.prisma.message.count({
+            where: {
+                chatId: chat.id,
+                organizationId: organizationId,
+                isReadByOperator: false,
+                fromMe: false, // Только входящие сообщения
+            },
+        });
+        // Отмечаем все непрочитанные сообщения в тикете как прочитанные
+        const updateResult = yield authStorage_1.prisma.message.updateMany({
+            where: {
+                chatId: chat.id,
+                organizationId: organizationId,
+                isReadByOperator: false,
+                fromMe: false, // Только входящие сообщения
+            },
+            data: {
+                isReadByOperator: true,
+                readAt: new Date(),
+            },
+        });
+        // Обнуляем счетчик непрочитанных сообщений в чате
+        yield authStorage_1.prisma.chat.update({
+            where: { id: chat.id },
+            data: { unreadCount: 0 },
+        });
+        logger.info(`✅ Тикет #${ticketNumber}: отмечено как прочитанное ${updateResult.count} сообщений пользователем ${userId}`);
+        res.status(200).json({
+            success: true,
+            ticketNumber: ticketNumber,
+            markedAsRead: updateResult.count,
+            message: `Тикет #${ticketNumber}: отмечено как прочитанное ${updateResult.count} сообщений`,
+        });
+    }
+    catch (error) {
+        logger.error(`❌ Ошибка при отметке сообщений тикета #${ticketNumber} как прочитанных:`, error);
+        res.status(500).json({
+            error: 'Не удалось отметить сообщения тикета как прочитанные',
+            details: error.message,
+        });
+    }
+});
+exports.markTicketMessagesAsRead = markTicketMessagesAsRead;
 //# sourceMappingURL=messageReadController.js.map

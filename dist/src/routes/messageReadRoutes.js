@@ -18,6 +18,8 @@ router.use((req, res, next) => {
 router.post('/:chatId/read', messageReadController_1.markMessagesAsRead);
 // Альтернативный эндпоинт для отметки сообщений как прочитанных
 router.post('/:chatId/mark-read', messageReadController_1.markMessagesAsRead);
+// Отметка сообщений в тикете как прочитанных (по номеру тикета)
+router.post('/ticket/:ticketNumber/mark-read', messageReadController_1.markTicketMessagesAsRead);
 // Получение количества непрочитанных сообщений
 router.get('/unread-count', messageReadController_1.getUnreadCount);
 // Получение статистики по сообщениям (для админов)

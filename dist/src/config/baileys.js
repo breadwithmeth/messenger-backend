@@ -57,6 +57,8 @@ exports.ensureChat = ensureChat;
 exports.useDBAuthState = useDBAuthState;
 exports.startBaileys = startBaileys;
 exports.getBaileysSock = getBaileysSock;
+exports.getSessionErrorStats = getSessionErrorStats;
+exports.forceCloseSession = forceCloseSession;
 exports.sendMessage = sendMessage;
 const baileys_1 = __importStar(require("@whiskeysockets/baileys"));
 const authStorage_1 = require("./authStorage");
@@ -68,6 +70,12 @@ const path_1 = __importDefault(require("path")); // Для работы с пу�
 const logger = (0, pino_1.default)({ level: 'info' });
 // Глобальная Map для хранения активных экземпляров WASocket по organizationPhoneId
 const socks = new Map();
+// Map для отслеживания ошибок Bad MAC по organizationPhoneId
+const badMacErrorCount = new Map();
+const MAX_BAD_MAC_ERRORS = 3; // Максимум ошибок перед сбросом сессии
+// Map для отслеживания ошибок Bad Decrypt по organizationPhoneId
+const badDecryptErrorCount = new Map();
+const MAX_BAD_DECRYPT_ERRORS = 5; // Максимум ошибок перед сбросом сессии (больше чем MAC, т.к. менее критично)
 // --- НОВАЯ ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ---
 /**
  * Скачивает медиа из сообщения и сохраняет его локально.
@@ -111,6 +119,190 @@ function downloadAndSaveMedia(messageContent, type, originalFilename) {
         catch (error) {
             logger.error('❌ Ошибка при скачивании или сохранении медиа:', error);
             return undefined;
+        }
+    });
+}
+/**
+ * Корректно закрывает сессию Baileys и очищает ресурсы.
+ * @param organizationPhoneId ID телефона организации
+ * @param phoneJid JID номера телефона
+ * @param reason Причина закрытия
+ */
+function closeSession(organizationPhoneId, phoneJid, reason) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const key = phoneJid.split('@')[0].split(':')[0];
+        logger.warn(`🚪 Закрытие сессии для ${phoneJid}. Причина: ${reason}`);
+        try {
+            // Получаем сокет
+            const sock = socks.get(organizationPhoneId);
+            if (sock) {
+                // Пытаемся корректно закрыть WebSocket соединение
+                try {
+                    if (sock.ws.readyState === 1) { // OPEN
+                        yield sock.end(new Error(reason));
+                        logger.info(`✅ WebSocket соединение закрыто для ${phoneJid}`);
+                    }
+                    else {
+                        logger.info(`ℹ️ WebSocket уже закрыт (state: ${sock.ws.readyState})`);
+                    }
+                }
+                catch (wsError) {
+                    logger.error(`⚠️ Ошибка при закрытии WebSocket:`, wsError);
+                    // Продолжаем даже если WebSocket не закрылся корректно
+                }
+                // Удаляем сокет из Map
+                socks.delete(organizationPhoneId);
+                logger.info(`✅ Сокет удален из Map для organizationPhoneId: ${organizationPhoneId}`);
+            }
+            else {
+                logger.info(`ℹ️ Сокет не найден в Map для organizationPhoneId: ${organizationPhoneId}`);
+            }
+            // Очищаем счетчик ошибок
+            badMacErrorCount.delete(organizationPhoneId);
+        }
+        catch (error) {
+            logger.error(`❌ Ошибка при закрытии сессии для ${phoneJid}:`, error);
+            // Принудительно удаляем из Map даже при ошибке
+            socks.delete(organizationPhoneId);
+            badMacErrorCount.delete(organizationPhoneId);
+        }
+    });
+}
+/**
+ * Обработчик ошибок Bad Decrypt из app state sync.
+ * Очищает поврежденные данные синхронизации app state.
+ * @param organizationId ID организации
+ * @param organizationPhoneId ID телефона организации
+ * @param phoneJid JID номера телефона
+ * @returns true если данные были очищены, false если достигнут лимит ошибок и сессия закрыта
+ */
+function handleBadDecryptError(organizationId, organizationPhoneId, phoneJid) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const key = phoneJid.split('@')[0].split(':')[0];
+        // Увеличиваем счетчик ошибок
+        const currentCount = badDecryptErrorCount.get(organizationPhoneId) || 0;
+        badDecryptErrorCount.set(organizationPhoneId, currentCount + 1);
+        logger.warn(`⚠️ Bad Decrypt error #${currentCount + 1} для ${phoneJid}`);
+        if (currentCount + 1 >= MAX_BAD_DECRYPT_ERRORS) {
+            logger.error(`❌ Достигнут лимит Bad Decrypt ошибок (${MAX_BAD_DECRYPT_ERRORS}) для ${phoneJid}. Полный выход из сессии.`);
+            try {
+                // 1. Корректно закрываем сессию
+                yield closeSession(organizationPhoneId, phoneJid, `Bad Decrypt error limit reached (${MAX_BAD_DECRYPT_ERRORS} errors)`);
+                // 2. Удаляем ВСЕ данные авторизации из БД
+                const deletedCount = yield authStorage_1.prisma.baileysAuth.deleteMany({
+                    where: {
+                        organizationId: organizationId,
+                        phoneJid: key,
+                    }
+                });
+                logger.info(`🗑️ Удалено ${deletedCount.count} записей авторизации для ${key}`);
+                // 3. Обновляем статус телефона на 'logged_out'
+                yield authStorage_1.prisma.organizationPhone.update({
+                    where: { id: organizationPhoneId },
+                    data: {
+                        status: 'logged_out',
+                        qrCode: null,
+                        lastConnectedAt: new Date(),
+                    },
+                });
+                logger.info(`📱 Статус телефона ${key} обновлен на 'logged_out'`);
+                logger.info(`✅ Сессия для ${phoneJid} полностью завершена из-за повторяющихся Bad Decrypt ошибок. Требуется повторное QR-сканирование.`);
+                return false;
+            }
+            catch (e) {
+                logger.error(`❌ Ошибка при полном выходе из сессии:`, e);
+                // Даже при ошибке пытаемся закрыть сокет
+                yield closeSession(organizationPhoneId, phoneJid, 'Error during Bad Decrypt cleanup');
+                return false;
+            }
+        }
+        // Очищаем только поврежденные ключи app state (без полного выхода)
+        try {
+            const deletedCount = yield authStorage_1.prisma.baileysAuth.deleteMany({
+                where: {
+                    organizationId: organizationId,
+                    phoneJid: key,
+                    key: {
+                        startsWith: 'app-state-sync-'
+                    }
+                }
+            });
+            logger.info(`✅ Удалено ${deletedCount.count} поврежденных ключей app state для ${key}. Соединение продолжит работу.`);
+            return true;
+        }
+        catch (e) {
+            logger.error(`❌ Ошибка при удалении поврежденных данных app state:`, e);
+            return false;
+        }
+    });
+}
+/**
+ * Обработчик ошибок Bad MAC из libsignal.
+ * Очищает поврежденные сессии Signal Protocol для указанного номера.
+ * @param organizationId ID организации
+ * @param organizationPhoneId ID телефона организации
+ * @param phoneJid JID номера телефона
+ * @returns true если сессия была очищена, false если достигнут лимит ошибок и сессия закрыта
+ */
+function handleBadMacError(organizationId, organizationPhoneId, phoneJid) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const key = phoneJid.split('@')[0].split(':')[0];
+        // Увеличиваем счетчик ошибок
+        const currentCount = badMacErrorCount.get(organizationPhoneId) || 0;
+        badMacErrorCount.set(organizationPhoneId, currentCount + 1);
+        logger.warn(`⚠️ Bad MAC error #${currentCount + 1} для ${phoneJid}`);
+        if (currentCount + 1 >= MAX_BAD_MAC_ERRORS) {
+            logger.error(`❌ Достигнут лимит Bad MAC ошибок (${MAX_BAD_MAC_ERRORS}) для ${phoneJid}. Полный выход из сессии.`);
+            try {
+                // 1. Корректно закрываем сессию
+                yield closeSession(organizationPhoneId, phoneJid, `Bad MAC error limit reached (${MAX_BAD_MAC_ERRORS} errors)`);
+                // 2. Удаляем ВСЕ данные авторизации из БД
+                const deletedCount = yield authStorage_1.prisma.baileysAuth.deleteMany({
+                    where: {
+                        organizationId: organizationId,
+                        phoneJid: key,
+                    }
+                });
+                logger.info(`🗑️ Удалено ${deletedCount.count} записей авторизации для ${key}`);
+                // 3. Обновляем статус телефона на 'logged_out'
+                yield authStorage_1.prisma.organizationPhone.update({
+                    where: { id: organizationPhoneId },
+                    data: {
+                        status: 'logged_out',
+                        qrCode: null,
+                        lastConnectedAt: new Date(),
+                    },
+                });
+                logger.info(`📱 Статус телефона ${key} обновлен на 'logged_out'`);
+                logger.info(`✅ Сессия для ${phoneJid} полностью завершена. Требуется повторное QR-сканирование.`);
+                return false;
+            }
+            catch (e) {
+                logger.error(`❌ Ошибка при полном выходе из сессии:`, e);
+                // Даже при ошибке пытаемся закрыть сокет
+                yield closeSession(organizationPhoneId, phoneJid, 'Error during session cleanup');
+                return false;
+            }
+        }
+        // Очищаем только поврежденные ключи сессий (без полного выхода)
+        try {
+            const deletedCount = yield authStorage_1.prisma.baileysAuth.deleteMany({
+                where: {
+                    organizationId: organizationId,
+                    phoneJid: key,
+                    OR: [
+                        { key: { startsWith: 'session-' } },
+                        { key: { startsWith: 'pre-key-' } },
+                        { key: { startsWith: 'sender-key-' } }
+                    ]
+                }
+            });
+            logger.info(`✅ Удалено ${deletedCount.count} поврежденных ключей сессий для ${key}. Попытка восстановления...`);
+            return true;
+        }
+        catch (e) {
+            logger.error(`❌ Ошибка при удалении поврежденных сессий:`, e);
+            return false;
         }
     });
 }
@@ -426,6 +618,9 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
             auth: state, // Используем состояние из useDBAuthState
             browser: ['Ubuntu', 'Chrome', '22.04.4'], // Устанавливаем информацию о браузере
             logger: logger, // Используем ваш pino logger
+            // ИСПРАВЛЕНИЕ: Отключаем автоматическую синхронизацию app state для предотвращения ошибок дешифрования
+            syncFullHistory: false, // Отключаем полную синхронизацию истории
+            shouldSyncHistoryMessage: () => false, // Отключаем синхронизацию сообщений
             // Функция для получения сообщений из кэша или БД (для Baileys)
             getMessage: (key) => __awaiter(this, void 0, void 0, function* () {
                 logger.debug(`Попытка получить сообщение из getMessage: ${key.id} от ${key.remoteJid}`);
@@ -524,6 +719,10 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
             else if (connection === 'open') {
                 // Если соединение открыто
                 logger.info(`✅ Подключено к WhatsApp для ${phoneJid} (Организация: ${organizationId}, Phone ID: ${organizationPhoneId})`);
+                // Очищаем счетчики ошибок при успешном подключении
+                badMacErrorCount.delete(organizationPhoneId);
+                badDecryptErrorCount.delete(organizationPhoneId);
+                logger.info(`🔄 Счетчики ошибок сброшены для organizationPhoneId: ${organizationPhoneId}`);
                 // Обновляем статус в БД на 'connected', сохраняем фактический JID и очищаем QR-код
                 yield authStorage_1.prisma.organizationPhone.update({
                     where: { id: organizationPhoneId },
@@ -533,6 +732,40 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
         }));
         // Обработчик обновления учетных данных
         currentSock.ev.on('creds.update', saveCreds); // Используем saveCreds для сохранения
+        // ИСПРАВЛЕНИЕ: Добавляем обработчик ошибок синхронизации app state и сессий
+        currentSock.ev.on('connection.update', (update) => __awaiter(this, void 0, void 0, function* () {
+            var _a, _b, _c, _d, _e, _f;
+            // Перехватываем ошибки синхронизации app state
+            if ((_a = update.lastDisconnect) === null || _a === void 0 ? void 0 : _a.error) {
+                const error = update.lastDisconnect.error;
+                // Проверяем на ошибки дешифрования в app state
+                if (((_b = error === null || error === void 0 ? void 0 : error.message) === null || _b === void 0 ? void 0 : _b.includes('bad decrypt')) ||
+                    ((_c = error === null || error === void 0 ? void 0 : error.message) === null || _c === void 0 ? void 0 : _c.includes('error:1C800064')) ||
+                    (error === null || error === void 0 ? void 0 : error.name) === 'critical_unblock_low') {
+                    logger.warn(`⚠️ Обнаружена ошибка дешифрования app state для ${phoneJid}.`);
+                    // Вызываем обработчик Bad Decrypt ошибки
+                    const recovered = yield handleBadDecryptError(organizationId, organizationPhoneId, phoneJid);
+                    if (!recovered) {
+                        logger.error(`❌ Не удалось восстановить сессию после повторяющихся Bad Decrypt ошибок для ${phoneJid}. Сессия закрыта.`);
+                        // Сессия уже закрыта в handleBadDecryptError, не пытаемся переподключиться
+                        return;
+                    }
+                }
+                // НОВОЕ: Обработка ошибки Bad MAC из libsignal
+                if (((_d = error === null || error === void 0 ? void 0 : error.message) === null || _d === void 0 ? void 0 : _d.includes('Bad MAC')) ||
+                    ((_e = error === null || error === void 0 ? void 0 : error.message) === null || _e === void 0 ? void 0 : _e.includes('verifyMAC')) ||
+                    ((_f = error === null || error === void 0 ? void 0 : error.stack) === null || _f === void 0 ? void 0 : _f.includes('libsignal'))) {
+                    logger.warn(`⚠️ Обнаружена ошибка Bad MAC (libsignal) для ${phoneJid}.`);
+                    // Вызываем обработчик Bad MAC ошибки
+                    const recovered = yield handleBadMacError(organizationId, organizationPhoneId, phoneJid);
+                    if (!recovered) {
+                        logger.error(`❌ Не удалось восстановить сессию после повторяющихся Bad MAC ошибок для ${phoneJid}. Сессия закрыта.`);
+                        // Сессия уже закрыта в handleBadMacError, не пытаемся переподключиться
+                        return;
+                    }
+                }
+            }
+        }));
         // Совместимость с v7: обработчик обновлений LID маппинга (в 6.7.x событие не генерируется)
         try {
             (_b = (_a = currentSock.ev).on) === null || _b === void 0 ? void 0 : _b.call(_a, 'lid-mapping.update', (mapping) => {
@@ -546,234 +779,264 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
         }
         // Обработчик получения новых сообщений
         currentSock.ev.on('messages.upsert', (_a) => __awaiter(this, [_a], void 0, function* ({ messages, type }) {
-            var _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r;
+            var _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x;
             if (type === 'notify') {
                 for (const msg of messages) {
-                    // Пропускаем сообщения без контента или если это наше исходящее сообщение, не имеющее видимого контента
-                    if (!msg.message) {
-                        logger.info(`[Message Upsert] Пропущено сообщение без контента (ID: ${msg.key.id})`);
-                        continue;
-                    }
-                    if (msg.key.fromMe && !msg.message.conversation && !msg.message.extendedTextMessage && !msg.message.imageMessage && !msg.message.videoMessage && !msg.message.documentMessage && !msg.message.audioMessage && !msg.message.stickerMessage) {
-                        logger.info(`[Message Upsert] Пропущено исходящее системное сообщение (ID: ${msg.key.id})`);
-                        continue;
-                    }
-                    // v7: поддержка LID alt-идентификаторов. В 6.7.x этих полей нет, поэтому используем fallback.
-                    const rawRemote = (_c = (_b = msg.key.remoteJidAlt) !== null && _b !== void 0 ? _b : msg.key.remoteJid) !== null && _c !== void 0 ? _c : '';
-                    const remoteJid = (0, baileys_1.jidNormalizedUser)(rawRemote);
-                    if (!remoteJid) {
-                        logger.warn('🚫 Сообщение без remoteJid, пропущено.');
-                        continue;
-                    }
-                    // Пропускаем широковещательные сообщения и статусы
-                    if ((0, baileys_1.isJidBroadcast)(remoteJid) || remoteJid === 'status@broadcast') {
-                        logger.info(`Пропускаем широковещательное сообщение или статус от ${remoteJid}.`);
-                        continue;
-                    }
                     try {
-                        const rawParticipant = (_e = (_d = msg.key.participantAlt) !== null && _d !== void 0 ? _d : msg.key.participant) !== null && _e !== void 0 ? _e : remoteJid;
-                        const senderJid = (0, baileys_1.jidNormalizedUser)(msg.key.fromMe ? (((_f = currentSock === null || currentSock === void 0 ? void 0 : currentSock.user) === null || _f === void 0 ? void 0 : _f.id) || phoneJid) : rawParticipant);
-                        let content;
-                        let messageType = "unknown";
-                        let mediaUrl;
-                        let filename;
-                        let mimeType;
-                        let size;
-                        // --- НОВЫЕ ПЕРЕМЕННЫЕ ДЛЯ ОТВЕТОВ ---
-                        let quotedMessageId;
-                        let quotedContent;
-                        const messageContent = msg.message;
-                        console.log((_h = (_g = messageContent.extendedTextMessage) === null || _g === void 0 ? void 0 : _g.contextInfo) === null || _h === void 0 ? void 0 : _h.quotedMessage);
-                        // Разбор различных типов сообщений
-                        if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.conversation) {
-                            content = messageContent.conversation;
-                            messageType = "text";
-                            logger.info(`  [${messageType}] Содержимое: "${content}"`);
+                        // Пропускаем сообщения без контента или если это наше исходящее сообщение, не имеющее видимого контента
+                        if (!msg.message) {
+                            logger.info(`[Message Upsert] Пропущено сообщение без контента (ID: ${msg.key.id})`);
+                            continue;
                         }
-                        else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.extendedTextMessage) {
-                            content = messageContent.extendedTextMessage.text || undefined;
-                            messageType = "text";
-                            // --- НАЧАЛО: ОБРАБОТКА ОТВЕТА ---
-                            const contextInfo = messageContent.extendedTextMessage.contextInfo;
-                            if (contextInfo === null || contextInfo === void 0 ? void 0 : contextInfo.quotedMessage) {
-                                quotedMessageId = (_j = contextInfo.stanzaId) !== null && _j !== void 0 ? _j : undefined;
-                                const qm = contextInfo.quotedMessage;
-                                // Получаем текст из разных возможных полей цитируемого сообщения
-                                quotedContent = qm.conversation ||
-                                    ((_k = qm.extendedTextMessage) === null || _k === void 0 ? void 0 : _k.text) ||
-                                    ((_l = qm.imageMessage) === null || _l === void 0 ? void 0 : _l.caption) ||
-                                    ((_m = qm.videoMessage) === null || _m === void 0 ? void 0 : _m.caption) ||
-                                    ((_o = qm.documentMessage) === null || _o === void 0 ? void 0 : _o.fileName) ||
-                                    '[Медиафайл]'; // Плейсхолдер для медиа без текста
-                                logger.info(`  [reply] Ответ на сообщение ID: ${quotedMessageId}`);
+                        if (msg.key.fromMe && !msg.message.conversation && !msg.message.extendedTextMessage && !msg.message.imageMessage && !msg.message.videoMessage && !msg.message.documentMessage && !msg.message.audioMessage && !msg.message.stickerMessage) {
+                            logger.info(`[Message Upsert] Пропущено исходящее системное сообщение (ID: ${msg.key.id})`);
+                            continue;
+                        }
+                        // v7: поддержка LID alt-идентификаторов. В 6.7.x этих полей нет, поэтому используем fallback.
+                        const rawRemote = (_c = (_b = msg.key.remoteJidAlt) !== null && _b !== void 0 ? _b : msg.key.remoteJid) !== null && _c !== void 0 ? _c : '';
+                        const remoteJid = (0, baileys_1.jidNormalizedUser)(rawRemote);
+                        if (!remoteJid) {
+                            logger.warn('🚫 Сообщение без remoteJid, пропущено.');
+                            continue;
+                        }
+                        // Пропускаем широковещательные сообщения и статусы
+                        if ((0, baileys_1.isJidBroadcast)(remoteJid) || remoteJid === 'status@broadcast') {
+                            logger.info(`Пропускаем широковещательное сообщение или статус от ${remoteJid}.`);
+                            continue;
+                        }
+                        try {
+                            const rawParticipant = (_e = (_d = msg.key.participantAlt) !== null && _d !== void 0 ? _d : msg.key.participant) !== null && _e !== void 0 ? _e : remoteJid;
+                            const senderJid = (0, baileys_1.jidNormalizedUser)(msg.key.fromMe ? (((_f = currentSock === null || currentSock === void 0 ? void 0 : currentSock.user) === null || _f === void 0 ? void 0 : _f.id) || phoneJid) : rawParticipant);
+                            let content;
+                            let messageType = "unknown";
+                            let mediaUrl;
+                            let filename;
+                            let mimeType;
+                            let size;
+                            // --- НОВЫЕ ПЕРЕМЕННЫЕ ДЛЯ ОТВЕТОВ ---
+                            let quotedMessageId;
+                            let quotedContent;
+                            const messageContent = msg.message;
+                            console.log((_h = (_g = messageContent.extendedTextMessage) === null || _g === void 0 ? void 0 : _g.contextInfo) === null || _h === void 0 ? void 0 : _h.quotedMessage);
+                            // Разбор различных типов сообщений
+                            if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.conversation) {
+                                content = messageContent.conversation;
+                                messageType = "text";
+                                logger.info(`  [${messageType}] Содержимое: "${content}"`);
                             }
-                            // --- КОНЕЦ: ОБРАБОТКА ОТВЕТА ---
-                            logger.info(`  [${messageType}] Содержимое: "${content}"`);
-                        }
-                        else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.imageMessage) {
-                            messageType = "image";
-                            content = messageContent.imageMessage.caption || undefined;
-                            mimeType = messageContent.imageMessage.mimetype || undefined;
-                            size = Number(messageContent.imageMessage.fileLength) || undefined;
-                            // --- СКАЧИВАНИЕ И СОХРАНЕНИЕ ФОТО ---
-                            mediaUrl = yield downloadAndSaveMedia(messageContent.imageMessage, 'image');
-                            logger.info(`  [${messageType}] Содержимое: "${content || 'без подписи'}". MIME: ${mimeType}. Размер: ${size}.`);
-                        }
-                        else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.videoMessage) {
-                            messageType = "video";
-                            content = messageContent.videoMessage.caption || undefined;
-                            mimeType = messageContent.videoMessage.mimetype || undefined;
-                            size = Number(messageContent.videoMessage.fileLength) || undefined;
-                            logger.info(`  [${messageType}] Содержимое: "${content || 'без подписи'}". MIME: ${mimeType}. Размер: ${size}.`);
-                        }
-                        else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.documentMessage) {
-                            messageType = "document";
-                            filename = messageContent.documentMessage.fileName || undefined;
-                            mimeType = messageContent.documentMessage.mimetype || undefined;
-                            size = Number(messageContent.documentMessage.fileLength) || undefined;
-                            // --- СКАЧИВАНИЕ И СОХРАНЕНИЕ ДОКУМЕНТА ---
-                            mediaUrl = yield downloadAndSaveMedia(messageContent.documentMessage, 'document', filename);
-                            logger.info(`  [${messageType}] Документ: "${filename || 'без имени'}". MIME: ${mimeType}. Размер: ${size}.`);
-                        }
-                        else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.audioMessage) {
-                            messageType = "audio";
-                            mimeType = messageContent.audioMessage.mimetype || undefined;
-                            size = Number(messageContent.audioMessage.fileLength) || undefined;
-                            // --- СКАЧИВАНИЕ И СОХРАНЕНИЕ АУДИО ---
-                            mediaUrl = yield downloadAndSaveMedia(messageContent.audioMessage, 'audio');
-                            logger.info(`  [${messageType}] Аудио. MIME: ${mimeType}. Размер: ${size}.`);
-                        }
-                        else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.stickerMessage) {
-                            messageType = "sticker";
-                            mimeType = messageContent.stickerMessage.mimetype || undefined;
-                            size = Number(messageContent.stickerMessage.fileLength) || undefined;
-                            logger.info(`  [${messageType}] Стикер. MIME: ${mimeType}. Размер: ${size}.`);
-                        }
-                        else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.locationMessage) {
-                            messageType = "location";
-                            content = `Latitude: ${messageContent.locationMessage.degreesLatitude}, Longitude: ${messageContent.locationMessage.degreesLongitude}`;
-                            logger.info(`  [${messageType}] Локация: ${content}`);
-                        }
-                        else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.liveLocationMessage) {
-                            messageType = "live_location";
-                            content = `Live Location: Capt=${messageContent.liveLocationMessage.caption || 'N/A'}, Seq=${messageContent.liveLocationMessage.sequenceNumber}`;
-                            logger.info(`  [${messageType}] ${content}`);
-                        }
-                        else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.contactMessage) {
-                            messageType = "contact";
-                            content = `Контакт: ${messageContent.contactMessage.displayName || messageContent.contactMessage.vcard}`;
-                            logger.info(`  [${messageType}] Контакт: ${content}`);
-                        }
-                        else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.contactsArrayMessage) {
-                            messageType = "contacts_array";
-                            content = `Контакты: ${((_p = messageContent.contactsArrayMessage.contacts) === null || _p === void 0 ? void 0 : _p.map(c => c.displayName || c.vcard).join(', ')) || 'пусто'}`;
-                            logger.info(`  [${messageType}] Контакты: ${content}`);
-                        }
-                        else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.reactionMessage) {
-                            messageType = "reaction";
-                            content = `Реакция "${messageContent.reactionMessage.text}" на сообщение ${(_q = messageContent.reactionMessage.key) === null || _q === void 0 ? void 0 : _q.id}`;
-                            logger.info(`  [${messageType}] ${content}`);
-                        }
-                        else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.protocolMessage) {
-                            messageType = "protocol";
-                            content = `Системное сообщение (тип: ${messageContent.protocolMessage.type})`;
-                            logger.info(`  [${messageType}] ${content}`);
-                        }
-                        else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.call) {
-                            messageType = "call";
-                            const callId = messageContent.call.callKey ? buffer_1.Buffer.from(messageContent.call.callKey).toString('hex') : 'unknown';
-                            content = `Звонок от ${senderJid} (ID: ${callId})`;
-                            logger.info(`  [${messageType}] ${content}`);
-                        }
-                        if (messageType === "unknown" && Object.keys(messageContent || {}).length > 0) {
-                            messageType = Object.keys(messageContent || {})[0];
-                            logger.warn(`  [${messageType}] Неподдерживаемый или неизвестный тип сообщения. JID: ${remoteJid}`);
-                        }
-                        else if (messageType === "unknown") {
-                            logger.warn(`  [Неизвестный] Сообщение без опознаваемого типа контента. JID: ${remoteJid}`);
-                            continue; // Пропускаем сохранение полностью пустых сообщений
-                        }
-                        // --- ИСПРАВЛЕНО: Более надежная обработка timestamp ---
-                        let timestampInSeconds;
-                        const ts = msg.messageTimestamp;
-                        if (typeof ts === 'number') {
-                            timestampInSeconds = ts;
-                        }
-                        else if (ts && typeof ts === 'object' && typeof ts.toNumber === 'function') {
-                            // Это объект Long, преобразуем его в число
-                            timestampInSeconds = ts.toNumber();
-                        }
-                        else {
-                            // Запасной вариант, если timestamp не пришел или в неизвестном формате
-                            timestampInSeconds = Math.floor(Date.now() / 1000);
-                        }
-                        const timestampDate = new Date(timestampInSeconds * 1000);
-                        // Сохраняем сообщение в БД
-                        const myJid = (0, baileys_1.jidNormalizedUser)(((_r = currentSock === null || currentSock === void 0 ? void 0 : currentSock.user) === null || _r === void 0 ? void 0 : _r.id) || phoneJid) || '';
-                        const contactName = msg.pushName || undefined;
-                        const chatId = yield ensureChat(organizationId, organizationPhoneId, myJid, remoteJid, contactName);
-                        const savedMessage = yield authStorage_1.prisma.message.create({
-                            data: {
-                                chatId: chatId,
-                                organizationPhoneId: organizationPhoneId,
-                                receivingPhoneJid: myJid,
-                                remoteJid: remoteJid,
-                                whatsappMessageId: msg.key.id || `_temp_${Date.now()}_${Math.random()}`,
-                                senderJid: senderJid,
-                                fromMe: msg.key.fromMe || false,
-                                content: content || '',
-                                type: messageType,
-                                mediaUrl: mediaUrl,
-                                filename: filename,
-                                mimeType: mimeType,
-                                size: size,
-                                timestamp: timestampDate,
-                                status: 'received',
-                                organizationId: organizationId,
-                                // Входящие сообщения по умолчанию не прочитаны оператором
-                                isReadByOperator: msg.key.fromMe || false, // Исходящие считаем прочитанными
-                                // --- СОХРАНЕНИЕ ДАННЫХ ОТВЕТОВ ---
-                                quotedMessageId: quotedMessageId,
-                                quotedContent: quotedContent,
-                            },
-                        });
-                        // Увеличиваем счетчик непрочитанных сообщений для входящих сообщений
-                        if (!msg.key.fromMe) {
-                            yield authStorage_1.prisma.chat.update({
-                                where: { id: chatId },
+                            else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.extendedTextMessage) {
+                                content = messageContent.extendedTextMessage.text || undefined;
+                                messageType = "text";
+                                // --- НАЧАЛО: ОБРАБОТКА ОТВЕТА ---
+                                const contextInfo = messageContent.extendedTextMessage.contextInfo;
+                                if (contextInfo === null || contextInfo === void 0 ? void 0 : contextInfo.quotedMessage) {
+                                    quotedMessageId = (_j = contextInfo.stanzaId) !== null && _j !== void 0 ? _j : undefined;
+                                    const qm = contextInfo.quotedMessage;
+                                    // Получаем текст из разных возможных полей цитируемого сообщения
+                                    quotedContent = qm.conversation ||
+                                        ((_k = qm.extendedTextMessage) === null || _k === void 0 ? void 0 : _k.text) ||
+                                        ((_l = qm.imageMessage) === null || _l === void 0 ? void 0 : _l.caption) ||
+                                        ((_m = qm.videoMessage) === null || _m === void 0 ? void 0 : _m.caption) ||
+                                        ((_o = qm.documentMessage) === null || _o === void 0 ? void 0 : _o.fileName) ||
+                                        '[Медиафайл]'; // Плейсхолдер для медиа без текста
+                                    logger.info(`  [reply] Ответ на сообщение ID: ${quotedMessageId}`);
+                                }
+                                // --- КОНЕЦ: ОБРАБОТКА ОТВЕТА ---
+                                logger.info(`  [${messageType}] Содержимое: "${content}"`);
+                            }
+                            else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.imageMessage) {
+                                messageType = "image";
+                                content = messageContent.imageMessage.caption || undefined;
+                                mimeType = messageContent.imageMessage.mimetype || undefined;
+                                size = Number(messageContent.imageMessage.fileLength) || undefined;
+                                // --- СКАЧИВАНИЕ И СОХРАНЕНИЕ ФОТО ---
+                                mediaUrl = yield downloadAndSaveMedia(messageContent.imageMessage, 'image');
+                                logger.info(`  [${messageType}] Содержимое: "${content || 'без подписи'}". MIME: ${mimeType}. Размер: ${size}.`);
+                            }
+                            else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.videoMessage) {
+                                messageType = "video";
+                                content = messageContent.videoMessage.caption || undefined;
+                                mimeType = messageContent.videoMessage.mimetype || undefined;
+                                size = Number(messageContent.videoMessage.fileLength) || undefined;
+                                logger.info(`  [${messageType}] Содержимое: "${content || 'без подписи'}". MIME: ${mimeType}. Размер: ${size}.`);
+                            }
+                            else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.documentMessage) {
+                                messageType = "document";
+                                filename = messageContent.documentMessage.fileName || undefined;
+                                mimeType = messageContent.documentMessage.mimetype || undefined;
+                                size = Number(messageContent.documentMessage.fileLength) || undefined;
+                                // --- СКАЧИВАНИЕ И СОХРАНЕНИЕ ДОКУМЕНТА ---
+                                mediaUrl = yield downloadAndSaveMedia(messageContent.documentMessage, 'document', filename);
+                                logger.info(`  [${messageType}] Документ: "${filename || 'без имени'}". MIME: ${mimeType}. Размер: ${size}.`);
+                            }
+                            else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.audioMessage) {
+                                messageType = "audio";
+                                mimeType = messageContent.audioMessage.mimetype || undefined;
+                                size = Number(messageContent.audioMessage.fileLength) || undefined;
+                                // --- СКАЧИВАНИЕ И СОХРАНЕНИЕ АУДИО ---
+                                mediaUrl = yield downloadAndSaveMedia(messageContent.audioMessage, 'audio');
+                                logger.info(`  [${messageType}] Аудио. MIME: ${mimeType}. Размер: ${size}.`);
+                            }
+                            else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.stickerMessage) {
+                                messageType = "sticker";
+                                mimeType = messageContent.stickerMessage.mimetype || undefined;
+                                size = Number(messageContent.stickerMessage.fileLength) || undefined;
+                                logger.info(`  [${messageType}] Стикер. MIME: ${mimeType}. Размер: ${size}.`);
+                            }
+                            else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.locationMessage) {
+                                messageType = "location";
+                                content = `Latitude: ${messageContent.locationMessage.degreesLatitude}, Longitude: ${messageContent.locationMessage.degreesLongitude}`;
+                                logger.info(`  [${messageType}] Локация: ${content}`);
+                            }
+                            else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.liveLocationMessage) {
+                                messageType = "live_location";
+                                content = `Live Location: Capt=${messageContent.liveLocationMessage.caption || 'N/A'}, Seq=${messageContent.liveLocationMessage.sequenceNumber}`;
+                                logger.info(`  [${messageType}] ${content}`);
+                            }
+                            else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.contactMessage) {
+                                messageType = "contact";
+                                content = `Контакт: ${messageContent.contactMessage.displayName || messageContent.contactMessage.vcard}`;
+                                logger.info(`  [${messageType}] Контакт: ${content}`);
+                            }
+                            else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.contactsArrayMessage) {
+                                messageType = "contacts_array";
+                                content = `Контакты: ${((_p = messageContent.contactsArrayMessage.contacts) === null || _p === void 0 ? void 0 : _p.map(c => c.displayName || c.vcard).join(', ')) || 'пусто'}`;
+                                logger.info(`  [${messageType}] Контакты: ${content}`);
+                            }
+                            else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.reactionMessage) {
+                                messageType = "reaction";
+                                content = `Реакция "${messageContent.reactionMessage.text}" на сообщение ${(_q = messageContent.reactionMessage.key) === null || _q === void 0 ? void 0 : _q.id}`;
+                                logger.info(`  [${messageType}] ${content}`);
+                            }
+                            else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.protocolMessage) {
+                                messageType = "protocol";
+                                content = `Системное сообщение (тип: ${messageContent.protocolMessage.type})`;
+                                logger.info(`  [${messageType}] ${content}`);
+                            }
+                            else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.call) {
+                                messageType = "call";
+                                const callId = messageContent.call.callKey ? buffer_1.Buffer.from(messageContent.call.callKey).toString('hex') : 'unknown';
+                                content = `Звонок от ${senderJid} (ID: ${callId})`;
+                                logger.info(`  [${messageType}] ${content}`);
+                            }
+                            if (messageType === "unknown" && Object.keys(messageContent || {}).length > 0) {
+                                messageType = Object.keys(messageContent || {})[0];
+                                logger.warn(`  [${messageType}] Неподдерживаемый или неизвестный тип сообщения. JID: ${remoteJid}`);
+                            }
+                            else if (messageType === "unknown") {
+                                logger.warn(`  [Неизвестный] Сообщение без опознаваемого типа контента. JID: ${remoteJid}`);
+                                continue; // Пропускаем сохранение полностью пустых сообщений
+                            }
+                            // --- ИСПРАВЛЕНО: Более надежная обработка timestamp ---
+                            let timestampInSeconds;
+                            const ts = msg.messageTimestamp;
+                            if (typeof ts === 'number') {
+                                timestampInSeconds = ts;
+                            }
+                            else if (ts && typeof ts === 'object' && typeof ts.toNumber === 'function') {
+                                // Это объект Long, преобразуем его в число
+                                timestampInSeconds = ts.toNumber();
+                            }
+                            else {
+                                // Запасной вариант, если timestamp не пришел или в неизвестном формате
+                                timestampInSeconds = Math.floor(Date.now() / 1000);
+                            }
+                            const timestampDate = new Date(timestampInSeconds * 1000);
+                            // Сохраняем сообщение в БД
+                            const myJid = (0, baileys_1.jidNormalizedUser)(((_r = currentSock === null || currentSock === void 0 ? void 0 : currentSock.user) === null || _r === void 0 ? void 0 : _r.id) || phoneJid) || '';
+                            const contactName = msg.pushName || undefined;
+                            const chatId = yield ensureChat(organizationId, organizationPhoneId, myJid, remoteJid, contactName);
+                            const savedMessage = yield authStorage_1.prisma.message.create({
                                 data: {
-                                    unreadCount: {
-                                        increment: 1,
+                                    chatId: chatId,
+                                    organizationPhoneId: organizationPhoneId,
+                                    receivingPhoneJid: myJid,
+                                    remoteJid: remoteJid,
+                                    whatsappMessageId: msg.key.id || `_temp_${Date.now()}_${Math.random()}`,
+                                    senderJid: senderJid,
+                                    fromMe: msg.key.fromMe || false,
+                                    content: content || '',
+                                    type: messageType,
+                                    mediaUrl: mediaUrl,
+                                    filename: filename,
+                                    mimeType: mimeType,
+                                    size: size,
+                                    timestamp: timestampDate,
+                                    status: 'received',
+                                    organizationId: organizationId,
+                                    // Входящие сообщения по умолчанию не прочитаны оператором
+                                    isReadByOperator: msg.key.fromMe || false, // Исходящие считаем прочитанными
+                                    // --- СОХРАНЕНИЕ ДАННЫХ ОТВЕТОВ ---
+                                    quotedMessageId: quotedMessageId,
+                                    quotedContent: quotedContent,
+                                },
+                            });
+                            // Увеличиваем счетчик непрочитанных сообщений для входящих сообщений
+                            if (!msg.key.fromMe) {
+                                yield authStorage_1.prisma.chat.update({
+                                    where: { id: chatId },
+                                    data: {
+                                        unreadCount: {
+                                            increment: 1,
+                                        },
+                                        lastMessageAt: timestampDate,
                                     },
-                                    lastMessageAt: timestampDate,
-                                },
-                            });
-                            logger.info(`📬 Увеличен счетчик непрочитанных для чата ${chatId}`);
+                                });
+                                logger.info(`📬 Увеличен счетчик непрочитанных для чата ${chatId}`);
+                            }
+                            else {
+                                // Для исходящих сообщений только обновляем время последнего сообщения
+                                yield authStorage_1.prisma.chat.update({
+                                    where: { id: chatId },
+                                    data: {
+                                        lastMessageAt: timestampDate,
+                                    },
+                                });
+                            }
+                            logger.info(`💾 Сообщение (тип: ${messageType}, ID: ${savedMessage.id}) сохранено в БД (JID собеседника: ${remoteJid}, Ваш номер: ${phoneJid}, chatId: ${savedMessage.chatId}).`);
                         }
-                        else {
-                            // Для исходящих сообщений только обновляем время последнего сообщения
-                            yield authStorage_1.prisma.chat.update({
-                                where: { id: chatId },
-                                data: {
-                                    lastMessageAt: timestampDate,
-                                },
-                            });
+                        catch (error) {
+                            // Обработка ошибки Bad MAC из libsignal
+                            if (((_s = error === null || error === void 0 ? void 0 : error.message) === null || _s === void 0 ? void 0 : _s.includes('Bad MAC')) ||
+                                ((_t = error === null || error === void 0 ? void 0 : error.message) === null || _t === void 0 ? void 0 : _t.includes('verifyMAC')) ||
+                                ((_u = error === null || error === void 0 ? void 0 : error.stack) === null || _u === void 0 ? void 0 : _u.includes('libsignal'))) {
+                                logger.error(`❌ Session error (Bad MAC) при обработке сообщения от ${remoteJid}:`, error.message);
+                                // Вызываем обработчик Bad MAC ошибки
+                                const recovered = yield handleBadMacError(organizationId, organizationPhoneId, phoneJid);
+                                if (recovered) {
+                                    logger.info(`✅ Попытка восстановления после Bad MAC для ${phoneJid}. Сообщение будет обработано при повторной отправке.`);
+                                }
+                                else {
+                                    logger.error(`❌ Не удалось восстановить сессию после Bad MAC для ${phoneJid}. Требуется повторная авторизация.`);
+                                }
+                                // Пропускаем это сообщение, но продолжаем обработку других
+                                continue;
+                            }
+                            // Обработка других ошибок
+                            logger.error(`❌ Ошибка при сохранении сообщения в БД для JID ${remoteJid} (Ваш номер: ${phoneJid}):`);
+                            if (error instanceof Error) {
+                                logger.error('Сообщение об ошибке:', error.message);
+                                if (error.stack) {
+                                    logger.error('Stack trace:', error.stack);
+                                }
+                                if ('code' in error && 'meta' in error && typeof error.code === 'string') {
+                                    logger.error(`Prisma Error Code: ${error.code}, Meta:`, JSON.stringify(error.meta, null, 2));
+                                }
+                            }
+                            else {
+                                logger.error('Неизвестная ошибка:', error);
+                            }
                         }
-                        logger.info(`💾 Сообщение (тип: ${messageType}, ID: ${savedMessage.id}) сохранено в БД (JID собеседника: ${remoteJid}, Ваш номер: ${phoneJid}, chatId: ${savedMessage.chatId}).`);
                     }
-                    catch (error) {
-                        logger.error(`❌ Ошибка при сохранении сообщения в БД для JID ${remoteJid} (Ваш номер: ${phoneJid}):`);
-                        if (error instanceof Error) {
-                            logger.error('Сообщение об ошибке:', error.message);
-                            if (error.stack) {
-                                logger.error('Stack trace:', error.stack);
-                            }
-                            if ('code' in error && 'meta' in error && typeof error.code === 'string') {
-                                logger.error(`Prisma Error Code: ${error.code}, Meta:`, JSON.stringify(error.meta, null, 2));
-                            }
-                        }
-                        else {
-                            logger.error('Неизвестная ошибка:', error);
+                    catch (outerError) {
+                        // Обработка критических ошибок на уровне обработки сообщения
+                        logger.error(`❌ Критическая ошибка при обработке сообщения:`, outerError);
+                        // Проверяем на Bad MAC даже на верхнем уровне
+                        if (((_v = outerError === null || outerError === void 0 ? void 0 : outerError.message) === null || _v === void 0 ? void 0 : _v.includes('Bad MAC')) ||
+                            ((_w = outerError === null || outerError === void 0 ? void 0 : outerError.message) === null || _w === void 0 ? void 0 : _w.includes('verifyMAC')) ||
+                            ((_x = outerError === null || outerError === void 0 ? void 0 : outerError.stack) === null || _x === void 0 ? void 0 : _x.includes('libsignal'))) {
+                            logger.error(`❌ Критическая Session error (Bad MAC). Попытка восстановления...`);
+                            yield handleBadMacError(organizationId, organizationPhoneId, phoneJid);
                         }
                     }
                 }
@@ -799,6 +1062,42 @@ function getBaileysSock(organizationPhoneId) {
         logger.info(`[getBaileysSock] Сокет найден для organizationPhoneId: ${organizationPhoneId}. JID сокета: ${((_a = sock.user) === null || _a === void 0 ? void 0 : _a.id) || 'Неизвестно'}`);
     }
     return sock || null;
+}
+/**
+ * Возвращает статистику ошибок сессии для указанного телефона организации.
+ * @param organizationPhoneId ID телефона организации.
+ * @returns Объект со статистикой ошибок
+ */
+function getSessionErrorStats(organizationPhoneId) {
+    const badMacErrors = badMacErrorCount.get(organizationPhoneId) || 0;
+    const badDecryptErrors = badDecryptErrorCount.get(organizationPhoneId) || 0;
+    return {
+        badMacErrors,
+        badDecryptErrors,
+        maxBadMacErrors: MAX_BAD_MAC_ERRORS,
+        maxBadDecryptErrors: MAX_BAD_DECRYPT_ERRORS,
+        isHealthy: badMacErrors < MAX_BAD_MAC_ERRORS && badDecryptErrors < MAX_BAD_DECRYPT_ERRORS,
+    };
+}
+/**
+ * Принудительно закрывает сессию для указанного телефона организации.
+ * Полезно для ручного управления сессиями из API.
+ * @param organizationPhoneId ID телефона организации
+ * @param reason Причина закрытия
+ */
+function forceCloseSession(organizationPhoneId_1) {
+    return __awaiter(this, arguments, void 0, function* (organizationPhoneId, reason = 'Manual close') {
+        var _a;
+        const sock = socks.get(organizationPhoneId);
+        if (!sock) {
+            logger.warn(`[forceCloseSession] Сокет не найден для organizationPhoneId: ${organizationPhoneId}`);
+            return;
+        }
+        const phoneJid = ((_a = sock.user) === null || _a === void 0 ? void 0 : _a.id) || 'unknown';
+        logger.info(`[forceCloseSession] Принудительное закрытие сессии для ${phoneJid}. Причина: ${reason}`);
+        yield closeSession(organizationPhoneId, phoneJid, reason);
+        logger.info(`✅ Сессия принудительно закрыта для organizationPhoneId: ${organizationPhoneId}`);
+    });
 }
 /**
  * Отправляет сообщение через Baileys сокет.

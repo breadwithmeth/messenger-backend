@@ -33,6 +33,14 @@ const logger = pino({ level: 'info' });
 // Глобальная Map для хранения активных экземпляров WASocket по organizationPhoneId
 const socks = new Map<number, WASocket>(); 
 
+// Map для отслеживания ошибок Bad MAC по organizationPhoneId
+const badMacErrorCount = new Map<number, number>();
+const MAX_BAD_MAC_ERRORS = 3; // Максимум ошибок перед сбросом сессии
+
+// Map для отслеживания ошибок Bad Decrypt по organizationPhoneId
+const badDecryptErrorCount = new Map<number, number>();
+const MAX_BAD_DECRYPT_ERRORS = 5; // Максимум ошибок перед сбросом сессии (больше чем MAC, т.к. менее критично)
+
 // Интерфейс для кастомного хранилища сигналов
 interface CustomSignalStorage {
   get<T extends keyof SignalDataTypeMap>(type: T, ids: string[]): Promise<{ [id: string]: SignalDataTypeMap[T]; }>;
@@ -75,6 +83,222 @@ async function downloadAndSaveMedia(
   } catch (error) {
     logger.error('❌ Ошибка при скачивании или сохранении медиа:', error);
     return undefined;
+  }
+}
+
+/**
+ * Корректно закрывает сессию Baileys и очищает ресурсы.
+ * @param organizationPhoneId ID телефона организации
+ * @param phoneJid JID номера телефона
+ * @param reason Причина закрытия
+ */
+async function closeSession(
+  organizationPhoneId: number,
+  phoneJid: string,
+  reason: string
+): Promise<void> {
+  const key = phoneJid.split('@')[0].split(':')[0];
+  logger.warn(`🚪 Закрытие сессии для ${phoneJid}. Причина: ${reason}`);
+  
+  try {
+    // Получаем сокет
+    const sock = socks.get(organizationPhoneId);
+    
+    if (sock) {
+      // Пытаемся корректно закрыть WebSocket соединение
+      try {
+        if ((sock.ws as any).readyState === 1) { // OPEN
+          await sock.end(new Error(reason));
+          logger.info(`✅ WebSocket соединение закрыто для ${phoneJid}`);
+        } else {
+          logger.info(`ℹ️ WebSocket уже закрыт (state: ${(sock.ws as any).readyState})`);
+        }
+      } catch (wsError) {
+        logger.error(`⚠️ Ошибка при закрытии WebSocket:`, wsError);
+        // Продолжаем даже если WebSocket не закрылся корректно
+      }
+      
+      // Удаляем сокет из Map
+      socks.delete(organizationPhoneId);
+      logger.info(`✅ Сокет удален из Map для organizationPhoneId: ${organizationPhoneId}`);
+    } else {
+      logger.info(`ℹ️ Сокет не найден в Map для organizationPhoneId: ${organizationPhoneId}`);
+    }
+    
+    // Очищаем счетчик ошибок
+    badMacErrorCount.delete(organizationPhoneId);
+    
+  } catch (error) {
+    logger.error(`❌ Ошибка при закрытии сессии для ${phoneJid}:`, error);
+    // Принудительно удаляем из Map даже при ошибке
+    socks.delete(organizationPhoneId);
+    badMacErrorCount.delete(organizationPhoneId);
+  }
+}
+
+/**
+ * Обработчик ошибок Bad Decrypt из app state sync.
+ * Очищает поврежденные данные синхронизации app state.
+ * @param organizationId ID организации
+ * @param organizationPhoneId ID телефона организации
+ * @param phoneJid JID номера телефона
+ * @returns true если данные были очищены, false если достигнут лимит ошибок и сессия закрыта
+ */
+async function handleBadDecryptError(
+  organizationId: number,
+  organizationPhoneId: number,
+  phoneJid: string
+): Promise<boolean> {
+  const key = phoneJid.split('@')[0].split(':')[0];
+  
+  // Увеличиваем счетчик ошибок
+  const currentCount = badDecryptErrorCount.get(organizationPhoneId) || 0;
+  badDecryptErrorCount.set(organizationPhoneId, currentCount + 1);
+  
+  logger.warn(`⚠️ Bad Decrypt error #${currentCount + 1} для ${phoneJid}`);
+  
+  if (currentCount + 1 >= MAX_BAD_DECRYPT_ERRORS) {
+    logger.error(`❌ Достигнут лимит Bad Decrypt ошибок (${MAX_BAD_DECRYPT_ERRORS}) для ${phoneJid}. Полный выход из сессии.`);
+    
+    try {
+      // 1. Корректно закрываем сессию
+      await closeSession(
+        organizationPhoneId,
+        phoneJid,
+        `Bad Decrypt error limit reached (${MAX_BAD_DECRYPT_ERRORS} errors)`
+      );
+      
+      // 2. Удаляем ВСЕ данные авторизации из БД
+      const deletedCount = await prisma.baileysAuth.deleteMany({
+        where: {
+          organizationId: organizationId,
+          phoneJid: key,
+        }
+      });
+      logger.info(`🗑️ Удалено ${deletedCount.count} записей авторизации для ${key}`);
+      
+      // 3. Обновляем статус телефона на 'logged_out'
+      await prisma.organizationPhone.update({
+        where: { id: organizationPhoneId },
+        data: { 
+          status: 'logged_out',
+          qrCode: null,
+          lastConnectedAt: new Date(),
+        },
+      });
+      logger.info(`📱 Статус телефона ${key} обновлен на 'logged_out'`);
+      
+      logger.info(`✅ Сессия для ${phoneJid} полностью завершена из-за повторяющихся Bad Decrypt ошибок. Требуется повторное QR-сканирование.`);
+      return false;
+    } catch (e) {
+      logger.error(`❌ Ошибка при полном выходе из сессии:`, e);
+      // Даже при ошибке пытаемся закрыть сокет
+      await closeSession(organizationPhoneId, phoneJid, 'Error during Bad Decrypt cleanup');
+      return false;
+    }
+  }
+  
+  // Очищаем только поврежденные ключи app state (без полного выхода)
+  try {
+    const deletedCount = await prisma.baileysAuth.deleteMany({
+      where: {
+        organizationId: organizationId,
+        phoneJid: key,
+        key: {
+          startsWith: 'app-state-sync-'
+        }
+      }
+    });
+    
+    logger.info(`✅ Удалено ${deletedCount.count} поврежденных ключей app state для ${key}. Соединение продолжит работу.`);
+    return true;
+  } catch (e) {
+    logger.error(`❌ Ошибка при удалении поврежденных данных app state:`, e);
+    return false;
+  }
+}
+
+/**
+ * Обработчик ошибок Bad MAC из libsignal.
+ * Очищает поврежденные сессии Signal Protocol для указанного номера.
+ * @param organizationId ID организации
+ * @param organizationPhoneId ID телефона организации
+ * @param phoneJid JID номера телефона
+ * @returns true если сессия была очищена, false если достигнут лимит ошибок и сессия закрыта
+ */
+async function handleBadMacError(
+  organizationId: number,
+  organizationPhoneId: number,
+  phoneJid: string
+): Promise<boolean> {
+  const key = phoneJid.split('@')[0].split(':')[0];
+  
+  // Увеличиваем счетчик ошибок
+  const currentCount = badMacErrorCount.get(organizationPhoneId) || 0;
+  badMacErrorCount.set(organizationPhoneId, currentCount + 1);
+  
+  logger.warn(`⚠️ Bad MAC error #${currentCount + 1} для ${phoneJid}`);
+  
+  if (currentCount + 1 >= MAX_BAD_MAC_ERRORS) {
+    logger.error(`❌ Достигнут лимит Bad MAC ошибок (${MAX_BAD_MAC_ERRORS}) для ${phoneJid}. Полный выход из сессии.`);
+    
+    try {
+      // 1. Корректно закрываем сессию
+      await closeSession(
+        organizationPhoneId,
+        phoneJid,
+        `Bad MAC error limit reached (${MAX_BAD_MAC_ERRORS} errors)`
+      );
+      
+      // 2. Удаляем ВСЕ данные авторизации из БД
+      const deletedCount = await prisma.baileysAuth.deleteMany({
+        where: {
+          organizationId: organizationId,
+          phoneJid: key,
+        }
+      });
+      logger.info(`🗑️ Удалено ${deletedCount.count} записей авторизации для ${key}`);
+      
+      // 3. Обновляем статус телефона на 'logged_out'
+      await prisma.organizationPhone.update({
+        where: { id: organizationPhoneId },
+        data: { 
+          status: 'logged_out',
+          qrCode: null,
+          lastConnectedAt: new Date(),
+        },
+      });
+      logger.info(`📱 Статус телефона ${key} обновлен на 'logged_out'`);
+      
+      logger.info(`✅ Сессия для ${phoneJid} полностью завершена. Требуется повторное QR-сканирование.`);
+      return false;
+    } catch (e) {
+      logger.error(`❌ Ошибка при полном выходе из сессии:`, e);
+      // Даже при ошибке пытаемся закрыть сокет
+      await closeSession(organizationPhoneId, phoneJid, 'Error during session cleanup');
+      return false;
+    }
+  }
+  
+  // Очищаем только поврежденные ключи сессий (без полного выхода)
+  try {
+    const deletedCount = await prisma.baileysAuth.deleteMany({
+      where: {
+        organizationId: organizationId,
+        phoneJid: key,
+        OR: [
+          { key: { startsWith: 'session-' } },
+          { key: { startsWith: 'pre-key-' } },
+          { key: { startsWith: 'sender-key-' } }
+        ]
+      }
+    });
+    
+    logger.info(`✅ Удалено ${deletedCount.count} поврежденных ключей сессий для ${key}. Попытка восстановления...`);
+    return true;
+  } catch (e) {
+    logger.error(`❌ Ошибка при удалении поврежденных сессий:`, e);
+    return false;
   }
 }
 
@@ -498,6 +722,12 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
     } else if (connection === 'open') {
       // Если соединение открыто
       logger.info(`✅ Подключено к WhatsApp для ${phoneJid} (Организация: ${organizationId}, Phone ID: ${organizationPhoneId})`);
+      
+      // Очищаем счетчики ошибок при успешном подключении
+      badMacErrorCount.delete(organizationPhoneId);
+      badDecryptErrorCount.delete(organizationPhoneId);
+      logger.info(`🔄 Счетчики ошибок сброшены для organizationPhoneId: ${organizationPhoneId}`);
+      
       // Обновляем статус в БД на 'connected', сохраняем фактический JID и очищаем QR-код
       await prisma.organizationPhone.update({
           where: { id: organizationPhoneId },
@@ -509,7 +739,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
   // Обработчик обновления учетных данных
   currentSock.ev.on('creds.update', saveCreds); // Используем saveCreds для сохранения
 
-  // ИСПРАВЛЕНИЕ: Добавляем обработчик ошибок синхронизации app state
+  // ИСПРАВЛЕНИЕ: Добавляем обработчик ошибок синхронизации app state и сессий
   currentSock.ev.on('connection.update', async (update) => {
     // Перехватываем ошибки синхронизации app state
     if (update.lastDisconnect?.error) {
@@ -519,25 +749,31 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
       if (error?.message?.includes('bad decrypt') || 
           error?.message?.includes('error:1C800064') ||
           error?.name === 'critical_unblock_low') {
-        logger.warn(`⚠️ Обнаружена ошибка дешифрования app state для ${phoneJid}. Очистка поврежденных данных...`);
+        logger.warn(`⚠️ Обнаружена ошибка дешифрования app state для ${phoneJid}.`);
         
-        const key = phoneJid.split('@')[0].split(':')[0];
+        // Вызываем обработчик Bad Decrypt ошибки
+        const recovered = await handleBadDecryptError(organizationId, organizationPhoneId, phoneJid);
         
-        // Удаляем поврежденные ключи app state из БД
-        try {
-          await prisma.baileysAuth.deleteMany({
-            where: {
-              organizationId: organizationId,
-              phoneJid: key,
-              key: {
-                startsWith: 'app-state-sync-'
-              }
-            }
-          });
-          
-          logger.info(`✅ Поврежденные данные app state для ${key} удалены. Соединение продолжит работу без истории синхронизации.`);
-        } catch (e) {
-          logger.error(`❌ Ошибка при удалении поврежденных данных app state:`, e);
+        if (!recovered) {
+          logger.error(`❌ Не удалось восстановить сессию после повторяющихся Bad Decrypt ошибок для ${phoneJid}. Сессия закрыта.`);
+          // Сессия уже закрыта в handleBadDecryptError, не пытаемся переподключиться
+          return;
+        }
+      }
+      
+      // НОВОЕ: Обработка ошибки Bad MAC из libsignal
+      if (error?.message?.includes('Bad MAC') || 
+          error?.message?.includes('verifyMAC') ||
+          error?.stack?.includes('libsignal')) {
+        logger.warn(`⚠️ Обнаружена ошибка Bad MAC (libsignal) для ${phoneJid}.`);
+        
+        // Вызываем обработчик Bad MAC ошибки
+        const recovered = await handleBadMacError(organizationId, organizationPhoneId, phoneJid);
+        
+        if (!recovered) {
+          logger.error(`❌ Не удалось восстановить сессию после повторяющихся Bad MAC ошибок для ${phoneJid}. Сессия закрыта.`);
+          // Сессия уже закрыта в handleBadMacError, не пытаемся переподключиться
+          return;
         }
       }
     }
@@ -558,31 +794,32 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
   currentSock.ev.on('messages.upsert', async ({ messages, type }) => { 
     if (type === 'notify') {
       for (const msg of messages) {
-        // Пропускаем сообщения без контента или если это наше исходящее сообщение, не имеющее видимого контента
-        if (!msg.message) {
-            logger.info(`[Message Upsert] Пропущено сообщение без контента (ID: ${msg.key.id})`);
-            continue;
-        }
-        if (msg.key.fromMe && !msg.message.conversation && !msg.message.extendedTextMessage && !msg.message.imageMessage && !msg.message.videoMessage && !msg.message.documentMessage && !msg.message.audioMessage && !msg.message.stickerMessage) {
-            logger.info(`[Message Upsert] Пропущено исходящее системное сообщение (ID: ${msg.key.id})`);
-            continue;
-        }
-
-  // v7: поддержка LID alt-идентификаторов. В 6.7.x этих полей нет, поэтому используем fallback.
-  const rawRemote: string = (msg.key as any).remoteJidAlt ?? msg.key.remoteJid ?? '';
-  const remoteJid = jidNormalizedUser(rawRemote);
-        if (!remoteJid) {
-            logger.warn('🚫 Сообщение без remoteJid, пропущено.');
-            continue;
-        }
-
-        // Пропускаем широковещательные сообщения и статусы
-        if (isJidBroadcast(remoteJid) || remoteJid === 'status@broadcast') {
-            logger.info(`Пропускаем широковещательное сообщение или статус от ${remoteJid}.`);
-            continue;
-        }
-
         try {
+          // Пропускаем сообщения без контента или если это наше исходящее сообщение, не имеющее видимого контента
+          if (!msg.message) {
+              logger.info(`[Message Upsert] Пропущено сообщение без контента (ID: ${msg.key.id})`);
+              continue;
+          }
+          if (msg.key.fromMe && !msg.message.conversation && !msg.message.extendedTextMessage && !msg.message.imageMessage && !msg.message.videoMessage && !msg.message.documentMessage && !msg.message.audioMessage && !msg.message.stickerMessage) {
+              logger.info(`[Message Upsert] Пропущено исходящее системное сообщение (ID: ${msg.key.id})`);
+              continue;
+          }
+
+          // v7: поддержка LID alt-идентификаторов. В 6.7.x этих полей нет, поэтому используем fallback.
+          const rawRemote: string = (msg.key as any).remoteJidAlt ?? msg.key.remoteJid ?? '';
+          const remoteJid = jidNormalizedUser(rawRemote);
+          if (!remoteJid) {
+              logger.warn('🚫 Сообщение без remoteJid, пропущено.');
+              continue;
+          }
+
+          // Пропускаем широковещательные сообщения и статусы
+          if (isJidBroadcast(remoteJid) || remoteJid === 'status@broadcast') {
+              logger.info(`Пропускаем широковещательное сообщение или статус от ${remoteJid}.`);
+              continue;
+          }
+          
+          try {
             const rawParticipant: string = (msg.key as any).participantAlt ?? msg.key.participant ?? remoteJid;
             const senderJid = jidNormalizedUser(msg.key.fromMe ? (currentSock?.user?.id || phoneJid) : rawParticipant);
 
@@ -765,21 +1002,53 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
                 });
             }
 
-            logger.info(`💾 Сообщение (тип: ${messageType}, ID: ${savedMessage.id}) сохранено в БД (JID собеседника: ${remoteJid}, Ваш номер: ${phoneJid}, chatId: ${savedMessage.chatId}).`);
+          logger.info(`💾 Сообщение (тип: ${messageType}, ID: ${savedMessage.id}) сохранено в БД (JID собеседника: ${remoteJid}, Ваш номер: ${phoneJid}, chatId: ${savedMessage.chatId}).`);
 
-        } catch (error:any) {
-            logger.error(`❌ Ошибка при сохранении сообщения в БД для JID ${remoteJid} (Ваш номер: ${phoneJid}):`);
-            if (error instanceof Error) {
-                logger.error('Сообщение об ошибке:', error.message);
-                if (error.stack) {
-                    logger.error('Stack trace:', error.stack);
+          } catch (error:any) {
+              // Обработка ошибки Bad MAC из libsignal
+              if (error?.message?.includes('Bad MAC') || 
+                  error?.message?.includes('verifyMAC') ||
+                  error?.stack?.includes('libsignal')) {
+                logger.error(`❌ Session error (Bad MAC) при обработке сообщения от ${remoteJid}:`, error.message);
+                
+                // Вызываем обработчик Bad MAC ошибки
+                const recovered = await handleBadMacError(organizationId, organizationPhoneId, phoneJid);
+                
+                if (recovered) {
+                  logger.info(`✅ Попытка восстановления после Bad MAC для ${phoneJid}. Сообщение будет обработано при повторной отправке.`);
+                } else {
+                  logger.error(`❌ Не удалось восстановить сессию после Bad MAC для ${phoneJid}. Требуется повторная авторизация.`);
                 }
-                if ('code' in error && 'meta' in error && typeof error.code === 'string') {
-                    logger.error(`Prisma Error Code: ${error.code}, Meta:`, JSON.stringify(error.meta, null, 2));
-                }
-            } else {
-                logger.error('Неизвестная ошибка:', error);
-            }
+                
+                // Пропускаем это сообщение, но продолжаем обработку других
+                continue;
+              }
+              
+              // Обработка других ошибок
+              logger.error(`❌ Ошибка при сохранении сообщения в БД для JID ${remoteJid} (Ваш номер: ${phoneJid}):`);
+              if (error instanceof Error) {
+                  logger.error('Сообщение об ошибке:', error.message);
+                  if (error.stack) {
+                      logger.error('Stack trace:', error.stack);
+                  }
+                  if ('code' in error && 'meta' in error && typeof error.code === 'string') {
+                      logger.error(`Prisma Error Code: ${error.code}, Meta:`, JSON.stringify(error.meta, null, 2));
+                  }
+              } else {
+                  logger.error('Неизвестная ошибка:', error);
+              }
+          }
+        } catch (outerError: any) {
+          // Обработка критических ошибок на уровне обработки сообщения
+          logger.error(`❌ Критическая ошибка при обработке сообщения:`, outerError);
+          
+          // Проверяем на Bad MAC даже на верхнем уровне
+          if (outerError?.message?.includes('Bad MAC') || 
+              outerError?.message?.includes('verifyMAC') ||
+              outerError?.stack?.includes('libsignal')) {
+            logger.error(`❌ Критическая Session error (Bad MAC). Попытка восстановления...`);
+            await handleBadMacError(organizationId, organizationPhoneId, phoneJid);
+          }
         }
       }
     }
@@ -803,6 +1072,51 @@ export function getBaileysSock(organizationPhoneId: number): WASocket | null {
     logger.info(`[getBaileysSock] Сокет найден для organizationPhoneId: ${organizationPhoneId}. JID сокета: ${sock.user?.id || 'Неизвестно'}`);
   }
   return sock || null;
+}
+
+/**
+ * Возвращает статистику ошибок сессии для указанного телефона организации.
+ * @param organizationPhoneId ID телефона организации.
+ * @returns Объект со статистикой ошибок
+ */
+export function getSessionErrorStats(organizationPhoneId: number): {
+  badMacErrors: number;
+  badDecryptErrors: number;
+  maxBadMacErrors: number;
+  maxBadDecryptErrors: number;
+  isHealthy: boolean;
+} {
+  const badMacErrors = badMacErrorCount.get(organizationPhoneId) || 0;
+  const badDecryptErrors = badDecryptErrorCount.get(organizationPhoneId) || 0;
+  
+  return {
+    badMacErrors,
+    badDecryptErrors,
+    maxBadMacErrors: MAX_BAD_MAC_ERRORS,
+    maxBadDecryptErrors: MAX_BAD_DECRYPT_ERRORS,
+    isHealthy: badMacErrors < MAX_BAD_MAC_ERRORS && badDecryptErrors < MAX_BAD_DECRYPT_ERRORS,
+  };
+}
+
+/**
+ * Принудительно закрывает сессию для указанного телефона организации.
+ * Полезно для ручного управления сессиями из API.
+ * @param organizationPhoneId ID телефона организации
+ * @param reason Причина закрытия
+ */
+export async function forceCloseSession(organizationPhoneId: number, reason: string = 'Manual close'): Promise<void> {
+  const sock = socks.get(organizationPhoneId);
+  if (!sock) {
+    logger.warn(`[forceCloseSession] Сокет не найден для organizationPhoneId: ${organizationPhoneId}`);
+    return;
+  }
+  
+  const phoneJid = sock.user?.id || 'unknown';
+  logger.info(`[forceCloseSession] Принудительное закрытие сессии для ${phoneJid}. Причина: ${reason}`);
+  
+  await closeSession(organizationPhoneId, phoneJid, reason);
+  
+  logger.info(`✅ Сессия принудительно закрыта для organizationPhoneId: ${organizationPhoneId}`);
 }
 
 /**
