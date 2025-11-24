@@ -24,7 +24,17 @@ const logger = pino({ level: 'info' });
 export async function listChats(req: Request, res: Response) {
   try {
     const organizationId = res.locals.organizationId;
-    const { status, assigned, priority, channel, includeProfile, limit = '50', offset = '0' } = req.query;
+    const { 
+      status, 
+      assigned, 
+      priority, 
+      channel, 
+      includeProfile, 
+      limit = '50', 
+      offset = '0',
+      sortBy = 'lastMessageAt', // Поле для сортировки
+      sortOrder = 'desc' // Направление сортировки (asc/desc)
+    } = req.query;
     
     if (!organizationId) {
       logger.warn('[listChats] organizationId не определен в res.locals.');
@@ -60,6 +70,37 @@ export async function listChats(req: Request, res: Response) {
     // Фильтрация по приоритету
     if (priority && typeof priority === 'string') {
       whereCondition.priority = priority;
+    }
+
+    // Построение сортировки
+    const allowedSortFields = [
+      'lastMessageAt', 
+      'createdAt', 
+      'priority', 
+      'unreadCount', 
+      'ticketNumber',
+      'status',
+      'name'
+    ];
+    
+    const sortField = typeof sortBy === 'string' && allowedSortFields.includes(sortBy) 
+      ? sortBy 
+      : 'lastMessageAt';
+    
+    const sortDirection = sortOrder === 'asc' ? 'asc' : 'desc';
+
+    // Если не указана сортировка, используем умную сортировку по умолчанию
+    let orderBy: any;
+    if (req.query.sortBy === undefined) {
+      // Умная сортировка по умолчанию (многокритериальная)
+      orderBy = [
+        { priority: 'desc' },      // 1. Сначала приоритетные
+        { unreadCount: 'desc' },   // 2. Затем с непрочитанными
+        { lastMessageAt: 'desc' }, // 3. Потом по времени
+      ];
+    } else {
+      // Пользовательская сортировка
+      orderBy = { [sortField]: sortDirection };
     }
 
     // Получаем общее количество (для пагинации)
@@ -128,11 +169,7 @@ export async function listChats(req: Request, res: Response) {
           },
         },
       },
-      orderBy: [
-        { priority: 'desc' }, // Сначала приоритетные
-        { unreadCount: 'desc' }, // Затем с непрочитанными
-        { lastMessageAt: 'desc' }, // Потом по времени
-      ],
+      orderBy: orderBy,
     });
 
     // Преобразуем результат (без дополнительных запросов к Baileys)

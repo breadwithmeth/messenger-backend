@@ -34,7 +34,9 @@ function listChats(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
         try {
             const organizationId = res.locals.organizationId;
-            const { status, assigned, priority, channel, includeProfile, limit = '50', offset = '0' } = req.query;
+            const { status, assigned, priority, channel, includeProfile, limit = '50', offset = '0', sortBy = 'lastMessageAt', // Поле для сортировки
+            sortOrder = 'desc' // Направление сортировки (asc/desc)
+             } = req.query;
             if (!organizationId) {
                 logger.warn('[listChats] organizationId не определен в res.locals.');
                 return res.status(400).json({ error: 'organizationId обязателен' });
@@ -64,6 +66,34 @@ function listChats(req, res) {
             // Фильтрация по приоритету
             if (priority && typeof priority === 'string') {
                 whereCondition.priority = priority;
+            }
+            // Построение сортировки
+            const allowedSortFields = [
+                'lastMessageAt',
+                'createdAt',
+                'priority',
+                'unreadCount',
+                'ticketNumber',
+                'status',
+                'name'
+            ];
+            const sortField = typeof sortBy === 'string' && allowedSortFields.includes(sortBy)
+                ? sortBy
+                : 'lastMessageAt';
+            const sortDirection = sortOrder === 'asc' ? 'asc' : 'desc';
+            // Если не указана сортировка, используем умную сортировку по умолчанию
+            let orderBy;
+            if (req.query.sortBy === undefined) {
+                // Умная сортировка по умолчанию (многокритериальная)
+                orderBy = [
+                    { priority: 'desc' }, // 1. Сначала приоритетные
+                    { unreadCount: 'desc' }, // 2. Затем с непрочитанными
+                    { lastMessageAt: 'desc' }, // 3. Потом по времени
+                ];
+            }
+            else {
+                // Пользовательская сортировка
+                orderBy = { [sortField]: sortDirection };
             }
             // Получаем общее количество (для пагинации)
             const totalCount = yield authStorage_1.prisma.chat.count({ where: whereCondition });
@@ -130,11 +160,7 @@ function listChats(req, res) {
                         },
                     },
                 },
-                orderBy: [
-                    { priority: 'desc' }, // Сначала приоритетные
-                    { unreadCount: 'desc' }, // Затем с непрочитанными
-                    { lastMessageAt: 'desc' }, // Потом по времени
-                ],
+                orderBy: orderBy,
             });
             // Преобразуем результат (без дополнительных запросов к Baileys)
             const wantProfile = String(includeProfile).toLowerCase() === 'true';
