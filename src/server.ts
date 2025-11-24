@@ -1,6 +1,7 @@
 import http from 'http';
 import app from './app';
 import { startWaSession } from './services/waService'; // Импортируйте startWaSession
+import { startAllTelegramBots, stopAllTelegramBots } from './services/telegramService'; // <-- НОВОЕ
 import pino from 'pino'; // Добавьте импорт pino
 import { prisma } from './config/authStorage'; // Импортируйте prisma
 
@@ -49,7 +50,27 @@ async function initializeConnectedSessions() {
 
 app.listen(PORT, async () => {
   console.log(`Server is running on port ${PORT}`);
-  // Вызываем функцию инициализации сессий после старта сервера
   
+  // Вызываем функцию инициализации WhatsApp сессий после старта сервера
   await initializeConnectedSessions();
+  
+  // Запускаем все активные Telegram боты
+  logger.info('[ServerInit] Запуск Telegram ботов...');
+  await startAllTelegramBots();
+  logger.info('[ServerInit] Telegram боты запущены');
+});
+
+// Graceful shutdown - останавливаем ботов при выключении сервера
+process.on('SIGINT', async () => {
+  logger.info('[ServerShutdown] Получен сигнал SIGINT, останавливаем Telegram ботов...');
+  await stopAllTelegramBots();
+  logger.info('[ServerShutdown] Telegram боты остановлены');
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  logger.info('[ServerShutdown] Получен сигнал SIGTERM, останавливаем Telegram ботов...');
+  await stopAllTelegramBots();
+  logger.info('[ServerShutdown] Telegram боты остановлены');
+  process.exit(0);
 });

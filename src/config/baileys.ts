@@ -357,13 +357,12 @@ export async function ensureChat(
 
         // 2) Пытаемся найти чат по уникальному ключу (если JID известен)
         let chat = myJidNormalized
-          ? await prisma.chat.findUnique({
+          ? await prisma.chat.findFirst({
               where: {
-                organizationId_receivingPhoneJid_remoteJid: {
-                  organizationId,
-                  receivingPhoneJid: myJidNormalized,
-                  remoteJid: normalizedRemoteJid,
-                },
+                organizationId,
+                channel: 'whatsapp',
+                receivingPhoneJid: myJidNormalized,
+                remoteJid: normalizedRemoteJid,
               },
             })
           : null;
@@ -425,13 +424,12 @@ export async function ensureChat(
           } catch (e: any) {
             // Возможна гонка и уникальный конфликт — пробуем перечитать
             if (e?.code === 'P2002') {
-              const existing = await prisma.chat.findUnique({
+              const existing = await prisma.chat.findFirst({
                 where: {
-                  organizationId_receivingPhoneJid_remoteJid: {
-                    organizationId,
-                    receivingPhoneJid: myJidNormalized,
-                    remoteJid: normalizedRemoteJid,
-                  },
+                  organizationId,
+                  channel: 'whatsapp',
+                  receivingPhoneJid: myJidNormalized,
+                  remoteJid: normalizedRemoteJid,
                 },
               });
               if (existing) {
@@ -620,8 +618,11 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
     // Функция для получения сообщений из кэша или БД (для Baileys)
     getMessage: async (key) => {
         logger.debug(`Попытка получить сообщение из getMessage: ${key.id} от ${key.remoteJid}`);
-        const msg = await prisma.message.findUnique({
-            where: { whatsappMessageId: key.id || '' },
+        const msg = await prisma.message.findFirst({
+            where: {
+              channel: 'whatsapp',
+              whatsappMessageId: key.id || '',
+            },
             select: {
                 content: true,
                 type: true,

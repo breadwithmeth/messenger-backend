@@ -15,6 +15,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const http_1 = __importDefault(require("http"));
 const app_1 = __importDefault(require("./app"));
 const waService_1 = require("./services/waService"); // Импортируйте startWaSession
+const telegramService_1 = require("./services/telegramService"); // <-- НОВОЕ
 const pino_1 = __importDefault(require("pino")); // Добавьте импорт pino
 const authStorage_1 = require("./config/authStorage"); // Импортируйте prisma
 const PORT = process.env.PORT || 3000;
@@ -60,7 +61,24 @@ function initializeConnectedSessions() {
 }
 app_1.default.listen(PORT, () => __awaiter(void 0, void 0, void 0, function* () {
     console.log(`Server is running on port ${PORT}`);
-    // Вызываем функцию инициализации сессий после старта сервера
+    // Вызываем функцию инициализации WhatsApp сессий после старта сервера
     yield initializeConnectedSessions();
+    // Запускаем все активные Telegram боты
+    logger.info('[ServerInit] Запуск Telegram ботов...');
+    yield (0, telegramService_1.startAllTelegramBots)();
+    logger.info('[ServerInit] Telegram боты запущены');
+}));
+// Graceful shutdown - останавливаем ботов при выключении сервера
+process.on('SIGINT', () => __awaiter(void 0, void 0, void 0, function* () {
+    logger.info('[ServerShutdown] Получен сигнал SIGINT, останавливаем Telegram ботов...');
+    yield (0, telegramService_1.stopAllTelegramBots)();
+    logger.info('[ServerShutdown] Telegram боты остановлены');
+    process.exit(0);
+}));
+process.on('SIGTERM', () => __awaiter(void 0, void 0, void 0, function* () {
+    logger.info('[ServerShutdown] Получен сигнал SIGTERM, останавливаем Telegram ботов...');
+    yield (0, telegramService_1.stopAllTelegramBots)();
+    logger.info('[ServerShutdown] Telegram боты остановлены');
+    process.exit(0);
 }));
 //# sourceMappingURL=server.js.map

@@ -9,6 +9,7 @@ import messageReadRoutes from './routes/messageReadRoutes';
 import unreadRoutes from './routes/unreadRoutes';
 import mediaRoutes from './routes/mediaRoutes';
 import ticketRoutes from './routes/ticketRoutes';
+import telegramRoutes from './routes/telegramRoutes'; // <-- НОВОЕ
 import errorHandler from './middlewares/errorHandler'; // Corrected import path
 import cors, { CorsOptions } from 'cors';
 import path from 'path'; // <--- ДОБАВИТЬ
@@ -83,6 +84,7 @@ app.use('/api/unread', unreadRoutes); // Маршруты для управле�
 console.log('✅ Unread маршруты подключены');
 app.use('/api/media', mediaRoutes); // Маршруты для загрузки и отправки медиафайлов
 app.use('/api/tickets', ticketRoutes); // Маршруты для тикет-системы
+app.use('/api/telegram', telegramRoutes); // <-- НОВОЕ: Маршруты для Telegram
 
 // 404 JSON для несуществующих маршрутов
 app.use((req, res) => {

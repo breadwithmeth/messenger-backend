@@ -24,17 +24,26 @@ const logger = pino({ level: 'info' });
 export async function listChats(req: Request, res: Response) {
   try {
     const organizationId = res.locals.organizationId;
-    const { status, assigned, priority, includeProfile } = req.query;
+    const { status, assigned, priority, channel, includeProfile, limit = '50', offset = '0' } = req.query;
     
     if (!organizationId) {
       logger.warn('[listChats] organizationId не определен в res.locals.');
       return res.status(400).json({ error: 'organizationId обязателен' });
     }
 
+    // Парсинг пагинации
+    const take = Math.min(parseInt(limit as string, 10) || 50, 100); // Максимум 100 чатов за раз
+    const skip = parseInt(offset as string, 10) || 0;
+
     // Построение условий фильтрации
     let whereCondition: any = {
       organizationId: organizationId,
     };
+
+    // Фильтрация по каналу (whatsapp или telegram)
+    if (channel && typeof channel === 'string' && (channel === 'whatsapp' || channel === 'telegram')) {
+      whereCondition.channel = channel;
+    }
 
     // Фильтрация по статусу
     if (status && typeof status === 'string') {
@@ -53,10 +62,28 @@ export async function listChats(req: Request, res: Response) {
       whereCondition.priority = priority;
     }
 
-    // Получаем чаты с расширенной информацией
+    // Получаем общее количество (для пагинации)
+    const totalCount = await prisma.chat.count({ where: whereCondition });
+
+    // Получаем чаты с пагинацией и оптимизированными select
     const chats = await prisma.chat.findMany({
       where: whereCondition,
-      include: {
+      take,
+      skip,
+      select: {
+        id: true,
+        name: true,
+        channel: true, // whatsapp | telegram
+        remoteJid: true,
+        receivingPhoneJid: true,
+        isGroup: true,
+        status: true,
+        priority: true,
+        unreadCount: true,
+        lastMessageAt: true,
+        ticketNumber: true,
+        createdAt: true,
+        // WhatsApp specific
         organizationPhone: {
           select: {
             id: true,
@@ -64,6 +91,19 @@ export async function listChats(req: Request, res: Response) {
             displayName: true,
           },
         },
+        // Telegram specific
+        telegramBot: {
+          select: {
+            id: true,
+            botUsername: true,
+            botName: true,
+          },
+        },
+        telegramChatId: true,
+        telegramUsername: true,
+        telegramFirstName: true,
+        telegramLastName: true,
+        // Common
         assignedUser: {
           select: {
             id: true,
@@ -84,18 +124,20 @@ export async function listChats(req: Request, res: Response) {
             fromMe: true,
             type: true,
             isReadByOperator: true,
+            mediaUrl: true,
           },
         },
       },
       orderBy: [
-        { lastMessageAt: 'desc' }, // Сначала самые свежие по времени последнего сообщения
-        { unreadCount: 'desc' }, // При одинаковом времени - непрочитанные выше
+        { priority: 'desc' }, // Сначала приоритетные
+        { unreadCount: 'desc' }, // Затем с непрочитанными
+        { lastMessageAt: 'desc' }, // Потом по времени
       ],
     });
 
-    // Преобразуем результат и, по желанию, обогащаем профилем
+    // Преобразуем результат (без дополнительных запросов к Baileys)
     const wantProfile = String(includeProfile).toLowerCase() === 'true';
-    const chatsWithLastMessage = await Promise.all(chats.map(async (chat) => {
+    const chatsWithLastMessage = chats.map((chat) => {
       const base: any = {
         ...chat,
         lastMessage: chat.messages.length > 0 ? chat.messages[0] : null,
@@ -103,25 +145,23 @@ export async function listChats(req: Request, res: Response) {
       delete base.messages;
 
       if (wantProfile) {
-        try {
-          // Имя собеседника: используем Chat.name, оно теперь заполняется из pushName
-          base.displayName = chat.name || null;
-          // Фото профиля: потребует JID собеседника, это chat.remoteJid
-          // Чтобы избежать прямой зависимости на Baileys здесь, можно сделать легкий прокси в waService,
-          // но для простоты вернем только поле, которое фронт может запросить отдельным вызовом.
-          base.profilePhotoUrl = null; // заполняется отдельным endpoint либо lazy-загрузкой
-        } catch (e) {
-          base.displayName = base.displayName || null;
-          base.profilePhotoUrl = null;
-        }
+        // Используем уже сохранённые данные из Chat.name
+        base.displayName = chat.name || null;
+        // Для фото профиля можно добавить отдельный эндпоинт
+        base.profilePhotoUrl = null;
       }
 
       return base;
-    }));
+    });
 
     res.json({
       chats: chatsWithLastMessage,
-      total: chats.length,
+      pagination: {
+        total: totalCount,
+        limit: take,
+        offset: skip,
+        hasMore: skip + take < totalCount,
+      },
     });
   } catch (err: any) {
     logger.error(`[listChats] Ошибка получения чатов для организации ${res.locals.organizationId || 'неизвестно'}:`, err);
@@ -130,8 +170,9 @@ export async function listChats(req: Request, res: Response) {
 }
 
 export const getChatMessages = async (req: Request, res: Response) => {
-  const organizationId = res.locals.organizationId; // Получаем ID организации из middleware
-  const chatId = parseInt(req.params.chatId as string, 10); // Получаем chatId из параметров маршрута
+  const organizationId = res.locals.organizationId;
+  const chatId = parseInt(req.params.chatId as string, 10);
+  const { limit = '100', offset = '0', before } = req.query;
 
   if (!organizationId) {
     logger.warn('[getChatMessages] Несанкционированный доступ: organizationId не определен в res.locals.');
@@ -144,13 +185,17 @@ export const getChatMessages = async (req: Request, res: Response) => {
   }
 
   try {
-    // Проверяем, что чат принадлежит данной организации, чтобы предотвратить доступ к чужим чатам
+    // Парсинг пагинации
+    const take = Math.min(parseInt(limit as string, 10) || 100, 200); // Максимум 200 сообщений
+    const skip = parseInt(offset as string, 10) || 0;
+
+    // Проверяем существование чата (оптимизировано - только id)
     const chat = await prisma.chat.findFirst({
       where: {
         id: chatId,
         organizationId: organizationId,
       },
-      select: { id: true }, // Выбираем только id, т.к. нас интересует только существование чата и его принадлежность
+      select: { id: true },
     });
 
     if (!chat) {
@@ -158,29 +203,70 @@ export const getChatMessages = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Чат не найден или не принадлежит вашей организации.' });
     }
 
-    // Получаем все сообщения для этого чата, отсортированные по времени
+    // Построение условий запроса
+    const whereCondition: any = {
+      chatId: chatId,
+      organizationId: organizationId,
+    };
+
+    // Фильтр "before" для подгрузки старых сообщений (курсорная пагинация)
+    if (before && typeof before === 'string') {
+      const beforeDate = new Date(before);
+      if (!isNaN(beforeDate.getTime())) {
+        whereCondition.timestamp = { lt: beforeDate };
+      }
+    }
+
+    // Получаем общее количество сообщений в чате
+    const totalCount = await prisma.message.count({
+      where: { chatId, organizationId },
+    });
+
+    // Получаем сообщения с оптимизированным select
     const messages = await prisma.message.findMany({
-      where: {
-        chatId: chatId,
-        organizationId: organizationId, // Дополнительная проверка на принадлежность сообщения организации
-      },
-      include: {
-        // Включаем информацию о пользователе, который отправил сообщение
+      where: whereCondition,
+      take,
+      skip,
+      select: {
+        id: true,
+        whatsappMessageId: true,
+        content: true,
+        senderJid: true,
+        receivingPhoneJid: true,
+        fromMe: true,
+        type: true,
+        mediaUrl: true,
+        filename: true,
+        mimeType: true,
+        size: true,
+        timestamp: true,
+        status: true,
+        isReadByOperator: true,
+        quotedMessageId: true,
         senderUser: {
           select: {
             id: true,
             name: true,
-            email: true, // Можно добавить другие нужные поля
+            email: true,
           },
         },
       },
       orderBy: {
-        timestamp: 'asc', // Сортируем по возрастанию времени для хронологического порядка
+        timestamp: 'asc', // Хронологический порядок
       },
     });
 
-    // logger.info(`[getChatMessages] Успешно получено ${messages.length} сообщений для чата ${chatId} организации ${organizationId}.`);
-    res.status(200).json({ messages });
+    res.status(200).json({
+      messages,
+      pagination: {
+        total: totalCount,
+        limit: take,
+        offset: skip,
+        hasMore: skip + take < totalCount,
+        oldestTimestamp: messages.length > 0 ? messages[0].timestamp : null,
+        newestTimestamp: messages.length > 0 ? messages[messages.length - 1].timestamp : null,
+      },
+    });
   } catch (error: any) {
     logger.error(`[getChatMessages] Ошибка при получении сообщений для чата ${chatId} организации ${organizationId}:`, error);
     res.status(500).json({

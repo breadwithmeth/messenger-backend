@@ -357,13 +357,12 @@ function ensureChat(organizationId, organizationPhoneId, receivingPhoneJid, remo
             }
             // 2) Пытаемся найти чат по уникальному ключу (если JID известен)
             let chat = myJidNormalized
-                ? yield authStorage_1.prisma.chat.findUnique({
+                ? yield authStorage_1.prisma.chat.findFirst({
                     where: {
-                        organizationId_receivingPhoneJid_remoteJid: {
-                            organizationId,
-                            receivingPhoneJid: myJidNormalized,
-                            remoteJid: normalizedRemoteJid,
-                        },
+                        organizationId,
+                        channel: 'whatsapp',
+                        receivingPhoneJid: myJidNormalized,
+                        remoteJid: normalizedRemoteJid,
                     },
                 })
                 : null;
@@ -421,13 +420,12 @@ function ensureChat(organizationId, organizationPhoneId, receivingPhoneJid, remo
                 catch (e) {
                     // Возможна гонка и уникальный конфликт — пробуем перечитать
                     if ((e === null || e === void 0 ? void 0 : e.code) === 'P2002') {
-                        const existing = yield authStorage_1.prisma.chat.findUnique({
+                        const existing = yield authStorage_1.prisma.chat.findFirst({
                             where: {
-                                organizationId_receivingPhoneJid_remoteJid: {
-                                    organizationId,
-                                    receivingPhoneJid: myJidNormalized,
-                                    remoteJid: normalizedRemoteJid,
-                                },
+                                organizationId,
+                                channel: 'whatsapp',
+                                receivingPhoneJid: myJidNormalized,
+                                remoteJid: normalizedRemoteJid,
                             },
                         });
                         if (existing) {
@@ -624,8 +622,11 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
             // Функция для получения сообщений из кэша или БД (для Baileys)
             getMessage: (key) => __awaiter(this, void 0, void 0, function* () {
                 logger.debug(`Попытка получить сообщение из getMessage: ${key.id} от ${key.remoteJid}`);
-                const msg = yield authStorage_1.prisma.message.findUnique({
-                    where: { whatsappMessageId: key.id || '' },
+                const msg = yield authStorage_1.prisma.message.findFirst({
+                    where: {
+                        channel: 'whatsapp',
+                        whatsappMessageId: key.id || '',
+                    },
                     select: {
                         content: true,
                         type: true,

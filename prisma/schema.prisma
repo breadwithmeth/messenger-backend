@@ -53,10 +53,11 @@ model Organization {
   name      String
   createdAt DateTime @default(now())
 
-  users   User[]
-  Chat    Chat[]
-  phones  OrganizationPhone[] // <--- связь с номерами
-  Message Message[]
+  users          User[]
+  Chat           Chat[]
+  phones         OrganizationPhone[] // WhatsApp номера
+  telegramBots   TelegramBot[]       // Telegram боты
+  Message        Message[]
 }
 
 model User {
@@ -97,39 +98,57 @@ model Message {
   id                  Int               @id @default(autoincrement())
   organizationId      Int
   organization        Organization      @relation(fields: [organizationId], references: [id])
-  organizationPhoneId Int
-  organizationPhone   OrganizationPhone @relation(fields: [organizationPhoneId], references: [id])
+  
+  // Канал сообщения: whatsapp или telegram
+  channel             String            @default("whatsapp") // whatsapp | telegram
+  
+  // WhatsApp-специфичные поля
+  organizationPhoneId Int?
+  organizationPhone   OrganizationPhone? @relation(fields: [organizationPhoneId], references: [id])
+  whatsappMessageId   String?
+  
+  // Telegram-специфичные поля
+  telegramBotId       Int?
+  telegramBot         TelegramBot?      @relation(fields: [telegramBotId], references: [id])
+  telegramMessageId   Int?              // ID сообщения в Telegram
+  telegramChatId      String?           // Chat ID в Telegram (может быть число или строка)
+  
+  // Общие поля для обоих каналов
   chatId              Int
   chat                Chat              @relation(fields: [chatId], references: [id])
-
-  whatsappMessageId String    @unique
-  receivingPhoneJid String
-  remoteJid         String
-  senderJid         String
+  receivingPhoneJid   String?           // Для WhatsApp
+  remoteJid           String?           // Для WhatsApp
+  senderJid           String?           // Для WhatsApp
+  telegramUserId      String?           // Для Telegram (ID пользователя Telegram)
+  telegramUsername    String?           // Для Telegram (@username)
+  
   fromMe              Boolean
   content             String
-  type                String    @default("text")
+  type                String            @default("text")
   mediaUrl            String?
   filename            String?
   mimeType            String?
   size                Int?
   timestamp           DateTime
-  status              String   @default("pending") // e.g., pending, sent, delivered, read
+  status              String            @default("pending") // e.g., pending, sent, delivered, read
 
   // Поле для отметки как прочитанное оператором
-  isReadByOperator    Boolean  @default(false)
-  readAt              DateTime? // Когда сообщение было прочитано оператором
+  isReadByOperator    Boolean           @default(false)
+  readAt              DateTime?         // Когда сообщение было прочитано оператором
 
   // ID пользователя-оператора, который отправил это сообщение (если применимо)
-  senderUserId      Int?
-  senderUser        User?    @relation(fields: [senderUserId], references: [id], onDelete: SetNull)
+  senderUserId        Int?
+  senderUser          User?             @relation(fields: [senderUserId], references: [id], onDelete: SetNull)
 
   // Поля для ответов
-  quotedMessageId     String? // ID цитируемого сообщения в WhatsApp
-  quotedContent       String? // Текст цитируемого сообщения
+  quotedMessageId     String?           // ID цитируемого сообщения
+  quotedContent       String?           // Текст цитируемого сообщения
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt @default(now())
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt @default(now())
+  
+  @@index([channel])
+  @@index([chatId, timestamp])
 }
 model ClientMetadata {
   id        Int      @id @default(autoincrement())
@@ -154,13 +173,26 @@ model Chat {
   organizationId      Int
   name                String?
   createdAt           DateTime     @default(now())
-  receivingPhoneJid   String
-  remoteJid           String
-  organizationPhoneId Int          @default(1) // <-- Добавлено @default(1)
-                                               // !!! ВАЖНО: Убедитесь, что в OrganizationPhone есть запись с id=1
-                                               // или укажите другой существующий ID.
-  organizationPhone   OrganizationPhone @relation(fields: [organizationPhoneId], references: [id])
+  
+  // Канал чата: whatsapp или telegram
+  channel             String       @default("whatsapp") // whatsapp | telegram
+  
+  // WhatsApp-специфичные поля
+  receivingPhoneJid   String?
+  remoteJid           String?
+  organizationPhoneId Int?
+  organizationPhone   OrganizationPhone? @relation(fields: [organizationPhoneId], references: [id])
   isGroup             Boolean      @default(false)
+  
+  // Telegram-специфичные поля
+  telegramBotId       Int?
+  telegramBot         TelegramBot? @relation(fields: [telegramBotId], references: [id])
+  telegramChatId      String?      // Chat ID в Telegram
+  telegramUserId      String?      // User ID в Telegram
+  telegramUsername    String?      // @username в Telegram
+  telegramFirstName   String?      // Имя пользователя в Telegram
+  telegramLastName    String?      // Фамилия пользователя в Telegram
+  
   lastMessageAt       DateTime?
 
   // === ТИКЕТ-СИСТЕМА ===
@@ -217,11 +249,13 @@ model Chat {
   messages            Message[]
   ticketHistory       TicketHistory[] // История изменений тикета
 
-  @@unique([organizationId, receivingPhoneJid, remoteJid])
   @@unique([organizationId, ticketNumber]) // Уникальный номер тикета в рамках организации
   @@index([status]) // Индекс для быстрого поиска по статусу
   @@index([priority]) // Индекс для быстрого поиска по приоритету
   @@index([category]) // Индекс для быстрого поиска по категории
+  @@index([channel]) // Индекс для поиска по каналу
+  @@index([organizationId, receivingPhoneJid, remoteJid]) // Для WhatsApp
+  @@index([organizationId, telegramBotId, telegramChatId]) // Для Telegram
 }
 
 
@@ -272,3 +306,40 @@ model TicketHistory {
   @@index([changeType])
   @@index([createdAt])
 }
+
+// Telegram боты организации
+model TelegramBot {
+  id              Int      @id @default(autoincrement())
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  organizationId  Int
+  
+  // Токен бота от BotFather
+  botToken        String   @unique
+  
+  // Информация о боте
+  botUsername     String?  // @bot_username
+  botName         String?  // Имя бота
+  botId           String?  // ID бота в Telegram
+  
+  // Статус бота
+  status          String   @default("inactive") // inactive, active, error
+  lastActiveAt    DateTime?
+  
+  // Настройки
+  welcomeMessage  String?  // Приветственное сообщение
+  autoReply       Boolean  @default(false) // Автоответы
+  
+  // Webhook URL (если используется)
+  webhookUrl      String?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Связи
+  chats           Chat[]
+  messages        Message[]
+  
+  @@index([organizationId])
+  @@index([status])
+}
+
