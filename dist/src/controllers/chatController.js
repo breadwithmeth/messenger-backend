@@ -34,7 +34,9 @@ function listChats(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
         try {
             const organizationId = res.locals.organizationId;
-            const { status, assigned, priority, channel, includeProfile, limit = '50', offset = '0', sortBy = 'lastMessageAt', // Поле для сортировки
+            const userId = res.locals.userId; // ID текущего пользователя
+            const { status, assigned, assignedToMe, // Новый параметр для фильтрации по текущему пользователю
+            priority, channel, includeProfile, limit = '50', offset = '0', sortBy = 'lastMessageAt', // Поле для сортировки
             sortOrder = 'desc' // Направление сортировки (asc/desc)
              } = req.query;
             if (!organizationId) {
@@ -56,16 +58,24 @@ function listChats(req, res) {
             if (status && typeof status === 'string') {
                 whereCondition.status = status;
             }
-            // Фильтрация по назначению
-            if (assigned === 'true') {
-                whereCondition.assignedUserId = { not: null };
-            }
-            else if (assigned === 'false') {
-                whereCondition.assignedUserId = null;
-            }
             // Фильтрация по приоритету
             if (priority && typeof priority === 'string') {
                 whereCondition.priority = priority;
+            }
+            // Фильтрация по назначению на текущего пользователя
+            if (assignedToMe === 'true') {
+                if (!userId) {
+                    return res.status(400).json({ error: 'userId не определен. Требуется авторизация.' });
+                }
+                whereCondition.assignedUserId = userId;
+            }
+            else if (assigned === 'true') {
+                // Все назначенные чаты (любому оператору)
+                whereCondition.assignedUserId = { not: null };
+            }
+            else if (assigned === 'false') {
+                // Неназначенные чаты
+                whereCondition.assignedUserId = null;
             }
             // Построение сортировки
             const allowedSortFields = [

@@ -24,9 +24,11 @@ const logger = pino({ level: 'info' });
 export async function listChats(req: Request, res: Response) {
   try {
     const organizationId = res.locals.organizationId;
+    const userId = res.locals.userId; // ID текущего пользователя
     const { 
       status, 
       assigned, 
+      assignedToMe, // Новый параметр для фильтрации по текущему пользователю
       priority, 
       channel, 
       includeProfile, 
@@ -60,16 +62,23 @@ export async function listChats(req: Request, res: Response) {
       whereCondition.status = status;
     }
 
-    // Фильтрация по назначению
-    if (assigned === 'true') {
-      whereCondition.assignedUserId = { not: null };
-    } else if (assigned === 'false') {
-      whereCondition.assignedUserId = null;
-    }
-
     // Фильтрация по приоритету
     if (priority && typeof priority === 'string') {
       whereCondition.priority = priority;
+    }
+
+    // Фильтрация по назначению на текущего пользователя
+    if (assignedToMe === 'true') {
+      if (!userId) {
+        return res.status(400).json({ error: 'userId не определен. Требуется авторизация.' });
+      }
+      whereCondition.assignedUserId = userId;
+    } else if (assigned === 'true') {
+      // Все назначенные чаты (любому оператору)
+      whereCondition.assignedUserId = { not: null };
+    } else if (assigned === 'false') {
+      // Неназначенные чаты
+      whereCondition.assignedUserId = null;
     }
 
     // Построение сортировки
