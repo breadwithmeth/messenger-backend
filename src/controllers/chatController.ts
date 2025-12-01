@@ -298,19 +298,22 @@ export const getChatMessages = async (req: Request, res: Response) => {
         },
       },
       orderBy: {
-        timestamp: 'asc', // Хронологический порядок
+        timestamp: 'desc', // Последние сообщения сначала
       },
     });
 
+    // Переворачиваем массив для отображения в хронологическом порядке (старые → новые)
+    const messagesInChronologicalOrder = messages.reverse();
+
     res.status(200).json({
-      messages,
+      messages: messagesInChronologicalOrder,
       pagination: {
         total: totalCount,
         limit: take,
         offset: skip,
         hasMore: skip + take < totalCount,
-        oldestTimestamp: messages.length > 0 ? messages[0].timestamp : null,
-        newestTimestamp: messages.length > 0 ? messages[messages.length - 1].timestamp : null,
+        oldestTimestamp: messagesInChronologicalOrder.length > 0 ? messagesInChronologicalOrder[0].timestamp : null,
+        newestTimestamp: messagesInChronologicalOrder.length > 0 ? messagesInChronologicalOrder[messagesInChronologicalOrder.length - 1].timestamp : null,
       },
     });
   } catch (error: any) {
