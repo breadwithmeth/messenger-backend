@@ -58,6 +58,8 @@ model Organization {
   phones         OrganizationPhone[] // WhatsApp номера
   telegramBots   TelegramBot[]       // Telegram боты
   Message        Message[]
+  clients        OrganizationClient[] // Клиенты организации
+  clientTags     ClientTag[]          // Теги для клиентов
 }
 
 model User {
@@ -81,6 +83,9 @@ model User {
   ticketHistory  TicketHistory[]
 
   chats          Chat[]       @relation("ChatUsers")
+  
+  // Связь с клиентами (как менеджер)
+  managedClients OrganizationClient[] @relation("ClientManager")
 }
 
 model Client {
@@ -245,6 +250,7 @@ model Chat {
   updatedAt           DateTime     @updatedAt
 
   clients             Client[]     @relation("ChatClients")
+  organizationClients OrganizationClient[] @relation("ChatOrganizationClients")
   users               User[]       @relation("ChatUsers")
   messages            Message[]
   ticketHistory       TicketHistory[] // История изменений тикета
@@ -341,5 +347,125 @@ model TelegramBot {
   
   @@index([organizationId])
   @@index([status])
+}
+
+// Клиенты организации (компании и частные лица)
+model OrganizationClient {
+  id              Int      @id @default(autoincrement())
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId  Int
+  
+  // Тип клиента
+  clientType      String   @default("individual") // individual (физ.лицо), company (юр.лицо)
+  
+  // Основная информация
+  name            String   // ФИО для физ.лица или название компании
+  email           String?
+  phone           String?  // Основной телефон
+  
+  // Дополнительные контакты
+  secondaryPhone  String?
+  website         String?
+  
+  // Адрес
+  address         String?
+  city            String?
+  country         String?
+  postalCode      String?
+  
+  // Для юридических лиц
+  companyName     String?  // Полное наименование компании
+  taxId           String?  // ИНН/Tax ID
+  registrationNumber String? // ОГРН/Registration number
+  legalAddress    String?  // Юридический адрес
+  
+  // Контактное лицо (для компаний)
+  contactPerson   String?  // Имя контактного лица
+  contactPosition String?  // Должность
+  contactPhone    String?  // Телефон контактного лица
+  contactEmail    String?  // Email контактного лица
+  
+  // Статус клиента
+  status          String   @default("active") // active, inactive, blocked, potential
+  
+  // Источник клиента
+  source          String?  // website, referral, whatsapp, telegram, phone, email, etc.
+  
+  // Сегмент клиента
+  segment         String?  // VIP, regular, wholesale, retail, etc.
+  
+  // Менеджер/ответственный
+  assignedUserId  Int?
+  assignedUser    User?    @relation("ClientManager", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  
+  // Финансовая информация
+  totalRevenue    Decimal? @db.Decimal(15, 2) // Общая выручка от клиента
+  lastPurchaseDate DateTime? // Дата последней покупки
+  purchaseCount   Int      @default(0) // Количество покупок
+  averageCheck    Decimal? @db.Decimal(15, 2) // Средний чек
+  
+  // Скидка
+  discount        Decimal? @db.Decimal(5, 2) // Персональная скидка в процентах
+  
+  // Дополнительные поля
+  notes           String?  // Заметки о клиенте
+  birthday        DateTime? // День рождения
+  
+  // Связь с мессенджерами
+  whatsappJid     String?  // JID в WhatsApp
+  telegramUserId  String?  // ID в Telegram
+  
+  // Маркетинговые разрешения
+  emailSubscribed Boolean  @default(false) // Согласие на email-рассылку
+  smsSubscribed   Boolean  @default(false) // Согласие на SMS-рассылку
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Связи
+  chats           Chat[]   @relation("ChatOrganizationClients")
+  tags            ClientTag[] @relation("ClientTags")
+  
+  // Индексы для оптимизации поиска
+  @@index([organizationId])
+  @@index([email])
+  @@index([phone])
+  @@index([status])
+  @@index([segment])
+  @@index([assignedUserId])
+  @@index([clientType])
+  @@index([whatsappJid])
+  @@index([telegramUserId])
+}
+
+// Теги клиентов
+model ClientTag {
+  id              Int      @id @default(autoincrement())
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId  Int
+  
+  // Название тега
+  name            String   // Например: "VIP", "Постоянный", "Проблемный"
+  
+  // Цвет для UI (hex)
+  color           String?  @default("#3B82F6") // Например: "#FF5733"
+  
+  // Описание тега
+  description     String?
+  
+  // Тип тега
+  type            String   @default("custom") // custom, auto, system
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Связи
+  clients         OrganizationClient[] @relation("ClientTags")
+  
+  @@unique([organizationId, name]) // Уникальное имя тега в рамках организации
+  @@index([organizationId])
+  @@index([type])
 }
 

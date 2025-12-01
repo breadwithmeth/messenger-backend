@@ -31,6 +31,18 @@ export async function getChatsByOrganizationSortedByLastMessage(organizationId: 
             email: true,
           },
         },
+        // Включаем информацию о клиентах
+        organizationClients: {
+          select: {
+            id: true,
+            name: true,
+            clientType: true,
+            segment: true,
+            status: true,
+            whatsappJid: true,
+            telegramUserId: true,
+          },
+        },
         // --- ИЗМЕНЕНИЕ ЗДЕСЬ: Добавляем orderBy для messages, чтобы получить последнее ---
         messages: {
           take: 1, // Берем только одно сообщение

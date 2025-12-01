@@ -945,6 +945,26 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                             const myJid = (0, baileys_1.jidNormalizedUser)(((_r = currentSock === null || currentSock === void 0 ? void 0 : currentSock.user) === null || _r === void 0 ? void 0 : _r.id) || phoneJid) || '';
                             const contactName = msg.pushName || undefined;
                             const chatId = yield ensureChat(organizationId, organizationPhoneId, myJid, remoteJid, contactName);
+                            // --- АВТОМАТИЧЕСКОЕ СОЗДАНИЕ КЛИЕНТА ---
+                            // Создаем или обновляем клиента только для входящих сообщений (не от нас)
+                            if (!msg.key.fromMe) {
+                                try {
+                                    logger.info(`👤 Проверка клиента для ${senderJid}...`);
+                                    const { ensureWhatsAppClient, linkClientToChat } = yield Promise.resolve().then(() => __importStar(require('../services/clientService')));
+                                    const client = yield ensureWhatsAppClient(organizationId, senderJid, contactName);
+                                    logger.info(`✅ Клиент обработан: ${client.name} (ID: ${client.id})`);
+                                    // Связываем клиента с чатом
+                                    yield linkClientToChat(client.id, chatId);
+                                    logger.info(`🔗 Клиент #${client.id} связан с чатом #${chatId}`);
+                                }
+                                catch (clientError) {
+                                    logger.error(`⚠️ Ошибка при создании клиента для ${senderJid}:`, clientError);
+                                    // Продолжаем обработку сообщения даже если создание клиента не удалось
+                                }
+                            }
+                            else {
+                                logger.debug(`⏭️ Пропускаем создание клиента для исходящего сообщения`);
+                            }
                             const savedMessage = yield authStorage_1.prisma.message.create({
                                 data: {
                                     chatId: chatId,

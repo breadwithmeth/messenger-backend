@@ -25,6 +25,7 @@ const organizationPhoneRoutes_1 = __importDefault(require("./routes/organization
 const accountRoutes_1 = __importDefault(require("./routes/accountRoutes"));
 const userRoutes_1 = __importDefault(require("./routes/userRoutes")); // <-- Добавить
 const contactRoutes_1 = __importDefault(require("./routes/contactRoutes"));
+const clientRoutes_1 = __importDefault(require("./routes/clientRoutes")); // <-- Клиенты организации
 const app = (0, express_1.default)();
 const logger = (0, pino_1.default)({ level: 'info' }); // Инициализируйте logger
 app.use(express_1.default.json());
@@ -73,6 +74,7 @@ app.use('/api/wa', waRoutes_1.default);
 app.use('/api/organization-phones', organizationPhoneRoutes_1.default);
 app.use('/api/accounts', accountRoutes_1.default);
 app.use('/api/users', userRoutes_1.default); // <-- Добавить
+app.use('/api/clients', clientRoutes_1.default); // <-- API для клиентов организации
 app.use('/api', contactRoutes_1.default);
 app.use('/api/chat-assignment', chatAssignmentRoutes_1.default); // Новые маршруты для назначения чатов
 app.use('/api/message-read', messageReadRoutes_1.default); // Новые маршруты для непрочитанных сообщений

@@ -24,6 +24,7 @@ import organizationPhoneRoutes from './routes/organizationPhoneRoutes';
 import accountRoutes from './routes/accountRoutes';
 import userRoutes from './routes/userRoutes'; // <-- Добавить
 import contactRoutes from './routes/contactRoutes';
+import clientRoutes from './routes/clientRoutes'; // <-- Клиенты организации
 
 
 const app = express();
@@ -79,6 +80,7 @@ app.use('/api/wa', waRoutes);
 app.use('/api/organization-phones', organizationPhoneRoutes); 
 app.use('/api/accounts', accountRoutes);
 app.use('/api/users', userRoutes); // <-- Добавить
+app.use('/api/clients', clientRoutes); // <-- API для клиентов организации
 app.use('/api', contactRoutes);
 app.use('/api/chat-assignment', chatAssignmentRoutes); // Новые маршруты для назначения чатов
 app.use('/api/message-read', messageReadRoutes); // Новые маршруты для непрочитанных сообщений

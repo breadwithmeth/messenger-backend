@@ -161,6 +161,18 @@ export async function listChats(req: Request, res: Response) {
             email: true,
           },
         },
+        // Информация о клиентах
+        organizationClients: {
+          select: {
+            id: true,
+            name: true,
+            clientType: true,
+            segment: true,
+            status: true,
+            whatsappJid: true,
+            telegramUserId: true,
+          },
+        },
         messages: {
           take: 1,
           orderBy: {
