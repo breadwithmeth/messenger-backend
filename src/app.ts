@@ -1,3 +1,6 @@
+import dotenv from 'dotenv';
+dotenv.config(); // Загружаем переменные окружения из .env
+
 import express from 'express';
 import authRoutes from './routes/authRoutes';
 import organizationRoutes from './routes/organizationRoutes';

@@ -240,13 +240,17 @@ async function handleIncomingMessage(
       content = msg.caption || '';
       const photo = msg.photo[msg.photo.length - 1]; // Берём фото лучшего качества
       size = photo.file_size;
-      // Для получения URL нужно вызвать getFileLink
+      // Скачиваем и сохраняем в хранилище
       try {
         const fileLink = await telegram.getFileLink(photo.file_id);
-        mediaUrl = fileLink;
+        const response = await fetch(fileLink);
+        const buffer = Buffer.from(await response.arrayBuffer());
+        
+        const { saveMedia } = await import('./storageService');
+        mediaUrl = await saveMedia(buffer, `telegram-${photo.file_id}.jpg`, 'image/jpeg');
         mimeType = 'image/jpeg';
       } catch (e) {
-        logger.error('[Telegram] Ошибка получения ссылки на фото:', e);
+        logger.error('[Telegram] Ошибка сохранения фото:', e);
       }
     } else if (msg.document) {
       messageType = 'document';
@@ -256,9 +260,13 @@ async function handleIncomingMessage(
       size = msg.document.file_size;
       try {
         const fileLink = await telegram.getFileLink(msg.document.file_id);
-        mediaUrl = fileLink;
+        const response = await fetch(fileLink);
+        const buffer = Buffer.from(await response.arrayBuffer());
+        
+        const { saveMedia } = await import('./storageService');
+        mediaUrl = await saveMedia(buffer, filename || `telegram-${msg.document.file_id}`, mimeType || 'application/octet-stream');
       } catch (e) {
-        logger.error('[Telegram] Ошибка получения ссылки на документ:', e);
+        logger.error('[Telegram] Ошибка сохранения документа:', e);
       }
     } else if (msg.video) {
       messageType = 'video';
@@ -267,9 +275,13 @@ async function handleIncomingMessage(
       size = msg.video.file_size;
       try {
         const fileLink = await telegram.getFileLink(msg.video.file_id);
-        mediaUrl = fileLink;
+        const response = await fetch(fileLink);
+        const buffer = Buffer.from(await response.arrayBuffer());
+        
+        const { saveMedia } = await import('./storageService');
+        mediaUrl = await saveMedia(buffer, `telegram-${msg.video.file_id}.mp4`, mimeType || 'video/mp4');
       } catch (e) {
-        logger.error('[Telegram] Ошибка получения ссылки на видео:', e);
+        logger.error('[Telegram] Ошибка сохранения видео:', e);
       }
     } else if (msg.voice) {
       messageType = 'audio';
@@ -277,9 +289,13 @@ async function handleIncomingMessage(
       size = msg.voice.file_size;
       try {
         const fileLink = await telegram.getFileLink(msg.voice.file_id);
-        mediaUrl = fileLink;
+        const response = await fetch(fileLink);
+        const buffer = Buffer.from(await response.arrayBuffer());
+        
+        const { saveMedia } = await import('./storageService');
+        mediaUrl = await saveMedia(buffer, `telegram-${msg.voice.file_id}.ogg`, mimeType || 'audio/ogg');
       } catch (e) {
-        logger.error('[Telegram] Ошибка получения ссылки на голосовое:', e);
+        logger.error('[Telegram] Ошибка сохранения голосового:', e);
       }
     }
 

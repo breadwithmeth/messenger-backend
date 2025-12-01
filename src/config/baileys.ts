@@ -50,11 +50,11 @@ interface CustomSignalStorage {
 
 // --- НОВАЯ ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ---
 /**
- * Скачивает медиа из сообщения и сохраняет его локально.
+ * Скачивает медиа из сообщения и сохраняет его в хранилище (R2/S3/Local).
  * @param messageContent Содержимое сообщения (например, imageMessage).
  * @param type Тип медиа ('image', 'video', 'audio', 'document').
  * @param originalFilename Имя файла (для документов).
- * @returns Путь к сохраненному файлу для использования в URL.
+ * @returns URL к сохраненному файлу.
  */
 async function downloadAndSaveMedia(
   messageContent: any,
@@ -68,18 +68,16 @@ async function downloadAndSaveMedia(
       buffer = Buffer.concat([buffer, chunk]);
     }
 
-    const mediaDir = path.join(__dirname, '..', '..', 'public', 'media');
-    await fs.mkdir(mediaDir, { recursive: true });
-
     const extension = path.extname(originalFilename || '') || `.${messageContent.mimetype?.split('/')[1] || 'bin'}`;
-    const uniqueFilename = `${Date.now()}-${Math.round(Math.random() * 1E9)}${extension}`;
-    const filePath = path.join(mediaDir, uniqueFilename);
+    const mimetype = messageContent.mimetype || 'application/octet-stream';
+    const filename = originalFilename || `file-${Date.now()}${extension}`;
 
-    await fs.writeFile(filePath, buffer);
-    logger.info(`✅ Медиафайл сохранен: ${filePath}`);
+    // Используем универсальный storage service
+    const { saveMedia } = await import('../services/storageService');
+    const mediaUrl = await saveMedia(buffer, filename, mimetype);
 
-    // Возвращаем относительный URL-путь
-    return `/media/${uniqueFilename}`;
+    logger.info(`✅ Медиафайл сохранен: ${mediaUrl}`);
+    return mediaUrl;
   } catch (error) {
     logger.error('❌ Ошибка при скачивании или сохранении медиа:', error);
     return undefined;

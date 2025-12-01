@@ -18,33 +18,25 @@ const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const util_1 = require("util");
 const pino_1 = __importDefault(require("pino"));
+const storageService_1 = require("./storageService"); // Импорт универсального storage
 const logger = (0, pino_1.default)({ level: 'info' });
 const writeFile = (0, util_1.promisify)(fs_1.default.writeFile);
 const mkdir = (0, util_1.promisify)(fs_1.default.mkdir);
 /**
- * Сохраняет загруженный медиафайл
+ * Сохраняет загруженный медиафайл (через универсальный storageService)
  */
 const saveUploadedMedia = (fileBuffer, originalName, mimeType, mediaType) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        // Создаем директорию для медиафайлов если она не существует
-        const mediaDir = path_1.default.join(process.cwd(), 'public', 'media', mediaType);
-        if (!fs_1.default.existsSync(mediaDir)) {
-            yield mkdir(mediaDir, { recursive: true });
-        }
         // Генерируем уникальное имя файла
         const timestamp = Date.now();
         const random = Math.random().toString(36).substring(2, 8);
         const ext = path_1.default.extname(originalName) || getExtensionByMimeType(mimeType);
-        const fileName = `${timestamp}_${random}${ext}`;
-        const filePath = path_1.default.join(mediaDir, fileName);
-        // Сохраняем файл
-        yield writeFile(filePath, fileBuffer);
-        // Создаем URL для доступа к файлу
-        const fileUrl = `/media/${mediaType}/${fileName}`;
-        logger.info(`[saveUploadedMedia] Медиафайл сохранен: ${fileName} (${fileBuffer.length} байт)`);
+        const fileName = `${mediaType}_${timestamp}_${random}${ext}`;
+        // Используем универсальный storage service (R2/S3/local)
+        const fileUrl = yield (0, storageService_1.saveMedia)(fileBuffer, fileName, mimeType);
+        logger.info(`[saveUploadedMedia] Медиафайл сохранен: ${fileName} (${fileBuffer.length} байт) → ${fileUrl}`);
         return {
             success: true,
-            filePath,
             url: fileUrl,
             fileName,
             size: fileBuffer.length,

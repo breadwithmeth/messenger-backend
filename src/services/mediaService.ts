@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
 import pino from 'pino';
+import { saveMedia } from './storageService'; // Импорт универсального storage
 
 const logger = pino({ level: 'info' });
 const writeFile = promisify(fs.writeFile);
@@ -20,7 +21,7 @@ export interface MediaUploadResult {
 }
 
 /**
- * Сохраняет загруженный медиафайл
+ * Сохраняет загруженный медиафайл (через универсальный storageService)
  */
 export const saveUploadedMedia = async (
   fileBuffer: Buffer,
@@ -29,31 +30,19 @@ export const saveUploadedMedia = async (
   mediaType: 'image' | 'video' | 'document' | 'audio'
 ): Promise<MediaUploadResult> => {
   try {
-    // Создаем директорию для медиафайлов если она не существует
-    const mediaDir = path.join(process.cwd(), 'public', 'media', mediaType);
-    
-    if (!fs.existsSync(mediaDir)) {
-      await mkdir(mediaDir, { recursive: true });
-    }
-
     // Генерируем уникальное имя файла
     const timestamp = Date.now();
     const random = Math.random().toString(36).substring(2, 8);
     const ext = path.extname(originalName) || getExtensionByMimeType(mimeType);
-    const fileName = `${timestamp}_${random}${ext}`;
-    const filePath = path.join(mediaDir, fileName);
+    const fileName = `${mediaType}_${timestamp}_${random}${ext}`;
     
-    // Сохраняем файл
-    await writeFile(filePath, fileBuffer);
+    // Используем универсальный storage service (R2/S3/local)
+    const fileUrl = await saveMedia(fileBuffer, fileName, mimeType);
     
-    // Создаем URL для доступа к файлу
-    const fileUrl = `/media/${mediaType}/${fileName}`;
-    
-    logger.info(`[saveUploadedMedia] Медиафайл сохранен: ${fileName} (${fileBuffer.length} байт)`);
+    logger.info(`[saveUploadedMedia] Медиафайл сохранен: ${fileName} (${fileBuffer.length} байт) → ${fileUrl}`);
     
     return {
       success: true,
-      filePath,
       url: fileUrl,
       fileName,
       size: fileBuffer.length,

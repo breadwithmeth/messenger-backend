@@ -1,5 +1,38 @@
 "use strict";
 // src/services/telegramService.ts
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -207,14 +240,17 @@ function handleIncomingMessage(telegram, msg, organizationId, botId) {
                 content = msg.caption || '';
                 const photo = msg.photo[msg.photo.length - 1]; // Берём фото лучшего качества
                 size = photo.file_size;
-                // Для получения URL нужно вызвать getFileLink
+                // Скачиваем и сохраняем в хранилище
                 try {
                     const fileLink = yield telegram.getFileLink(photo.file_id);
-                    mediaUrl = fileLink;
+                    const response = yield fetch(fileLink);
+                    const buffer = Buffer.from(yield response.arrayBuffer());
+                    const { saveMedia } = yield Promise.resolve().then(() => __importStar(require('./storageService')));
+                    mediaUrl = yield saveMedia(buffer, `telegram-${photo.file_id}.jpg`, 'image/jpeg');
                     mimeType = 'image/jpeg';
                 }
                 catch (e) {
-                    logger.error('[Telegram] Ошибка получения ссылки на фото:', e);
+                    logger.error('[Telegram] Ошибка сохранения фото:', e);
                 }
             }
             else if (msg.document) {
@@ -225,10 +261,13 @@ function handleIncomingMessage(telegram, msg, organizationId, botId) {
                 size = msg.document.file_size;
                 try {
                     const fileLink = yield telegram.getFileLink(msg.document.file_id);
-                    mediaUrl = fileLink;
+                    const response = yield fetch(fileLink);
+                    const buffer = Buffer.from(yield response.arrayBuffer());
+                    const { saveMedia } = yield Promise.resolve().then(() => __importStar(require('./storageService')));
+                    mediaUrl = yield saveMedia(buffer, filename || `telegram-${msg.document.file_id}`, mimeType || 'application/octet-stream');
                 }
                 catch (e) {
-                    logger.error('[Telegram] Ошибка получения ссылки на документ:', e);
+                    logger.error('[Telegram] Ошибка сохранения документа:', e);
                 }
             }
             else if (msg.video) {
@@ -238,10 +277,13 @@ function handleIncomingMessage(telegram, msg, organizationId, botId) {
                 size = msg.video.file_size;
                 try {
                     const fileLink = yield telegram.getFileLink(msg.video.file_id);
-                    mediaUrl = fileLink;
+                    const response = yield fetch(fileLink);
+                    const buffer = Buffer.from(yield response.arrayBuffer());
+                    const { saveMedia } = yield Promise.resolve().then(() => __importStar(require('./storageService')));
+                    mediaUrl = yield saveMedia(buffer, `telegram-${msg.video.file_id}.mp4`, mimeType || 'video/mp4');
                 }
                 catch (e) {
-                    logger.error('[Telegram] Ошибка получения ссылки на видео:', e);
+                    logger.error('[Telegram] Ошибка сохранения видео:', e);
                 }
             }
             else if (msg.voice) {
@@ -250,10 +292,13 @@ function handleIncomingMessage(telegram, msg, organizationId, botId) {
                 size = msg.voice.file_size;
                 try {
                     const fileLink = yield telegram.getFileLink(msg.voice.file_id);
-                    mediaUrl = fileLink;
+                    const response = yield fetch(fileLink);
+                    const buffer = Buffer.from(yield response.arrayBuffer());
+                    const { saveMedia } = yield Promise.resolve().then(() => __importStar(require('./storageService')));
+                    mediaUrl = yield saveMedia(buffer, `telegram-${msg.voice.file_id}.ogg`, mimeType || 'audio/ogg');
                 }
                 catch (e) {
-                    logger.error('[Telegram] Ошибка получения ссылки на голосовое:', e);
+                    logger.error('[Telegram] Ошибка сохранения голосового:', e);
                 }
             }
             // Сохраняем сообщение в БД

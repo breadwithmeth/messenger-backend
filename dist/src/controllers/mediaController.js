@@ -294,11 +294,45 @@ const sendMediaByChatId = (req, res) => __awaiter(void 0, void 0, void 0, functi
         }
         // 6. Подготовка контента для отправки
         let messageContent;
-        // Проверяем, является ли mediaPath URL или локальным путем
-        const isUrl = mediaPath.startsWith('http://') || mediaPath.startsWith('https://') || mediaPath.startsWith('/');
-        if (isUrl) {
-            // Если это URL или путь, отправляем как ссылку
-            const fullUrl = mediaPath.startsWith('/') ? `${req.protocol}://${req.get('host')}${mediaPath}` : mediaPath;
+        // Проверяем, является ли mediaPath полным URL (http/https) или локальным относительным путем
+        const isFullUrl = mediaPath.startsWith('http://') || mediaPath.startsWith('https://');
+        const isRelativePath = mediaPath.startsWith('/');
+        if (isFullUrl) {
+            // Если это полный URL (включая R2), отправляем как есть
+            switch (mediaType) {
+                case 'image':
+                    messageContent = {
+                        image: { url: mediaPath },
+                        caption: caption || '',
+                    };
+                    break;
+                case 'video':
+                    messageContent = {
+                        video: { url: mediaPath },
+                        caption: caption || '',
+                    };
+                    break;
+                case 'document':
+                    messageContent = {
+                        document: { url: mediaPath },
+                        fileName: filename || 'document',
+                        caption: caption || '',
+                    };
+                    break;
+                case 'audio':
+                    messageContent = {
+                        audio: { url: mediaPath },
+                        mimetype: 'audio/mp4',
+                    };
+                    break;
+            }
+        }
+        else if (isRelativePath) {
+            // УСТАРЕВШИЙ СЛУЧАЙ: относительный путь /media/... (для обратной совместимости)
+            // В новой версии все файлы должны быть полными URL из R2
+            logger.warn(`[sendMediaByChatId] ⚠️ Используется устаревший относительный путь: ${mediaPath}`);
+            logger.warn(`[sendMediaByChatId] Рекомендуется использовать полный URL из R2`);
+            const fullUrl = `${req.protocol}://${req.get('host')}${mediaPath}`;
             switch (mediaType) {
                 case 'image':
                     messageContent = {
@@ -367,9 +401,9 @@ const sendMediaByChatId = (req, res) => __awaiter(void 0, void 0, void 0, functi
         }
         // 7. Отправка медиафайла с информацией о файле
         const sentMessage = yield (0, baileys_1.sendMessage)(sock, normalizedReceiverJid, messageContent, organizationId, organizationPhoneId, senderJid, userId, {
-            mediaUrl: isUrl ? (mediaPath.startsWith('/') ? `${req.protocol}://${req.get('host')}${mediaPath}` : mediaPath) : undefined,
-            filename: filename || (isUrl ? undefined : require('path').basename(mediaPath)),
-            size: isUrl ? undefined : require('fs').statSync(require('path').isAbsolute(mediaPath) ? mediaPath : require('path').join(process.cwd(), mediaPath)).size
+            mediaUrl: isFullUrl ? mediaPath : (isRelativePath ? `${req.protocol}://${req.get('host')}${mediaPath}` : undefined),
+            filename: filename || (!isFullUrl && !isRelativePath ? require('path').basename(mediaPath) : undefined),
+            size: !isFullUrl && !isRelativePath ? require('fs').statSync(require('path').isAbsolute(mediaPath) ? mediaPath : require('path').join(process.cwd(), mediaPath)).size : undefined
         });
         if (!sentMessage) {
             logger.error(`[sendMediaByChatId] Медиафайл не был отправлен`);

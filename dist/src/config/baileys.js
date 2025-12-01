@@ -65,7 +65,6 @@ const authStorage_1 = require("./authStorage");
 const qrcode_terminal_1 = __importDefault(require("qrcode-terminal"));
 const pino_1 = __importDefault(require("pino"));
 const buffer_1 = require("buffer");
-const fs = __importStar(require("fs/promises")); // Для работы с файловой системой (удаление папок)
 const path_1 = __importDefault(require("path")); // Для работы с путями файлов
 const logger = (0, pino_1.default)({ level: 'info' });
 // Глобальная Map для хранения активных экземпляров WASocket по organizationPhoneId
@@ -78,11 +77,11 @@ const badDecryptErrorCount = new Map();
 const MAX_BAD_DECRYPT_ERRORS = 5; // Максимум ошибок перед сбросом сессии (больше чем MAC, т.к. менее критично)
 // --- НОВАЯ ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ---
 /**
- * Скачивает медиа из сообщения и сохраняет его локально.
+ * Скачивает медиа из сообщения и сохраняет его в хранилище (R2/S3/Local).
  * @param messageContent Содержимое сообщения (например, imageMessage).
  * @param type Тип медиа ('image', 'video', 'audio', 'document').
  * @param originalFilename Имя файла (для документов).
- * @returns Путь к сохраненному файлу для использования в URL.
+ * @returns URL к сохраненному файлу.
  */
 function downloadAndSaveMedia(messageContent, type, originalFilename) {
     return __awaiter(this, void 0, void 0, function* () {
@@ -106,15 +105,14 @@ function downloadAndSaveMedia(messageContent, type, originalFilename) {
                 }
                 finally { if (e_1) throw e_1.error; }
             }
-            const mediaDir = path_1.default.join(__dirname, '..', '..', 'public', 'media');
-            yield fs.mkdir(mediaDir, { recursive: true });
             const extension = path_1.default.extname(originalFilename || '') || `.${((_d = messageContent.mimetype) === null || _d === void 0 ? void 0 : _d.split('/')[1]) || 'bin'}`;
-            const uniqueFilename = `${Date.now()}-${Math.round(Math.random() * 1E9)}${extension}`;
-            const filePath = path_1.default.join(mediaDir, uniqueFilename);
-            yield fs.writeFile(filePath, buffer);
-            logger.info(`✅ Медиафайл сохранен: ${filePath}`);
-            // Возвращаем относительный URL-путь
-            return `/media/${uniqueFilename}`;
+            const mimetype = messageContent.mimetype || 'application/octet-stream';
+            const filename = originalFilename || `file-${Date.now()}${extension}`;
+            // Используем универсальный storage service
+            const { saveMedia } = yield Promise.resolve().then(() => __importStar(require('../services/storageService')));
+            const mediaUrl = yield saveMedia(buffer, filename, mimetype);
+            logger.info(`✅ Медиафайл сохранен: ${mediaUrl}`);
+            return mediaUrl;
         }
         catch (error) {
             logger.error('❌ Ошибка при скачивании или сохранении медиа:', error);
