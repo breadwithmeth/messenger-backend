@@ -224,25 +224,30 @@ function handleIncomingMessage(telegram, msg, organizationId, botId) {
             const messageId = msg.message_id;
             // Создаём или находим чат
             const chat = yield ensureTelegramChat(organizationId, botId, chatId, userId, username, firstName, lastName);
-            // --- АВТОМАТИЧЕСКОЕ СОЗДАНИЕ КЛИЕНТА ---
-            try {
-                logger.info(`👤 Проверка клиента Telegram для UserID: ${userId}...`);
-                const { ensureTelegramClient, linkClientToChat } = yield Promise.resolve().then(() => __importStar(require('./clientService')));
-                if (userId) {
-                    const client = yield ensureTelegramClient(organizationId, userId, username, firstName, lastName);
-                    logger.info(`✅ Клиент Telegram обработан: ${client.name} (ID: ${client.id})`);
-                    // Связываем клиента с чатом
-                    yield linkClientToChat(client.id, chat.id);
-                    logger.info(`🔗 Клиент #${client.id} связан с Telegram чатом #${chat.id}`);
-                }
-                else {
-                    logger.warn(`⚠️ Отсутствует userId для создания клиента Telegram`);
-                }
-            }
-            catch (clientError) {
-                logger.error(`⚠️ Ошибка при создании клиента Telegram для ${username || userId}:`, clientError);
-                // Продолжаем обработку сообщения даже если создание клиента не удалось
-            }
+            // --- АВТОМАТИЧЕСКОЕ СОЗДАНИЕ КЛИЕНТА (ВРЕМЕННО ОТКЛЮЧЕНО) ---
+            // try {
+            //   logger.info(`👤 Проверка клиента Telegram для UserID: ${userId}...`);
+            //   const { ensureTelegramClient, linkClientToChat } = await import('./clientService');
+            //   if (userId) {
+            //     const client = await ensureTelegramClient(
+            //       organizationId,
+            //       userId,
+            //       username,
+            //       firstName,
+            //       lastName
+            //     );
+            //     logger.info(`✅ Клиент Telegram обработан: ${client.name} (ID: ${client.id})`);
+            //     
+            //     // Связываем клиента с чатом
+            //     await linkClientToChat(client.id, chat.id);
+            //     logger.info(`🔗 Клиент #${client.id} связан с Telegram чатом #${chat.id}`);
+            //   } else {
+            //     logger.warn(`⚠️ Отсутствует userId для создания клиента Telegram`);
+            //   }
+            // } catch (clientError) {
+            //   logger.error(`⚠️ Ошибка при создании клиента Telegram для ${username || userId}:`, clientError);
+            //   // Продолжаем обработку сообщения даже если создание клиента не удалось
+            // }
             // Определяем тип и содержимое сообщения
             let messageType = 'text';
             let content = '';
