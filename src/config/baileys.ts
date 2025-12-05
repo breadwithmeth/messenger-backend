@@ -728,10 +728,28 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
       logger.info(`🔄 Счетчики ошибок сброшены для organizationPhoneId: ${organizationPhoneId}`);
       
       // Обновляем статус в БД на 'connected', сохраняем фактический JID и очищаем QR-код
-      await prisma.organizationPhone.update({
-          where: { id: organizationPhoneId },
-          data: { status: 'connected', phoneJid: currentSock?.user?.id || phoneJid, lastConnectedAt: new Date(), qrCode: null }, 
+      const actualPhoneJid = currentSock?.user?.id || phoneJid;
+      
+      // Проверяем, не используется ли этот phoneJid другим телефоном
+      const existingPhone = await prisma.organizationPhone.findFirst({
+        where: {
+          phoneJid: actualPhoneJid,
+          id: { not: organizationPhoneId }
+        }
       });
+      
+      if (existingPhone) {
+        logger.warn(`⚠️ PhoneJid ${actualPhoneJid} уже используется другим телефоном (ID: ${existingPhone.id}). Обновляем только статус.`);
+        await prisma.organizationPhone.update({
+          where: { id: organizationPhoneId },
+          data: { status: 'connected', lastConnectedAt: new Date(), qrCode: null }
+        });
+      } else {
+        await prisma.organizationPhone.update({
+          where: { id: organizationPhoneId },
+          data: { status: 'connected', phoneJid: actualPhoneJid, lastConnectedAt: new Date(), qrCode: null }
+        });
+      }
     }
   });
 

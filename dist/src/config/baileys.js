@@ -723,10 +723,27 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                 badDecryptErrorCount.delete(organizationPhoneId);
                 logger.info(`🔄 Счетчики ошибок сброшены для organizationPhoneId: ${organizationPhoneId}`);
                 // Обновляем статус в БД на 'connected', сохраняем фактический JID и очищаем QR-код
-                yield authStorage_1.prisma.organizationPhone.update({
-                    where: { id: organizationPhoneId },
-                    data: { status: 'connected', phoneJid: ((_f = currentSock === null || currentSock === void 0 ? void 0 : currentSock.user) === null || _f === void 0 ? void 0 : _f.id) || phoneJid, lastConnectedAt: new Date(), qrCode: null },
+                const actualPhoneJid = ((_f = currentSock === null || currentSock === void 0 ? void 0 : currentSock.user) === null || _f === void 0 ? void 0 : _f.id) || phoneJid;
+                // Проверяем, не используется ли этот phoneJid другим телефоном
+                const existingPhone = yield authStorage_1.prisma.organizationPhone.findFirst({
+                    where: {
+                        phoneJid: actualPhoneJid,
+                        id: { not: organizationPhoneId }
+                    }
                 });
+                if (existingPhone) {
+                    logger.warn(`⚠️ PhoneJid ${actualPhoneJid} уже используется другим телефоном (ID: ${existingPhone.id}). Обновляем только статус.`);
+                    yield authStorage_1.prisma.organizationPhone.update({
+                        where: { id: organizationPhoneId },
+                        data: { status: 'connected', lastConnectedAt: new Date(), qrCode: null }
+                    });
+                }
+                else {
+                    yield authStorage_1.prisma.organizationPhone.update({
+                        where: { id: organizationPhoneId },
+                        data: { status: 'connected', phoneJid: actualPhoneJid, lastConnectedAt: new Date(), qrCode: null }
+                    });
+                }
             }
         }));
         // Обработчик обновления учетных данных
