@@ -28,20 +28,29 @@ const verifyWebhook = (req, res) => __awaiter(void 0, void 0, void 0, function* 
         const mode = req.query['hub.mode'];
         const token = req.query['hub.verify_token'];
         const challenge = req.query['hub.challenge'];
+        logger.info('🔍 WABA: Webhook verification request', {
+            mode,
+            receivedToken: token,
+            challenge,
+            expectedToken: process.env.WABA_VERIFY_TOKEN
+        });
         // Получаем verify token из параметра или переменной окружения
         const expectedToken = process.env.WABA_VERIFY_TOKEN || 'your_verify_token';
         if (mode === 'subscribe' && token === expectedToken) {
             logger.info('✅ WABA: Webhook verification successful');
-            res.status(200).send(challenge);
+            return res.status(200).send(challenge);
         }
         else {
-            logger.warn('⚠️ WABA: Webhook verification failed');
-            res.sendStatus(403);
+            logger.warn('⚠️ WABA: Webhook verification failed', {
+                modeMatch: mode === 'subscribe',
+                tokenMatch: token === expectedToken
+            });
+            return res.sendStatus(403);
         }
     }
     catch (error) {
         logger.error('❌ WABA: Webhook verification error:', error);
-        res.sendStatus(500);
+        return res.sendStatus(500);
     }
 });
 exports.verifyWebhook = verifyWebhook;
