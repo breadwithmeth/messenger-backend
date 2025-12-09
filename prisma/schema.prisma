@@ -278,6 +278,14 @@ model OrganizationPhone {
   updatedAt       DateTime       @updatedAt @default(now()) // <-- Добавлено @default(now())
                                                            // @updatedAt уже автоматически обновляет,
                                                            // но @default(now()) помогает при миграции для существующих строк.
+  
+  // WABA (WhatsApp Business API) конфигурация
+  connectionType  String         @default("baileys") // baileys | waba
+  wabaAccessToken String?        // Access Token для WABA
+  wabaPhoneNumberId String?      // Phone Number ID в WABA
+  wabaId          String?        // WhatsApp Business Account ID
+  wabaApiVersion  String?        @default("v21.0") // Версия API (v21.0, v20.0, etc.)
+  wabaVerifyToken String?        // Token для верификации webhook
 
   chats           Chat[] // Связь с моделью Chat
   messages        Message[] // Связь с моделью Message

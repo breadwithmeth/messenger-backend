@@ -111,7 +111,7 @@ function downloadAndSaveMedia(messageContent, type, originalFilename) {
             // Используем универсальный storage service
             const { saveMedia } = yield Promise.resolve().then(() => __importStar(require('../services/storageService')));
             const mediaUrl = yield saveMedia(buffer, filename, mimetype);
-            logger.info(`✅ Медиафайл сохранен: ${mediaUrl}`);
+            // logger.info(`✅ Медиафайл сохранен: ${mediaUrl}`);
             return mediaUrl;
         }
         catch (error) {
@@ -129,7 +129,7 @@ function downloadAndSaveMedia(messageContent, type, originalFilename) {
 function closeSession(organizationPhoneId, phoneJid, reason) {
     return __awaiter(this, void 0, void 0, function* () {
         const key = phoneJid.split('@')[0].split(':')[0];
-        logger.warn(`🚪 Закрытие сессии для ${phoneJid}. Причина: ${reason}`);
+        // logger.warn(`🚪 Закрытие сессии для ${phoneJid}. Причина: ${reason}`);
         try {
             // Получаем сокет
             const sock = socks.get(organizationPhoneId);
@@ -138,28 +138,28 @@ function closeSession(organizationPhoneId, phoneJid, reason) {
                 try {
                     if (sock.ws.readyState === 1) { // OPEN
                         yield sock.end(new Error(reason));
-                        logger.info(`✅ WebSocket соединение закрыто для ${phoneJid}`);
+                        // logger.info(`✅ WebSocket соединение закрыто для ${phoneJid}`);
                     }
                     else {
-                        logger.info(`ℹ️ WebSocket уже закрыт (state: ${sock.ws.readyState})`);
+                        // logger.info(`ℹ️ WebSocket уже закрыт (state: ${(sock.ws as any).readyState})`);
                     }
                 }
                 catch (wsError) {
-                    logger.error(`⚠️ Ошибка при закрытии WebSocket:`, wsError);
+                    // logger.error(`⚠️ Ошибка при закрытии WebSocket:`, wsError);
                     // Продолжаем даже если WebSocket не закрылся корректно
                 }
                 // Удаляем сокет из Map
                 socks.delete(organizationPhoneId);
-                logger.info(`✅ Сокет удален из Map для organizationPhoneId: ${organizationPhoneId}`);
+                // logger.info(`✅ Сокет удален из Map для organizationPhoneId: ${organizationPhoneId}`);
             }
             else {
-                logger.info(`ℹ️ Сокет не найден в Map для organizationPhoneId: ${organizationPhoneId}`);
+                // logger.info(`ℹ️ Сокет не найден в Map для organizationPhoneId: ${organizationPhoneId}`);
             }
             // Очищаем счетчик ошибок
             badMacErrorCount.delete(organizationPhoneId);
         }
         catch (error) {
-            logger.error(`❌ Ошибка при закрытии сессии для ${phoneJid}:`, error);
+            // logger.error(`❌ Ошибка при закрытии сессии для ${phoneJid}:`, error);
             // Принудительно удаляем из Map даже при ошибке
             socks.delete(organizationPhoneId);
             badMacErrorCount.delete(organizationPhoneId);
@@ -180,9 +180,9 @@ function handleBadDecryptError(organizationId, organizationPhoneId, phoneJid) {
         // Увеличиваем счетчик ошибок
         const currentCount = badDecryptErrorCount.get(organizationPhoneId) || 0;
         badDecryptErrorCount.set(organizationPhoneId, currentCount + 1);
-        logger.warn(`⚠️ Bad Decrypt error #${currentCount + 1} для ${phoneJid}`);
+        // logger.warn(`⚠️ Bad Decrypt error #${currentCount + 1} для ${phoneJid}`);
         if (currentCount + 1 >= MAX_BAD_DECRYPT_ERRORS) {
-            logger.error(`❌ Достигнут лимит Bad Decrypt ошибок (${MAX_BAD_DECRYPT_ERRORS}) для ${phoneJid}. Полный выход из сессии.`);
+            // logger.error(`❌ Достигнут лимит Bad Decrypt ошибок (${MAX_BAD_DECRYPT_ERRORS}) для ${phoneJid}. Полный выход из сессии.`);
             try {
                 // 1. Корректно закрываем сессию
                 yield closeSession(organizationPhoneId, phoneJid, `Bad Decrypt error limit reached (${MAX_BAD_DECRYPT_ERRORS} errors)`);
@@ -193,7 +193,7 @@ function handleBadDecryptError(organizationId, organizationPhoneId, phoneJid) {
                         phoneJid: key,
                     }
                 });
-                logger.info(`🗑️ Удалено ${deletedCount.count} записей авторизации для ${key}`);
+                // logger.info(`🗑️ Удалено ${deletedCount.count} записей авторизации для ${key}`);
                 // 3. Обновляем статус телефона на 'logged_out'
                 yield authStorage_1.prisma.organizationPhone.update({
                     where: { id: organizationPhoneId },
@@ -203,8 +203,8 @@ function handleBadDecryptError(organizationId, organizationPhoneId, phoneJid) {
                         lastConnectedAt: new Date(),
                     },
                 });
-                logger.info(`📱 Статус телефона ${key} обновлен на 'logged_out'`);
-                logger.info(`✅ Сессия для ${phoneJid} полностью завершена из-за повторяющихся Bad Decrypt ошибок. Требуется повторное QR-сканирование.`);
+                // logger.info(`📱 Статус телефона ${key} обновлен на 'logged_out'`);
+                // logger.info(`✅ Сессия для ${phoneJid} полностью завершена из-за повторяющихся Bad Decrypt ошибок. Требуется повторное QR-сканирование.`);
                 return false;
             }
             catch (e) {
@@ -225,7 +225,7 @@ function handleBadDecryptError(organizationId, organizationPhoneId, phoneJid) {
                     }
                 }
             });
-            logger.info(`✅ Удалено ${deletedCount.count} поврежденных ключей app state для ${key}. Соединение продолжит работу.`);
+            // logger.info(`✅ Удалено ${deletedCount.count} поврежденных ключей app state для ${key}. Соединение продолжит работу.`);
             return true;
         }
         catch (e) {
@@ -248,9 +248,9 @@ function handleBadMacError(organizationId, organizationPhoneId, phoneJid) {
         // Увеличиваем счетчик ошибок
         const currentCount = badMacErrorCount.get(organizationPhoneId) || 0;
         badMacErrorCount.set(organizationPhoneId, currentCount + 1);
-        logger.warn(`⚠️ Bad MAC error #${currentCount + 1} для ${phoneJid}`);
+        // logger.warn(`⚠️ Bad MAC error #${currentCount + 1} для ${phoneJid}`);
         if (currentCount + 1 >= MAX_BAD_MAC_ERRORS) {
-            logger.error(`❌ Достигнут лимит Bad MAC ошибок (${MAX_BAD_MAC_ERRORS}) для ${phoneJid}. Полный выход из сессии.`);
+            // logger.error(`❌ Достигнут лимит Bad MAC ошибок (${MAX_BAD_MAC_ERRORS}) для ${phoneJid}. Полный выход из сессии.`);
             try {
                 // 1. Корректно закрываем сессию
                 yield closeSession(organizationPhoneId, phoneJid, `Bad MAC error limit reached (${MAX_BAD_MAC_ERRORS} errors)`);
@@ -261,7 +261,7 @@ function handleBadMacError(organizationId, organizationPhoneId, phoneJid) {
                         phoneJid: key,
                     }
                 });
-                logger.info(`🗑️ Удалено ${deletedCount.count} записей авторизации для ${key}`);
+                // logger.info(`🗑️ Удалено ${deletedCount.count} записей авторизации для ${key}`);
                 // 3. Обновляем статус телефона на 'logged_out'
                 yield authStorage_1.prisma.organizationPhone.update({
                     where: { id: organizationPhoneId },
@@ -271,8 +271,8 @@ function handleBadMacError(organizationId, organizationPhoneId, phoneJid) {
                         lastConnectedAt: new Date(),
                     },
                 });
-                logger.info(`📱 Статус телефона ${key} обновлен на 'logged_out'`);
-                logger.info(`✅ Сессия для ${phoneJid} полностью завершена. Требуется повторное QR-сканирование.`);
+                // logger.info(`📱 Статус телефона ${key} обновлен на 'logged_out'`);
+                // logger.info(`✅ Сессия для ${phoneJid} полностью завершена. Требуется повторное QR-сканирование.`);
                 return false;
             }
             catch (e) {
@@ -295,7 +295,7 @@ function handleBadMacError(organizationId, organizationPhoneId, phoneJid) {
                     ]
                 }
             });
-            logger.info(`✅ Удалено ${deletedCount.count} поврежденных ключей сессий для ${key}. Попытка восстановления...`);
+            // logger.info(`✅ Удалено ${deletedCount.count} поврежденных ключей сессий для ${key}. Попытка восстановления...`);
             return true;
         }
         catch (e) {
@@ -382,7 +382,7 @@ function ensureChat(organizationId, organizationPhoneId, receivingPhoneJid, remo
                             lastMessageAt: new Date(),
                         },
                     });
-                    logger.info(`🔄 Обновлён чат #${chat.id}: установлен receivingPhoneJid=${myJidNormalized} вместо пустого (remoteJid=${normalizedRemoteJid}).`);
+                    // logger.info(`🔄 Обновлён чат #${chat.id}: установлен receivingPhoneJid=${myJidNormalized} вместо пустого (remoteJid=${normalizedRemoteJid}).`);
                 }
             }
             // 4) Если по-прежнему не нашли — создаём новый
@@ -413,7 +413,7 @@ function ensureChat(organizationId, organizationPhoneId, receivingPhoneJid, remo
                             priority: 'medium',
                         },
                     });
-                    logger.info(`✅ Создан новый чат для JID: ${normalizedRemoteJid} (Ваш номер: ${myJidNormalized || '(пусто)'}, Организация: ${organizationId}, Phone ID: ${organizationPhoneId}, ID чата: ${chat.id}, Тикет #${nextTicketNumber})`);
+                    // logger.info(`✅ Создан новый чат для JID: ${normalizedRemoteJid} (Ваш номер: ${myJidNormalized || '(пусто)'}, Организация: ${organizationId}, Phone ID: ${organizationPhoneId}, ID чата: ${chat.id}, Тикет #${nextTicketNumber})`);
                 }
                 catch (e) {
                     // Возможна гонка и уникальный конфликт — пробуем перечитать
@@ -428,7 +428,7 @@ function ensureChat(organizationId, organizationPhoneId, receivingPhoneJid, remo
                         });
                         if (existing) {
                             chat = existing;
-                            logger.info(`♻️ Найден уже существующий чат после конфликта уникальности: #${chat.id}`);
+                            // logger.info(`♻️ Найден уже существующий чат после конфликта уникальности: #${chat.id}`);
                         }
                         else {
                             throw e;
@@ -462,7 +462,7 @@ function ensureChat(organizationId, organizationPhoneId, receivingPhoneJid, remo
                     updateData.priority = 'medium';
                     updateData.assignedUserId = null; // Сбрасываем назначение
                     updateData.closedAt = null;
-                    logger.info(`🔄 Чат #${chat.id} был закрыт - создан новый тикет #${nextTicketNumber} (статус изменен: closed → new)`);
+                    // logger.info(`🔄 Чат #${chat.id} был закрыт - создан новый тикет #${nextTicketNumber} (статус изменен: closed → new)`);
                 }
                 yield authStorage_1.prisma.chat.update({
                     where: { id: chat.id },
@@ -505,21 +505,21 @@ function useDBAuthState(organizationId, phoneJid) {
                 // Проверка на полноту данных
                 if (parsedCreds.noiseKey && parsedCreds.signedIdentityKey && parsedCreds.registered !== undefined) {
                     creds = parsedCreds;
-                    logger.info(`✅ Учетные данные (creds) успешно загружены из БД для ${key}.`);
+                    // logger.info(`✅ Учетные данные (creds) успешно загружены из БД для ${key}.`);
                 }
                 else {
-                    logger.warn(`⚠️ Загруженные creds неполны для ${key}. Инициализация новых.`);
+                    // logger.warn(`⚠️ Загруженные creds неполны для ${key}. Инициализация новых.`);
                     creds = (0, baileys_1.initAuthCreds)();
                 }
             }
             catch (e) {
-                logger.error(`⚠️ Ошибка парсинга creds из БД для ${key}. Инициализация новых.`, e);
+                // logger.error(`⚠️ Ошибка парсинга creds из БД для ${key}. Инициализация новых.`, e);
                 creds = (0, baileys_1.initAuthCreds)();
             }
         }
         else {
             creds = (0, baileys_1.initAuthCreds)();
-            logger.info(`creds не найдены в БД для ${key}, инициализация новых.`);
+            // logger.info(`creds не найдены в БД для ${key}, инициализация новых.`);
         }
         // 2. Создание хранилища ключей (SignalStore)
         const keys = {
@@ -587,7 +587,7 @@ function useDBAuthState(organizationId, phoneJid) {
                 keys: (0, baileys_1.makeCacheableSignalKeyStore)(keys, logger),
             },
             saveCreds: () => __awaiter(this, void 0, void 0, function* () {
-                logger.info(`🔐 Сохранение обновленных creds в БД для ${key}.`);
+                // logger.info(`🔐 Сохранение обновленных creds в БД для ${key}.`);
                 const base64Creds = buffer_1.Buffer.from(JSON.stringify(creds, baileys_1.BufferJSON.replacer), 'utf8').toString('base64');
                 yield authDB.set('creds', base64Creds, 'base64_json');
             }),
@@ -607,7 +607,7 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
         const { state, saveCreds } = yield useDBAuthState(organizationId, phoneJid);
         // Получаем последнюю версию WhatsApp Web API
         const { version } = yield (0, baileys_1.fetchLatestBaileysVersion)();
-        logger.info(`Используется WhatsApp Web API версии: ${version.join('.')}`);
+        // logger.info(`Используется WhatsApp Web API версии: ${version.join('.')}`);
         // Создаем новый экземпляр Baileys WASocket
         const currentSock = (0, baileys_1.default)({
             version,
@@ -654,15 +654,15 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
         socks.set(organizationPhoneId, currentSock);
         // Обработчик событий обновления соединения
         currentSock.ev.on('connection.update', (update) => __awaiter(this, void 0, void 0, function* () {
-            var _a, _b, _c, _d, _e, _f;
+            var _a, _b, _c;
             const { connection, lastDisconnect, qr } = update;
-            logger.info(`[ConnectionUpdate] Status for ${phoneJid}: connection=${connection}, QR_present=${!!qr}`);
-            if (lastDisconnect) {
-                logger.info(`[ConnectionUpdate] lastDisconnect for ${phoneJid}: reason=${((_b = (_a = lastDisconnect.error) === null || _a === void 0 ? void 0 : _a.output) === null || _b === void 0 ? void 0 : _b.statusCode) || ((_c = lastDisconnect.error) === null || _c === void 0 ? void 0 : _c.message) || 'Неизвестно'}`);
-            }
+            // logger.info(`[ConnectionUpdate] Status for ${phoneJid}: connection=${connection}, QR_present=${!!qr}`);
+            // if (lastDisconnect) {
+            //   logger.info(`[ConnectionUpdate] lastDisconnect for ${phoneJid}: reason=${(lastDisconnect.error as Boom)?.output?.statusCode || lastDisconnect.error?.message || 'Неизвестно'}`);
+            // }
             // Если получен QR-код
             if (qr) {
-                logger.info(`[ConnectionUpdate] QR code received for ${phoneJid}. Length: ${qr.length}`);
+                // logger.info(`[ConnectionUpdate] QR code received for ${phoneJid}. Length: ${qr.length}`);
                 // Сохраняем QR-код в БД и обновляем статус
                 yield authStorage_1.prisma.organizationPhone.update({
                     where: { id: organizationPhoneId },
@@ -679,25 +679,25 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                 console.log(`======================================================\n`);
             }
             else {
-                logger.info(`[ConnectionUpdate] No QR code in this update for ${phoneJid}.`);
+                // logger.info(`[ConnectionUpdate] No QR code in this update for ${phoneJid}.`);
             }
             // Если соединение закрыто
             if (connection === 'close') {
-                const shouldReconnect = ((_e = (_d = lastDisconnect === null || lastDisconnect === void 0 ? void 0 : lastDisconnect.error) === null || _d === void 0 ? void 0 : _d.output) === null || _e === void 0 ? void 0 : _e.statusCode) !== baileys_1.DisconnectReason.loggedOut;
-                logger.info(`[Connection] Соединение закрыто для ${phoneJid}. Причина: ${lastDisconnect === null || lastDisconnect === void 0 ? void 0 : lastDisconnect.error}. Переподключение: ${shouldReconnect}`);
+                const shouldReconnect = ((_b = (_a = lastDisconnect === null || lastDisconnect === void 0 ? void 0 : lastDisconnect.error) === null || _a === void 0 ? void 0 : _a.output) === null || _b === void 0 ? void 0 : _b.statusCode) !== baileys_1.DisconnectReason.loggedOut;
+                // logger.info(`[Connection] Соединение закрыто для ${phoneJid}. Причина: ${lastDisconnect?.error}. Переподключение: ${shouldReconnect}`);
                 // Удаляем сокет из Map перед попыткой переподключения или завершением
                 socks.delete(organizationPhoneId);
                 if (shouldReconnect) {
                     // Задержка перед попыткой переподключения
                     yield new Promise(resolve => setTimeout(resolve, 3000));
-                    logger.info(`[Connection] Попытка переподключения для ${phoneJid}...`);
+                    // logger.info(`[Connection] Попытка переподключения для ${phoneJid}...`);
                     // Рекурсивно вызываем startBaileys для создания новой сессии
                     startBaileys(organizationId, organizationPhoneId, phoneJid);
                 }
                 else {
-                    logger.error(`[Connection] Подключение для ${phoneJid} не будет переподключено (Logged out). Очистка данных сессии...`);
+                    // logger.error(`[Connection] Подключение для ${phoneJid} не будет переподключено (Logged out). Очистка данных сессии...`);
                     // --- ДОБАВЛЕНО: Детальный лог ошибки ---
-                    logger.error(`[Connection] Детали ошибки 'lastDisconnect' для ${phoneJid}:`, lastDisconnect);
+                    // logger.error(`[Connection] Детали ошибки 'lastDisconnect' для ${phoneJid}:`, lastDisconnect);
                     // --- ИСПРАВЛЕНО: Используем только номер для ключа, как в useDBAuthState ---
                     const key = phoneJid.split('@')[0].split(':')[0];
                     // Очищаем данные сессии из БД по правильному ключу
@@ -707,7 +707,7 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                             phoneJid: key, // Используем только номер
                         }
                     });
-                    logger.info(`✅ Данные сессии для ${key} удалены из БД.`);
+                    // logger.info(`✅ Данные сессии для ${key} удалены из БД.`);
                     // Обновляем статус в БД на 'logged_out' и очищаем QR-код
                     yield authStorage_1.prisma.organizationPhone.update({
                         where: { id: organizationPhoneId },
@@ -717,13 +717,13 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
             }
             else if (connection === 'open') {
                 // Если соединение открыто
-                logger.info(`✅ Подключено к WhatsApp для ${phoneJid} (Организация: ${organizationId}, Phone ID: ${organizationPhoneId})`);
+                // logger.info(`✅ Подключено к WhatsApp для ${phoneJid} (Организация: ${organizationId}, Phone ID: ${organizationPhoneId})`);
                 // Очищаем счетчики ошибок при успешном подключении
                 badMacErrorCount.delete(organizationPhoneId);
                 badDecryptErrorCount.delete(organizationPhoneId);
-                logger.info(`🔄 Счетчики ошибок сброшены для organizationPhoneId: ${organizationPhoneId}`);
+                // logger.info(`🔄 Счетчики ошибок сброшены для organizationPhoneId: ${organizationPhoneId}`);
                 // Обновляем статус в БД на 'connected', сохраняем фактический JID и очищаем QR-код
-                const actualPhoneJid = ((_f = currentSock === null || currentSock === void 0 ? void 0 : currentSock.user) === null || _f === void 0 ? void 0 : _f.id) || phoneJid;
+                const actualPhoneJid = ((_c = currentSock === null || currentSock === void 0 ? void 0 : currentSock.user) === null || _c === void 0 ? void 0 : _c.id) || phoneJid;
                 // Проверяем, не используется ли этот phoneJid другим телефоном
                 const existingPhone = yield authStorage_1.prisma.organizationPhone.findFirst({
                     where: {
@@ -732,7 +732,7 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                     }
                 });
                 if (existingPhone) {
-                    logger.warn(`⚠️ PhoneJid ${actualPhoneJid} уже используется другим телефоном (ID: ${existingPhone.id}). Обновляем только статус.`);
+                    // logger.warn(`⚠️ PhoneJid ${actualPhoneJid} уже используется другим телефоном (ID: ${existingPhone.id}). Обновляем только статус.`);
                     yield authStorage_1.prisma.organizationPhone.update({
                         where: { id: organizationPhoneId },
                         data: { status: 'connected', lastConnectedAt: new Date(), qrCode: null }
@@ -758,11 +758,11 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                 if (((_b = error === null || error === void 0 ? void 0 : error.message) === null || _b === void 0 ? void 0 : _b.includes('bad decrypt')) ||
                     ((_c = error === null || error === void 0 ? void 0 : error.message) === null || _c === void 0 ? void 0 : _c.includes('error:1C800064')) ||
                     (error === null || error === void 0 ? void 0 : error.name) === 'critical_unblock_low') {
-                    logger.warn(`⚠️ Обнаружена ошибка дешифрования app state для ${phoneJid}.`);
+                    // logger.warn(`⚠️ Обнаружена ошибка дешифрования app state для ${phoneJid}.`);
                     // Вызываем обработчик Bad Decrypt ошибки
                     const recovered = yield handleBadDecryptError(organizationId, organizationPhoneId, phoneJid);
                     if (!recovered) {
-                        logger.error(`❌ Не удалось восстановить сессию после повторяющихся Bad Decrypt ошибок для ${phoneJid}. Сессия закрыта.`);
+                        // logger.error(`❌ Не удалось восстановить сессию после повторяющихся Bad Decrypt ошибок для ${phoneJid}. Сессия закрыта.`);
                         // Сессия уже закрыта в handleBadDecryptError, не пытаемся переподключиться
                         return;
                     }
@@ -771,11 +771,11 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                 if (((_d = error === null || error === void 0 ? void 0 : error.message) === null || _d === void 0 ? void 0 : _d.includes('Bad MAC')) ||
                     ((_e = error === null || error === void 0 ? void 0 : error.message) === null || _e === void 0 ? void 0 : _e.includes('verifyMAC')) ||
                     ((_f = error === null || error === void 0 ? void 0 : error.stack) === null || _f === void 0 ? void 0 : _f.includes('libsignal'))) {
-                    logger.warn(`⚠️ Обнаружена ошибка Bad MAC (libsignal) для ${phoneJid}.`);
+                    // logger.warn(`⚠️ Обнаружена ошибка Bad MAC (libsignal) для ${phoneJid}.`);
                     // Вызываем обработчик Bad MAC ошибки
                     const recovered = yield handleBadMacError(organizationId, organizationPhoneId, phoneJid);
                     if (!recovered) {
-                        logger.error(`❌ Не удалось восстановить сессию после повторяющихся Bad MAC ошибок для ${phoneJid}. Сессия закрыта.`);
+                        // logger.error(`❌ Не удалось восстановить сессию после повторяющихся Bad MAC ошибок для ${phoneJid}. Сессия закрыта.`);
                         // Сессия уже закрыта в handleBadMacError, не пытаемся переподключиться
                         return;
                     }
@@ -785,13 +785,13 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
         // Совместимость с v7: обработчик обновлений LID маппинга (в 6.7.x событие не генерируется)
         try {
             (_b = (_a = currentSock.ev).on) === null || _b === void 0 ? void 0 : _b.call(_a, 'lid-mapping.update', (mapping) => {
-                logger.info(`[LID] lid-mapping.update: ${JSON.stringify(mapping)}`);
+                // logger.info(`[LID] lid-mapping.update: ${JSON.stringify(mapping)}`);
                 // Здесь можно задействовать currentSock.signalRepository?.lidMapping?.storeLIDPNMappings(mapping)
                 // но API может отличаться между версиями — оставляем как информативный лог
             });
         }
         catch (e) {
-            logger.debug('LID mapping event handler not supported in this version');
+            // logger.debug('LID mapping event handler not supported in this version');
         }
         // Обработчик получения новых сообщений
         currentSock.ev.on('messages.upsert', (_a) => __awaiter(this, [_a], void 0, function* ({ messages, type }) {
@@ -801,23 +801,23 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                     try {
                         // Пропускаем сообщения без контента или если это наше исходящее сообщение, не имеющее видимого контента
                         if (!msg.message) {
-                            logger.info(`[Message Upsert] Пропущено сообщение без контента (ID: ${msg.key.id})`);
+                            // logger.info(`[Message Upsert] Пропущено сообщение без контента (ID: ${msg.key.id})`);
                             continue;
                         }
                         if (msg.key.fromMe && !msg.message.conversation && !msg.message.extendedTextMessage && !msg.message.imageMessage && !msg.message.videoMessage && !msg.message.documentMessage && !msg.message.audioMessage && !msg.message.stickerMessage) {
-                            logger.info(`[Message Upsert] Пропущено исходящее системное сообщение (ID: ${msg.key.id})`);
+                            // logger.info(`[Message Upsert] Пропущено исходящее системное сообщение (ID: ${msg.key.id})`);
                             continue;
                         }
                         // v7: поддержка LID alt-идентификаторов. В 6.7.x этих полей нет, поэтому используем fallback.
                         const rawRemote = (_c = (_b = msg.key.remoteJidAlt) !== null && _b !== void 0 ? _b : msg.key.remoteJid) !== null && _c !== void 0 ? _c : '';
                         const remoteJid = (0, baileys_1.jidNormalizedUser)(rawRemote);
                         if (!remoteJid) {
-                            logger.warn('🚫 Сообщение без remoteJid, пропущено.');
+                            // logger.warn('🚫 Сообщение без remoteJid, пропущено.');
                             continue;
                         }
                         // Пропускаем широковещательные сообщения и статусы
                         if ((0, baileys_1.isJidBroadcast)(remoteJid) || remoteJid === 'status@broadcast') {
-                            logger.info(`Пропускаем широковещательное сообщение или статус от ${remoteJid}.`);
+                            // logger.info(`Пропускаем широковещательное сообщение или статус от ${remoteJid}.`);
                             continue;
                         }
                         try {
@@ -838,7 +838,10 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                             if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.conversation) {
                                 content = messageContent.conversation;
                                 messageType = "text";
-                                logger.info(`  [${messageType}] Содержимое: "${content}"`);
+                                // Логируем только входящие сообщения
+                                if (!msg.key.fromMe) {
+                                    logger.info(`📥 [${messageType}] Входящее: "${content}" от ${remoteJid}`);
+                                }
                             }
                             else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.extendedTextMessage) {
                                 content = messageContent.extendedTextMessage.text || undefined;
@@ -855,10 +858,15 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                                         ((_m = qm.videoMessage) === null || _m === void 0 ? void 0 : _m.caption) ||
                                         ((_o = qm.documentMessage) === null || _o === void 0 ? void 0 : _o.fileName) ||
                                         '[Медиафайл]'; // Плейсхолдер для медиа без текста
-                                    logger.info(`  [reply] Ответ на сообщение ID: ${quotedMessageId}`);
+                                    if (!msg.key.fromMe) {
+                                        logger.info(`  [reply] Ответ на сообщение ID: ${quotedMessageId}`);
+                                    }
                                 }
                                 // --- КОНЕЦ: ОБРАБОТКА ОТВЕТА ---
-                                logger.info(`  [${messageType}] Содержимое: "${content}"`);
+                                // Логируем только входящие сообщения
+                                if (!msg.key.fromMe) {
+                                    logger.info(`📥 [${messageType}] Входящее: "${content}" от ${remoteJid}`);
+                                }
                             }
                             else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.imageMessage) {
                                 messageType = "image";
@@ -867,14 +875,20 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                                 size = Number(messageContent.imageMessage.fileLength) || undefined;
                                 // --- СКАЧИВАНИЕ И СОХРАНЕНИЕ ФОТО ---
                                 mediaUrl = yield downloadAndSaveMedia(messageContent.imageMessage, 'image');
-                                logger.info(`  [${messageType}] Содержимое: "${content || 'без подписи'}". MIME: ${mimeType}. Размер: ${size}.`);
+                                // Логируем только входящие сообщения
+                                if (!msg.key.fromMe) {
+                                    logger.info(`📥 [${messageType}] Входящее: "${content || 'без подписи'}". MIME: ${mimeType}. Размер: ${size} от ${remoteJid}`);
+                                }
                             }
                             else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.videoMessage) {
                                 messageType = "video";
                                 content = messageContent.videoMessage.caption || undefined;
                                 mimeType = messageContent.videoMessage.mimetype || undefined;
                                 size = Number(messageContent.videoMessage.fileLength) || undefined;
-                                logger.info(`  [${messageType}] Содержимое: "${content || 'без подписи'}". MIME: ${mimeType}. Размер: ${size}.`);
+                                // Логируем только входящие сообщения
+                                if (!msg.key.fromMe) {
+                                    logger.info(`📥 [${messageType}] Входящее: "${content || 'без подписи'}". MIME: ${mimeType}. Размер: ${size} от ${remoteJid}`);
+                                }
                             }
                             else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.documentMessage) {
                                 messageType = "document";
@@ -883,7 +897,10 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                                 size = Number(messageContent.documentMessage.fileLength) || undefined;
                                 // --- СКАЧИВАНИЕ И СОХРАНЕНИЕ ДОКУМЕНТА ---
                                 mediaUrl = yield downloadAndSaveMedia(messageContent.documentMessage, 'document', filename);
-                                logger.info(`  [${messageType}] Документ: "${filename || 'без имени'}". MIME: ${mimeType}. Размер: ${size}.`);
+                                // Логируем только входящие сообщения
+                                if (!msg.key.fromMe) {
+                                    logger.info(`📥 [${messageType}] Входящее: Документ "${filename || 'без имени'}". MIME: ${mimeType}. Размер: ${size} от ${remoteJid}`);
+                                }
                             }
                             else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.audioMessage) {
                                 messageType = "audio";
@@ -891,49 +908,73 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                                 size = Number(messageContent.audioMessage.fileLength) || undefined;
                                 // --- СКАЧИВАНИЕ И СОХРАНЕНИЕ АУДИО ---
                                 mediaUrl = yield downloadAndSaveMedia(messageContent.audioMessage, 'audio');
-                                logger.info(`  [${messageType}] Аудио. MIME: ${mimeType}. Размер: ${size}.`);
+                                // Логируем только входящие сообщения
+                                if (!msg.key.fromMe) {
+                                    logger.info(`📥 [${messageType}] Входящее: Аудио. MIME: ${mimeType}. Размер: ${size} от ${remoteJid}`);
+                                }
                             }
                             else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.stickerMessage) {
                                 messageType = "sticker";
                                 mimeType = messageContent.stickerMessage.mimetype || undefined;
                                 size = Number(messageContent.stickerMessage.fileLength) || undefined;
-                                logger.info(`  [${messageType}] Стикер. MIME: ${mimeType}. Размер: ${size}.`);
+                                // Логируем только входящие сообщения
+                                if (!msg.key.fromMe) {
+                                    logger.info(`📥 [${messageType}] Входящее: Стикер. MIME: ${mimeType}. Размер: ${size} от ${remoteJid}`);
+                                }
                             }
                             else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.locationMessage) {
                                 messageType = "location";
                                 content = `Latitude: ${messageContent.locationMessage.degreesLatitude}, Longitude: ${messageContent.locationMessage.degreesLongitude}`;
-                                logger.info(`  [${messageType}] Локация: ${content}`);
+                                // Логируем только входящие сообщения
+                                if (!msg.key.fromMe) {
+                                    logger.info(`📥 [${messageType}] Входящее: Локация ${content} от ${remoteJid}`);
+                                }
                             }
                             else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.liveLocationMessage) {
                                 messageType = "live_location";
                                 content = `Live Location: Capt=${messageContent.liveLocationMessage.caption || 'N/A'}, Seq=${messageContent.liveLocationMessage.sequenceNumber}`;
-                                logger.info(`  [${messageType}] ${content}`);
+                                // Логируем только входящие сообщения
+                                if (!msg.key.fromMe) {
+                                    logger.info(`📥 [${messageType}] Входящее: ${content} от ${remoteJid}`);
+                                }
                             }
                             else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.contactMessage) {
                                 messageType = "contact";
                                 content = `Контакт: ${messageContent.contactMessage.displayName || messageContent.contactMessage.vcard}`;
-                                logger.info(`  [${messageType}] Контакт: ${content}`);
+                                // Логируем только входящие сообщения
+                                if (!msg.key.fromMe) {
+                                    logger.info(`📥 [${messageType}] Входящее: ${content} от ${remoteJid}`);
+                                }
                             }
                             else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.contactsArrayMessage) {
                                 messageType = "contacts_array";
                                 content = `Контакты: ${((_p = messageContent.contactsArrayMessage.contacts) === null || _p === void 0 ? void 0 : _p.map(c => c.displayName || c.vcard).join(', ')) || 'пусто'}`;
-                                logger.info(`  [${messageType}] Контакты: ${content}`);
+                                // Логируем только входящие сообщения
+                                if (!msg.key.fromMe) {
+                                    logger.info(`📥 [${messageType}] Входящее: ${content} от ${remoteJid}`);
+                                }
                             }
                             else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.reactionMessage) {
                                 messageType = "reaction";
                                 content = `Реакция "${messageContent.reactionMessage.text}" на сообщение ${(_q = messageContent.reactionMessage.key) === null || _q === void 0 ? void 0 : _q.id}`;
-                                logger.info(`  [${messageType}] ${content}`);
+                                // Логируем только входящие сообщения
+                                if (!msg.key.fromMe) {
+                                    logger.info(`📥 [${messageType}] Входящее: ${content} от ${remoteJid}`);
+                                }
                             }
                             else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.protocolMessage) {
                                 messageType = "protocol";
                                 content = `Системное сообщение (тип: ${messageContent.protocolMessage.type})`;
-                                logger.info(`  [${messageType}] ${content}`);
+                                // Не логируем системные сообщения
                             }
                             else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.call) {
                                 messageType = "call";
                                 const callId = messageContent.call.callKey ? buffer_1.Buffer.from(messageContent.call.callKey).toString('hex') : 'unknown';
                                 content = `Звонок от ${senderJid} (ID: ${callId})`;
-                                logger.info(`  [${messageType}] ${content}`);
+                                // Логируем только входящие звонки
+                                if (!msg.key.fromMe) {
+                                    logger.info(`📥 [${messageType}] Входящее: ${content}`);
+                                }
                             }
                             if (messageType === "unknown" && Object.keys(messageContent || {}).length > 0) {
                                 messageType = Object.keys(messageContent || {})[0];
@@ -1017,7 +1058,7 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                                         lastMessageAt: timestampDate,
                                     },
                                 });
-                                logger.info(`📬 Увеличен счетчик непрочитанных для чата ${chatId}`);
+                                // logger.info(`📬 Увеличен счетчик непрочитанных для чата ${chatId}`);
                             }
                             else {
                                 // Для исходящих сообщений только обновляем время последнего сообщения
@@ -1028,7 +1069,7 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                                     },
                                 });
                             }
-                            logger.info(`💾 Сообщение (тип: ${messageType}, ID: ${savedMessage.id}) сохранено в БД (JID собеседника: ${remoteJid}, Ваш номер: ${phoneJid}, chatId: ${savedMessage.chatId}).`);
+                            // logger.info(`💾 Сообщение (тип: ${messageType}, ID: ${savedMessage.id}) сохранено в БД (JID собеседника: ${remoteJid}, Ваш номер: ${phoneJid}, chatId: ${savedMessage.chatId}).`);
                         }
                         catch (error) {
                             // Обработка ошибки Bad MAC из libsignal
@@ -1086,16 +1127,14 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
  * @returns Экземпляр WASocket или null, если не найден.
  */
 function getBaileysSock(organizationPhoneId) {
-    var _a;
-    logger.info(`[getBaileysSock] Запрошен organizationPhoneId: ${organizationPhoneId}`);
-    logger.info(`[getBaileysSock] Ключи в socks Map: [${Array.from(socks.keys()).join(', ')}]`);
+    // logger.info(`[getBaileysSock] Запрошен organizationPhoneId: ${organizationPhoneId}`);
+    // logger.info(`[getBaileysSock] Ключи в socks Map: [${Array.from(socks.keys()).join(', ')}]`);
     const sock = socks.get(organizationPhoneId);
-    if (!sock) {
-        logger.warn(`[getBaileysSock] Сокет не найден для organizationPhoneId: ${organizationPhoneId}`);
-    }
-    else {
-        logger.info(`[getBaileysSock] Сокет найден для organizationPhoneId: ${organizationPhoneId}. JID сокета: ${((_a = sock.user) === null || _a === void 0 ? void 0 : _a.id) || 'Неизвестно'}`);
-    }
+    // if (!sock) {
+    //   logger.warn(`[getBaileysSock] Сокет не найден для organizationPhoneId: ${organizationPhoneId}`);
+    // } else {
+    //   logger.info(`[getBaileysSock] Сокет найден для organizationPhoneId: ${organizationPhoneId}. JID сокета: ${sock.user?.id || 'Неизвестно'}`);
+    // }
     return sock || null;
 }
 /**
