@@ -82,6 +82,7 @@ app.use('/api/organization-phones', organizationPhoneRoutes);
 app.use('/api/accounts', accountRoutes);
 app.use('/api/users', userRoutes); // <-- Добавить
 app.use('/api/clients', clientRoutes); // <-- API для клиентов организации
+app.use('/api/waba', wabaRoutes); // <-- ВАЖНО: ПЕРЕД /api, чтобы не перехватывался contactRoutes
 app.use('/api', contactRoutes);
 app.use('/api/chat-assignment', chatAssignmentRoutes); // Новые маршруты для назначения чатов
 app.use('/api/message-read', messageReadRoutes); // Новые маршруты для непрочитанных сообщений
@@ -91,7 +92,6 @@ console.log('✅ Unread маршруты подключены');
 app.use('/api/media', mediaRoutes); // Маршруты для загрузки и отправки медиафайлов
 app.use('/api/tickets', ticketRoutes); // Маршруты для тикет-системы
 app.use('/api/telegram', telegramRoutes); // <-- НОВОЕ: Маршруты для Telegram
-app.use('/api/waba', wabaRoutes); // <-- НОВОЕ: Маршруты для WhatsApp Business API
 
 // 404 JSON для несуществующих маршрутов
 app.use((req, res) => {

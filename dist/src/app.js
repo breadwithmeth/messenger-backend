@@ -76,6 +76,7 @@ app.use('/api/organization-phones', organizationPhoneRoutes_1.default);
 app.use('/api/accounts', accountRoutes_1.default);
 app.use('/api/users', userRoutes_1.default); // <-- Добавить
 app.use('/api/clients', clientRoutes_1.default); // <-- API для клиентов организации
+app.use('/api/waba', wabaRoutes_1.default); // <-- ВАЖНО: ПЕРЕД /api, чтобы не перехватывался contactRoutes
 app.use('/api', contactRoutes_1.default);
 app.use('/api/chat-assignment', chatAssignmentRoutes_1.default); // Новые маршруты для назначения чатов
 app.use('/api/message-read', messageReadRoutes_1.default); // Новые маршруты для непрочитанных сообщений
@@ -85,7 +86,6 @@ console.log('✅ Unread маршруты подключены');
 app.use('/api/media', mediaRoutes_1.default); // Маршруты для загрузки и отправки медиафайлов
 app.use('/api/tickets', ticketRoutes_1.default); // Маршруты для тикет-системы
 app.use('/api/telegram', telegramRoutes_1.default); // <-- НОВОЕ: Маршруты для Telegram
-app.use('/api/waba', wabaRoutes_1.default); // <-- НОВОЕ: Маршруты для WhatsApp Business API
 // 404 JSON для несуществующих маршрутов
 app.use((req, res) => {
     res.status(404).json({ error: 'Not Found', method: req.method, path: req.originalUrl });
