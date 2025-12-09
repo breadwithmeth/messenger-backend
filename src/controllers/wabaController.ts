@@ -84,10 +84,11 @@ async function processWebhookChange(change: any) {
     if (!value) return;
 
     const phoneNumberId = value.metadata?.phone_number_id;
+    const displayPhoneNumber = value.metadata?.display_phone_number;
     if (!phoneNumberId) return;
 
-    // Находим организационный телефон по WABA phoneNumberId
-    const orgPhone = await prisma.organizationPhone.findFirst({
+    // Находим или создаём организационный телефон по WABA phoneNumberId
+    let orgPhone = await prisma.organizationPhone.findFirst({
       where: {
         wabaPhoneNumberId: phoneNumberId,
         connectionType: 'waba',
@@ -95,8 +96,38 @@ async function processWebhookChange(change: any) {
     });
 
     if (!orgPhone) {
-      logger.warn(`⚠️ WABA: OrganizationPhone not found for phoneNumberId: ${phoneNumberId}`);
-      return;
+      logger.info(`🆕 WABA: Auto-creating OrganizationPhone for phoneNumberId: ${phoneNumberId}`);
+      
+      // Получаем первую организацию или создаём дефолтную
+      let organization = await prisma.organization.findFirst();
+      
+      if (!organization) {
+        logger.info('🆕 WABA: Creating default organization');
+        organization = await prisma.organization.create({
+          data: {
+            name: 'Default Organization',
+          },
+        });
+      }
+
+      // Создаём новый OrganizationPhone с данными из webhook
+      orgPhone = await prisma.organizationPhone.create({
+        data: {
+          organizationId: organization.id,
+          displayName: `WABA ${displayPhoneNumber || phoneNumberId}`,
+          phoneJid: `${displayPhoneNumber?.replace(/^\+/, '') || phoneNumberId}@s.whatsapp.net`,
+          status: 'connected',
+          connectionType: 'waba',
+          wabaPhoneNumberId: phoneNumberId,
+          wabaAccessToken: process.env.WABA_ACCESS_TOKEN || null,
+          wabaId: process.env.WABA_ID || null,
+          wabaApiVersion: 'v21.0',
+          wabaVerifyToken: process.env.WABA_VERIFY_TOKEN || null,
+          lastConnectedAt: new Date(),
+        },
+      });
+      
+      logger.info(`✅ WABA: Created OrganizationPhone id=${orgPhone.id} for ${displayPhoneNumber}`);
     }
 
     // Обработка статусов сообщений

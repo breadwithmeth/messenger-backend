@@ -82,24 +82,51 @@ exports.handleWebhook = handleWebhook;
  */
 function processWebhookChange(change) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a;
+        var _a, _b;
         try {
             const value = change.value;
             if (!value)
                 return;
             const phoneNumberId = (_a = value.metadata) === null || _a === void 0 ? void 0 : _a.phone_number_id;
+            const displayPhoneNumber = (_b = value.metadata) === null || _b === void 0 ? void 0 : _b.display_phone_number;
             if (!phoneNumberId)
                 return;
-            // Находим организационный телефон по WABA phoneNumberId
-            const orgPhone = yield authStorage_1.prisma.organizationPhone.findFirst({
+            // Находим или создаём организационный телефон по WABA phoneNumberId
+            let orgPhone = yield authStorage_1.prisma.organizationPhone.findFirst({
                 where: {
                     wabaPhoneNumberId: phoneNumberId,
                     connectionType: 'waba',
                 },
             });
             if (!orgPhone) {
-                logger.warn(`⚠️ WABA: OrganizationPhone not found for phoneNumberId: ${phoneNumberId}`);
-                return;
+                logger.info(`🆕 WABA: Auto-creating OrganizationPhone for phoneNumberId: ${phoneNumberId}`);
+                // Получаем первую организацию или создаём дефолтную
+                let organization = yield authStorage_1.prisma.organization.findFirst();
+                if (!organization) {
+                    logger.info('🆕 WABA: Creating default organization');
+                    organization = yield authStorage_1.prisma.organization.create({
+                        data: {
+                            name: 'Default Organization',
+                        },
+                    });
+                }
+                // Создаём новый OrganizationPhone с данными из webhook
+                orgPhone = yield authStorage_1.prisma.organizationPhone.create({
+                    data: {
+                        organizationId: organization.id,
+                        displayName: `WABA ${displayPhoneNumber || phoneNumberId}`,
+                        phoneJid: `${(displayPhoneNumber === null || displayPhoneNumber === void 0 ? void 0 : displayPhoneNumber.replace(/^\+/, '')) || phoneNumberId}@s.whatsapp.net`,
+                        status: 'connected',
+                        connectionType: 'waba',
+                        wabaPhoneNumberId: phoneNumberId,
+                        wabaAccessToken: process.env.WABA_ACCESS_TOKEN || null,
+                        wabaId: process.env.WABA_ID || null,
+                        wabaApiVersion: 'v21.0',
+                        wabaVerifyToken: process.env.WABA_VERIFY_TOKEN || null,
+                        lastConnectedAt: new Date(),
+                    },
+                });
+                logger.info(`✅ WABA: Created OrganizationPhone id=${orgPhone.id} for ${displayPhoneNumber}`);
             }
             // Обработка статусов сообщений
             if (value.statuses) {
