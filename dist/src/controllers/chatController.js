@@ -131,6 +131,7 @@ function listChats(req, res) {
                             id: true,
                             phoneJid: true,
                             displayName: true,
+                            connectionType: true, // baileys | waba
                         },
                     },
                     // Telegram specific

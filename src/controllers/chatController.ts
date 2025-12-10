@@ -139,6 +139,7 @@ export async function listChats(req: Request, res: Response) {
             id: true,
             phoneJid: true,
             displayName: true,
+            connectionType: true, // baileys | waba
           },
         },
         // Telegram specific
