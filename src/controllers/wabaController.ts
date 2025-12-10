@@ -524,7 +524,7 @@ export const operatorSendMessage = async (req: Request, res: Response) => {
         remoteJid: chat.remoteJid,
         senderJid: chat.organizationPhone.phoneJid,
         fromMe: true,
-        content: type === 'text' ? message : caption || '',
+        content: messageContent,
         mediaUrl: mediaUrl || null,
         type: type,
         timestamp: new Date(),

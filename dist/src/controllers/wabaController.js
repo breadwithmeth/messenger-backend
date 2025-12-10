@@ -418,7 +418,7 @@ exports.sendMessage = sendMessage;
 const operatorSendMessage = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b, _c, _d;
     try {
-        const { chatId, message, type = 'text', mediaUrl, caption, filename } = req.body;
+        const { chatId, message, type = 'text', mediaUrl, caption, filename, template } = req.body;
         if (!chatId || !message) {
             return res.status(400).json({ error: 'chatId and message are required' });
         }
@@ -447,25 +447,36 @@ const operatorSendMessage = (req, res) => __awaiter(void 0, void 0, void 0, func
         }
         // Отправляем сообщение в зависимости от типа
         let result;
+        let messageContent = '';
         const recipientPhone = chat.remoteJid.replace('@s.whatsapp.net', '');
         switch (type) {
             case 'text':
                 result = yield wabaService.sendTextMessage(recipientPhone, message);
+                messageContent = message;
                 break;
             case 'image':
                 if (!mediaUrl) {
                     return res.status(400).json({ error: 'mediaUrl is required for image type' });
                 }
                 result = yield wabaService.sendImage(recipientPhone, mediaUrl, caption);
+                messageContent = caption || '[Image]';
                 break;
             case 'document':
                 if (!mediaUrl) {
                     return res.status(400).json({ error: 'mediaUrl is required for document type' });
                 }
                 result = yield wabaService.sendDocument(recipientPhone, mediaUrl, filename, caption);
+                messageContent = caption || `[Document: ${filename || 'file'}]`;
+                break;
+            case 'template':
+                if (!template || !template.name) {
+                    return res.status(400).json({ error: 'template object with name is required for template type' });
+                }
+                result = yield wabaService.sendTemplateMessage(recipientPhone, template.name, template.language || 'ru', template.components);
+                messageContent = `Template: ${template.name}`;
                 break;
             default:
-                return res.status(400).json({ error: 'Unsupported message type. Use: text, image, document' });
+                return res.status(400).json({ error: 'Unsupported message type. Use: text, image, document, template' });
         }
         // Сохраняем в БД
         const savedMessage = yield authStorage_1.prisma.message.create({
@@ -479,7 +490,7 @@ const operatorSendMessage = (req, res) => __awaiter(void 0, void 0, void 0, func
                 remoteJid: chat.remoteJid,
                 senderJid: chat.organizationPhone.phoneJid,
                 fromMe: true,
-                content: type === 'text' ? message : caption || '',
+                content: messageContent,
                 mediaUrl: mediaUrl || null,
                 type: type,
                 timestamp: new Date(),
