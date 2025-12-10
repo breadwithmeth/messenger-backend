@@ -136,8 +136,11 @@ function processWebhookChange(change) {
             }
             // Обработка входящих сообщений
             if (value.messages) {
+                const contacts = value.contacts || [];
                 for (const message of value.messages) {
-                    yield handleIncomingMessage(orgPhone, message);
+                    // Находим контакт отправителя
+                    const contact = contacts.find((c) => c.wa_id === message.from);
+                    yield handleIncomingMessage(orgPhone, message, contact);
                 }
             }
         }
@@ -173,7 +176,7 @@ function handleMessageStatus(organizationPhoneId, status) {
 /**
  * Обработка входящего сообщения
  */
-function handleIncomingMessage(orgPhone, message) {
+function handleIncomingMessage(orgPhone, message, contact) {
     return __awaiter(this, void 0, void 0, function* () {
         var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o;
         try {
@@ -182,6 +185,8 @@ function handleIncomingMessage(orgPhone, message) {
             const remoteJid = phoneNumber.includes('@') ? phoneNumber : `${phoneNumber}@s.whatsapp.net`;
             const wabaMessageId = message.id;
             const timestamp = new Date(parseInt(message.timestamp) * 1000);
+            // Извлекаем имя из контакта
+            const contactName = ((_a = contact === null || contact === void 0 ? void 0 : contact.profile) === null || _a === void 0 ? void 0 : _a.name) || undefined;
             // Определяем тип сообщения и контент
             let content = '';
             let messageType = 'text';
@@ -189,48 +194,48 @@ function handleIncomingMessage(orgPhone, message) {
             let filename;
             let mimeType;
             if (message.type === 'text') {
-                content = ((_a = message.text) === null || _a === void 0 ? void 0 : _a.body) || '';
+                content = ((_b = message.text) === null || _b === void 0 ? void 0 : _b.body) || '';
                 messageType = 'text';
             }
             else if (message.type === 'image') {
-                content = ((_b = message.image) === null || _b === void 0 ? void 0 : _b.caption) || '';
+                content = ((_c = message.image) === null || _c === void 0 ? void 0 : _c.caption) || '';
                 messageType = 'image';
-                mimeType = (_c = message.image) === null || _c === void 0 ? void 0 : _c.mime_type;
+                mimeType = (_d = message.image) === null || _d === void 0 ? void 0 : _d.mime_type;
                 // Здесь можно загрузить изображение с серверов WhatsApp
             }
             else if (message.type === 'document') {
-                content = ((_d = message.document) === null || _d === void 0 ? void 0 : _d.caption) || '';
+                content = ((_e = message.document) === null || _e === void 0 ? void 0 : _e.caption) || '';
                 messageType = 'document';
-                filename = (_e = message.document) === null || _e === void 0 ? void 0 : _e.filename;
-                mimeType = (_f = message.document) === null || _f === void 0 ? void 0 : _f.mime_type;
+                filename = (_f = message.document) === null || _f === void 0 ? void 0 : _f.filename;
+                mimeType = (_g = message.document) === null || _g === void 0 ? void 0 : _g.mime_type;
             }
             else if (message.type === 'audio') {
                 messageType = 'audio';
-                mimeType = (_g = message.audio) === null || _g === void 0 ? void 0 : _g.mime_type;
+                mimeType = (_h = message.audio) === null || _h === void 0 ? void 0 : _h.mime_type;
             }
             else if (message.type === 'video') {
-                content = ((_h = message.video) === null || _h === void 0 ? void 0 : _h.caption) || '';
+                content = ((_j = message.video) === null || _j === void 0 ? void 0 : _j.caption) || '';
                 messageType = 'video';
-                mimeType = (_j = message.video) === null || _j === void 0 ? void 0 : _j.mime_type;
+                mimeType = (_k = message.video) === null || _k === void 0 ? void 0 : _k.mime_type;
             }
             else if (message.type === 'button') {
-                content = ((_k = message.button) === null || _k === void 0 ? void 0 : _k.text) || '';
+                content = ((_l = message.button) === null || _l === void 0 ? void 0 : _l.text) || '';
                 messageType = 'button';
             }
             else if (message.type === 'interactive') {
-                if (((_l = message.interactive) === null || _l === void 0 ? void 0 : _l.type) === 'button_reply') {
+                if (((_m = message.interactive) === null || _m === void 0 ? void 0 : _m.type) === 'button_reply') {
                     content = message.interactive.button_reply.title;
                     messageType = 'interactive_button';
                 }
-                else if (((_m = message.interactive) === null || _m === void 0 ? void 0 : _m.type) === 'list_reply') {
+                else if (((_o = message.interactive) === null || _o === void 0 ? void 0 : _o.type) === 'list_reply') {
                     content = message.interactive.list_reply.title;
                     messageType = 'interactive_list';
                 }
             }
             // Логируем входящее сообщение
-            logger.info(`📥 WABA: Входящее [${messageType}]: "${content}" от ${remoteJid}`);
+            logger.info(`📥 WABA: Входящее [${messageType}]: "${content}" от ${remoteJid} (${contactName || 'Unknown'})`);
             // Создаём или находим чат
-            const chatId = yield (0, baileys_1.ensureChat)(orgPhone.organizationId, orgPhone.id, orgPhone.phoneJid, remoteJid, (_o = message.profile) === null || _o === void 0 ? void 0 : _o.name);
+            const chatId = yield (0, baileys_1.ensureChat)(orgPhone.organizationId, orgPhone.id, orgPhone.phoneJid, remoteJid, contactName);
             // Сохраняем сообщение в БД
             yield authStorage_1.prisma.message.create({
                 data: {

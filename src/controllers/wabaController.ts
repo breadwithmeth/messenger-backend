@@ -139,8 +139,11 @@ async function processWebhookChange(change: any) {
 
     // Обработка входящих сообщений
     if (value.messages) {
+      const contacts = value.contacts || [];
       for (const message of value.messages) {
-        await handleIncomingMessage(orgPhone, message);
+        // Находим контакт отправителя
+        const contact = contacts.find((c: any) => c.wa_id === message.from);
+        await handleIncomingMessage(orgPhone, message, contact);
       }
     }
   } catch (error) {
@@ -175,13 +178,16 @@ async function handleMessageStatus(organizationPhoneId: number, status: any) {
 /**
  * Обработка входящего сообщения
  */
-async function handleIncomingMessage(orgPhone: any, message: any) {
+async function handleIncomingMessage(orgPhone: any, message: any, contact?: any) {
   try {
     // Нормализуем номер в формат WhatsApp JID
     const phoneNumber = message.from;
     const remoteJid = phoneNumber.includes('@') ? phoneNumber : `${phoneNumber}@s.whatsapp.net`;
     const wabaMessageId = message.id;
     const timestamp = new Date(parseInt(message.timestamp) * 1000);
+    
+    // Извлекаем имя из контакта
+    const contactName = contact?.profile?.name || undefined;
 
     // Определяем тип сообщения и контент
     let content = '';
@@ -224,7 +230,7 @@ async function handleIncomingMessage(orgPhone: any, message: any) {
     }
 
     // Логируем входящее сообщение
-    logger.info(`📥 WABA: Входящее [${messageType}]: "${content}" от ${remoteJid}`);
+    logger.info(`📥 WABA: Входящее [${messageType}]: "${content}" от ${remoteJid} (${contactName || 'Unknown'})`);
 
     // Создаём или находим чат
     const chatId = await ensureChat(
@@ -232,7 +238,7 @@ async function handleIncomingMessage(orgPhone: any, message: any) {
       orgPhone.id,
       orgPhone.phoneJid,
       remoteJid,
-      message.profile?.name
+      contactName
     );
 
     // Сохраняем сообщение в БД
