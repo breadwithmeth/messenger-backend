@@ -439,7 +439,7 @@ export const sendMessage = async (req: Request, res: Response) => {
  */
 export const operatorSendMessage = async (req: Request, res: Response) => {
   try {
-    const { chatId, message, type = 'text', mediaUrl, caption, filename } = req.body;
+    const { chatId, message, type = 'text', mediaUrl, caption, filename, template } = req.body;
 
     if (!chatId || !message) {
       return res.status(400).json({ error: 'chatId and message are required' });
@@ -474,26 +474,42 @@ export const operatorSendMessage = async (req: Request, res: Response) => {
 
     // Отправляем сообщение в зависимости от типа
     let result;
+    let messageContent = '';
     const recipientPhone = chat.remoteJid.replace('@s.whatsapp.net', '');
 
     switch (type) {
       case 'text':
         result = await wabaService.sendTextMessage(recipientPhone, message);
+        messageContent = message;
         break;
       case 'image':
         if (!mediaUrl) {
           return res.status(400).json({ error: 'mediaUrl is required for image type' });
         }
         result = await wabaService.sendImage(recipientPhone, mediaUrl, caption);
+        messageContent = caption || '[Image]';
         break;
       case 'document':
         if (!mediaUrl) {
           return res.status(400).json({ error: 'mediaUrl is required for document type' });
         }
         result = await wabaService.sendDocument(recipientPhone, mediaUrl, filename, caption);
+        messageContent = caption || `[Document: ${filename || 'file'}]`;
+        break;
+      case 'template':
+        if (!template || !template.name) {
+          return res.status(400).json({ error: 'template object with name is required for template type' });
+        }
+        result = await wabaService.sendTemplateMessage(
+          recipientPhone,
+          template.name,
+          template.language || 'ru',
+          template.components
+        );
+        messageContent = `Template: ${template.name}`;
         break;
       default:
-        return res.status(400).json({ error: 'Unsupported message type. Use: text, image, document' });
+        return res.status(400).json({ error: 'Unsupported message type. Use: text, image, document, template' });
     }
 
     // Сохраняем в БД
