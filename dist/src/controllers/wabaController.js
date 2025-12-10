@@ -13,7 +13,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getTemplates = exports.sendMessage = exports.handleWebhook = exports.verifyWebhook = void 0;
+exports.getTemplates = exports.getChatMessages = exports.getMessageStatus = exports.operatorSendMessage = exports.sendMessage = exports.handleWebhook = exports.verifyWebhook = void 0;
 const wabaService_1 = require("../services/wabaService");
 const authStorage_1 = require("../config/authStorage");
 const baileys_1 = require("../config/baileys");
@@ -177,7 +177,9 @@ function handleIncomingMessage(orgPhone, message) {
     return __awaiter(this, void 0, void 0, function* () {
         var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o;
         try {
-            const remoteJid = message.from; // Номер отправителя
+            // Нормализуем номер в формат WhatsApp JID
+            const phoneNumber = message.from;
+            const remoteJid = phoneNumber.includes('@') ? phoneNumber : `${phoneNumber}@s.whatsapp.net`;
             const wabaMessageId = message.id;
             const timestamp = new Date(parseInt(message.timestamp) * 1000);
             // Определяем тип сообщения и контент
@@ -271,7 +273,7 @@ function handleIncomingMessage(orgPhone, message) {
  * POST /api/waba/send
  */
 const sendMessage = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b, _c, _d, _e, _f;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p;
     try {
         const { organizationPhoneId, to, message, type = 'text' } = req.body;
         if (!organizationPhoneId || !to || !message) {
@@ -290,49 +292,318 @@ const sendMessage = (req, res) => __awaiter(void 0, void 0, void 0, function* ()
         }
         const wabaService = yield (0, wabaService_1.createWABAService)(organizationPhoneId);
         if (!wabaService) {
-            return res.status(500).json({ error: 'WABA service not configured' });
+            return res.status(500).json({
+                error: 'WABA service not configured',
+                details: 'wabaAccessToken is missing in database. Please update OrganizationPhone with your permanent System User Access Token from Meta.',
+                organizationPhoneId: organizationPhoneId
+            });
         }
         // Отправляем сообщение
         let result;
+        let messageContent = '';
+        let mediaUrl = null;
         switch (type) {
             case 'text':
                 result = yield wabaService.sendTextMessage(to, message);
+                messageContent = message;
+                break;
+            case 'image':
+                if (!message.link) {
+                    return res.status(400).json({ error: 'image.link is required' });
+                }
+                result = yield wabaService.sendImage(to, message.link, message.caption);
+                messageContent = message.caption || '';
+                mediaUrl = message.link;
+                break;
+            case 'document':
+                if (!message.link) {
+                    return res.status(400).json({ error: 'document.link is required' });
+                }
+                result = yield wabaService.sendDocument(to, message.link, message.filename, message.caption);
+                messageContent = message.caption || message.filename || '';
+                mediaUrl = message.link;
+                break;
+            case 'video':
+                if (!message.link) {
+                    return res.status(400).json({ error: 'video.link is required' });
+                }
+                result = yield wabaService.sendMessage({
+                    to,
+                    type: 'video',
+                    video: {
+                        link: message.link,
+                        caption: message.caption,
+                    },
+                });
+                messageContent = message.caption || '';
+                mediaUrl = message.link;
+                break;
+            case 'audio':
+                if (!message.link) {
+                    return res.status(400).json({ error: 'audio.link is required' });
+                }
+                result = yield wabaService.sendMessage({
+                    to,
+                    type: 'audio',
+                    audio: {
+                        link: message.link,
+                    },
+                });
+                messageContent = 'Audio message';
+                mediaUrl = message.link;
+                break;
+            case 'interactive':
+                result = yield wabaService.sendMessage({
+                    to,
+                    type: 'interactive',
+                    interactive: message,
+                });
+                messageContent = ((_b = message.body) === null || _b === void 0 ? void 0 : _b.text) || JSON.stringify(message);
                 break;
             case 'template':
                 result = yield wabaService.sendTemplateMessage(to, message.name, message.language, message.components);
+                messageContent = `Template: ${message.name}`;
                 break;
             default:
-                return res.status(400).json({ error: 'Unsupported message type' });
+                return res.status(400).json({ error: `Unsupported message type: ${type}. Supported: text, image, document, video, audio, interactive, template` });
         }
+        // Нормализуем номер получателя в формат WhatsApp JID
+        const remoteJid = to.includes('@') ? to : `${to}@s.whatsapp.net`;
         // Сохраняем отправленное сообщение в БД
-        const chatId = yield (0, baileys_1.ensureChat)(orgPhone.organizationId, orgPhone.id, orgPhone.phoneJid, to, undefined);
+        const chatId = yield (0, baileys_1.ensureChat)(orgPhone.organizationId, orgPhone.id, orgPhone.phoneJid, remoteJid, undefined);
         yield authStorage_1.prisma.message.create({
             data: {
                 chatId,
                 organizationPhoneId,
                 organizationId: orgPhone.organizationId,
                 channel: 'whatsapp',
-                whatsappMessageId: (_c = (_b = result.messages) === null || _b === void 0 ? void 0 : _b[0]) === null || _c === void 0 ? void 0 : _c.id,
+                whatsappMessageId: (_d = (_c = result.messages) === null || _c === void 0 ? void 0 : _c[0]) === null || _d === void 0 ? void 0 : _d.id,
                 receivingPhoneJid: orgPhone.phoneJid,
-                remoteJid: to,
+                remoteJid: remoteJid,
                 senderJid: orgPhone.phoneJid,
                 fromMe: true,
-                content: type === 'text' ? message : JSON.stringify(message),
+                content: messageContent,
+                mediaUrl: mediaUrl,
                 type,
+                timestamp: new Date(),
+                status: 'sent',
+                senderUserId: (_e = req.user) === null || _e === void 0 ? void 0 : _e.id,
+                isReadByOperator: true,
+            },
+        });
+        res.json({ success: true, messageId: (_g = (_f = result.messages) === null || _f === void 0 ? void 0 : _f[0]) === null || _g === void 0 ? void 0 : _g.id, data: result });
+    }
+    catch (error) {
+        logger.error('❌ WABA: Send message error:', error);
+        // Более детальная информация об ошибке
+        const errorMessage = ((_k = (_j = (_h = error.response) === null || _h === void 0 ? void 0 : _h.data) === null || _j === void 0 ? void 0 : _j.error) === null || _k === void 0 ? void 0 : _k.message) || error.message;
+        const errorDetails = ((_l = error.response) === null || _l === void 0 ? void 0 : _l.data) || {};
+        res.status(500).json({
+            error: errorMessage,
+            details: errorDetails,
+            type: (_p = (_o = (_m = error.response) === null || _m === void 0 ? void 0 : _m.data) === null || _o === void 0 ? void 0 : _o.error) === null || _p === void 0 ? void 0 : _p.type
+        });
+    }
+});
+exports.sendMessage = sendMessage;
+/**
+ * Отправка сообщения оператором (упрощённый API)
+ * POST /api/waba/operator/send
+ */
+const operatorSendMessage = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b, _c, _d, _e, _f, _g;
+    try {
+        const { chatId, message, type = 'text', mediaUrl, caption, filename } = req.body;
+        if (!chatId || !message) {
+            return res.status(400).json({ error: 'chatId and message are required' });
+        }
+        // Получаем чат с проверкой доступа
+        const chat = yield authStorage_1.prisma.chat.findFirst({
+            where: {
+                id: chatId,
+                organizationId: (_a = req.user) === null || _a === void 0 ? void 0 : _a.organizationId,
+            },
+            include: {
+                organizationPhone: true,
+            },
+        });
+        if (!chat) {
+            return res.status(404).json({ error: 'Chat not found' });
+        }
+        if (chat.organizationPhone.connectionType !== 'waba') {
+            return res.status(400).json({ error: 'This chat is not using WABA' });
+        }
+        const wabaService = yield (0, wabaService_1.createWABAService)(chat.organizationPhoneId);
+        if (!wabaService) {
+            return res.status(500).json({
+                error: 'WABA service not configured',
+                details: 'wabaAccessToken is missing'
+            });
+        }
+        // Отправляем сообщение в зависимости от типа
+        let result;
+        const recipientPhone = chat.remoteJid.replace('@s.whatsapp.net', '');
+        switch (type) {
+            case 'text':
+                result = yield wabaService.sendTextMessage(recipientPhone, message);
+                break;
+            case 'image':
+                if (!mediaUrl) {
+                    return res.status(400).json({ error: 'mediaUrl is required for image type' });
+                }
+                result = yield wabaService.sendImage(recipientPhone, mediaUrl, caption);
+                break;
+            case 'document':
+                if (!mediaUrl) {
+                    return res.status(400).json({ error: 'mediaUrl is required for document type' });
+                }
+                result = yield wabaService.sendDocument(recipientPhone, mediaUrl, filename, caption);
+                break;
+            default:
+                return res.status(400).json({ error: 'Unsupported message type. Use: text, image, document' });
+        }
+        // Сохраняем в БД
+        const savedMessage = yield authStorage_1.prisma.message.create({
+            data: {
+                chatId: chat.id,
+                organizationPhoneId: chat.organizationPhoneId,
+                organizationId: chat.organizationId,
+                channel: 'whatsapp',
+                whatsappMessageId: (_c = (_b = result.messages) === null || _b === void 0 ? void 0 : _b[0]) === null || _c === void 0 ? void 0 : _c.id,
+                receivingPhoneJid: chat.organizationPhone.phoneJid,
+                remoteJid: chat.remoteJid,
+                senderJid: chat.organizationPhone.phoneJid,
+                fromMe: true,
+                content: type === 'text' ? message : caption || '',
+                mediaUrl: mediaUrl || null,
+                type: type,
                 timestamp: new Date(),
                 status: 'sent',
                 senderUserId: (_d = req.user) === null || _d === void 0 ? void 0 : _d.id,
                 isReadByOperator: true,
             },
         });
-        res.json({ success: true, messageId: (_f = (_e = result.messages) === null || _e === void 0 ? void 0 : _e[0]) === null || _f === void 0 ? void 0 : _f.id });
+        // Обновляем lastMessageAt в чате
+        yield authStorage_1.prisma.chat.update({
+            where: { id: chat.id },
+            data: { lastMessageAt: new Date() },
+        });
+        logger.info(`📤 WABA Operator: Message sent by user ${(_e = req.user) === null || _e === void 0 ? void 0 : _e.id} to chat ${chatId}`);
+        res.json({
+            success: true,
+            messageId: (_g = (_f = result.messages) === null || _f === void 0 ? void 0 : _f[0]) === null || _g === void 0 ? void 0 : _g.id,
+            message: savedMessage
+        });
     }
     catch (error) {
-        logger.error('❌ WABA: Send message error:', error);
+        logger.error('❌ WABA Operator: Send message error:', error);
         res.status(500).json({ error: error.message });
     }
 });
-exports.sendMessage = sendMessage;
+exports.operatorSendMessage = operatorSendMessage;
+/**
+ * Получение статуса доставки сообщения
+ * GET /api/waba/operator/message-status/:messageId
+ */
+const getMessageStatus = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    try {
+        const { messageId } = req.params;
+        const message = yield authStorage_1.prisma.message.findFirst({
+            where: {
+                id: parseInt(messageId),
+                organizationId: (_a = req.user) === null || _a === void 0 ? void 0 : _a.organizationId,
+            },
+            select: {
+                id: true,
+                whatsappMessageId: true,
+                status: true,
+                timestamp: true,
+                content: true,
+                fromMe: true,
+                chat: {
+                    select: {
+                        id: true,
+                        remoteJid: true,
+                    },
+                },
+            },
+        });
+        if (!message) {
+            return res.status(404).json({ error: 'Message not found' });
+        }
+        res.json({
+            id: message.id,
+            whatsappMessageId: message.whatsappMessageId,
+            status: message.status,
+            timestamp: message.timestamp,
+            delivered: ['delivered', 'read'].includes(message.status || ''),
+            read: message.status === 'read',
+        });
+    }
+    catch (error) {
+        logger.error('❌ WABA: Get message status error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+exports.getMessageStatus = getMessageStatus;
+/**
+ * Получение истории сообщений чата с WABA статусами
+ * GET /api/waba/operator/chat/:chatId/messages
+ */
+const getChatMessages = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    try {
+        const { chatId } = req.params;
+        const { limit = '50', offset = '0' } = req.query;
+        const chat = yield authStorage_1.prisma.chat.findFirst({
+            where: {
+                id: parseInt(chatId),
+                organizationId: (_a = req.user) === null || _a === void 0 ? void 0 : _a.organizationId,
+            },
+        });
+        if (!chat) {
+            return res.status(404).json({ error: 'Chat not found' });
+        }
+        const messages = yield authStorage_1.prisma.message.findMany({
+            where: { chatId: chat.id },
+            orderBy: { timestamp: 'desc' },
+            take: parseInt(limit),
+            skip: parseInt(offset),
+            select: {
+                id: true,
+                whatsappMessageId: true,
+                content: true,
+                mediaUrl: true,
+                type: true,
+                fromMe: true,
+                timestamp: true,
+                status: true,
+                isReadByOperator: true,
+                senderUser: {
+                    select: {
+                        id: true,
+                        email: true,
+                    },
+                },
+            },
+        });
+        const total = yield authStorage_1.prisma.message.count({
+            where: { chatId: chat.id },
+        });
+        res.json({
+            messages: messages.map(msg => (Object.assign(Object.assign({}, msg), { delivered: ['delivered', 'read'].includes(msg.status || ''), read: msg.status === 'read' }))),
+            total,
+            limit: parseInt(limit),
+            offset: parseInt(offset),
+        });
+    }
+    catch (error) {
+        logger.error('❌ WABA: Get chat messages error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+exports.getChatMessages = getChatMessages;
 /**
  * Получение списка шаблонов сообщений
  * GET /api/waba/templates
