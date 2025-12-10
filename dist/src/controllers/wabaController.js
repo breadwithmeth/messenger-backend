@@ -278,7 +278,7 @@ function handleIncomingMessage(orgPhone, message, contact) {
  * POST /api/waba/send
  */
 const sendMessage = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m;
     try {
         const { organizationPhoneId, to, message, type = 'text' } = req.body;
         if (!organizationPhoneId || !to || !message) {
@@ -288,7 +288,7 @@ const sendMessage = (req, res) => __awaiter(void 0, void 0, void 0, function* ()
         const orgPhone = yield authStorage_1.prisma.organizationPhone.findFirst({
             where: {
                 id: organizationPhoneId,
-                organizationId: (_a = req.user) === null || _a === void 0 ? void 0 : _a.organizationId,
+                organizationId: res.locals.organizationId,
                 connectionType: 'waba',
             },
         });
@@ -363,7 +363,7 @@ const sendMessage = (req, res) => __awaiter(void 0, void 0, void 0, function* ()
                     type: 'interactive',
                     interactive: message,
                 });
-                messageContent = ((_b = message.body) === null || _b === void 0 ? void 0 : _b.text) || JSON.stringify(message);
+                messageContent = ((_a = message.body) === null || _a === void 0 ? void 0 : _a.text) || JSON.stringify(message);
                 break;
             case 'template':
                 result = yield wabaService.sendTemplateMessage(to, message.name, message.language, message.components);
@@ -382,7 +382,7 @@ const sendMessage = (req, res) => __awaiter(void 0, void 0, void 0, function* ()
                 organizationPhoneId,
                 organizationId: orgPhone.organizationId,
                 channel: 'whatsapp',
-                whatsappMessageId: (_d = (_c = result.messages) === null || _c === void 0 ? void 0 : _c[0]) === null || _d === void 0 ? void 0 : _d.id,
+                whatsappMessageId: (_c = (_b = result.messages) === null || _b === void 0 ? void 0 : _b[0]) === null || _c === void 0 ? void 0 : _c.id,
                 receivingPhoneJid: orgPhone.phoneJid,
                 remoteJid: remoteJid,
                 senderJid: orgPhone.phoneJid,
@@ -392,21 +392,21 @@ const sendMessage = (req, res) => __awaiter(void 0, void 0, void 0, function* ()
                 type,
                 timestamp: new Date(),
                 status: 'sent',
-                senderUserId: (_e = req.user) === null || _e === void 0 ? void 0 : _e.id,
+                senderUserId: res.locals.userId,
                 isReadByOperator: true,
             },
         });
-        res.json({ success: true, messageId: (_g = (_f = result.messages) === null || _f === void 0 ? void 0 : _f[0]) === null || _g === void 0 ? void 0 : _g.id, data: result });
+        res.json({ success: true, messageId: (_e = (_d = result.messages) === null || _d === void 0 ? void 0 : _d[0]) === null || _e === void 0 ? void 0 : _e.id, data: result });
     }
     catch (error) {
         logger.error('❌ WABA: Send message error:', error);
         // Более детальная информация об ошибке
-        const errorMessage = ((_k = (_j = (_h = error.response) === null || _h === void 0 ? void 0 : _h.data) === null || _j === void 0 ? void 0 : _j.error) === null || _k === void 0 ? void 0 : _k.message) || error.message;
-        const errorDetails = ((_l = error.response) === null || _l === void 0 ? void 0 : _l.data) || {};
+        const errorMessage = ((_h = (_g = (_f = error.response) === null || _f === void 0 ? void 0 : _f.data) === null || _g === void 0 ? void 0 : _g.error) === null || _h === void 0 ? void 0 : _h.message) || error.message;
+        const errorDetails = ((_j = error.response) === null || _j === void 0 ? void 0 : _j.data) || {};
         res.status(500).json({
             error: errorMessage,
             details: errorDetails,
-            type: (_p = (_o = (_m = error.response) === null || _m === void 0 ? void 0 : _m.data) === null || _o === void 0 ? void 0 : _o.error) === null || _p === void 0 ? void 0 : _p.type
+            type: (_m = (_l = (_k = error.response) === null || _k === void 0 ? void 0 : _k.data) === null || _l === void 0 ? void 0 : _l.error) === null || _m === void 0 ? void 0 : _m.type
         });
     }
 });
@@ -416,7 +416,7 @@ exports.sendMessage = sendMessage;
  * POST /api/waba/operator/send
  */
 const operatorSendMessage = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b, _c, _d, _e, _f, _g;
+    var _a, _b, _c, _d;
     try {
         const { chatId, message, type = 'text', mediaUrl, caption, filename } = req.body;
         if (!chatId || !message) {
@@ -426,7 +426,7 @@ const operatorSendMessage = (req, res) => __awaiter(void 0, void 0, void 0, func
         const chat = yield authStorage_1.prisma.chat.findFirst({
             where: {
                 id: chatId,
-                organizationId: (_a = req.user) === null || _a === void 0 ? void 0 : _a.organizationId,
+                organizationId: res.locals.organizationId,
             },
             include: {
                 organizationPhone: true,
@@ -474,7 +474,7 @@ const operatorSendMessage = (req, res) => __awaiter(void 0, void 0, void 0, func
                 organizationPhoneId: chat.organizationPhoneId,
                 organizationId: chat.organizationId,
                 channel: 'whatsapp',
-                whatsappMessageId: (_c = (_b = result.messages) === null || _b === void 0 ? void 0 : _b[0]) === null || _c === void 0 ? void 0 : _c.id,
+                whatsappMessageId: (_b = (_a = result.messages) === null || _a === void 0 ? void 0 : _a[0]) === null || _b === void 0 ? void 0 : _b.id,
                 receivingPhoneJid: chat.organizationPhone.phoneJid,
                 remoteJid: chat.remoteJid,
                 senderJid: chat.organizationPhone.phoneJid,
@@ -484,7 +484,7 @@ const operatorSendMessage = (req, res) => __awaiter(void 0, void 0, void 0, func
                 type: type,
                 timestamp: new Date(),
                 status: 'sent',
-                senderUserId: (_d = req.user) === null || _d === void 0 ? void 0 : _d.id,
+                senderUserId: res.locals.userId,
                 isReadByOperator: true,
             },
         });
@@ -493,10 +493,10 @@ const operatorSendMessage = (req, res) => __awaiter(void 0, void 0, void 0, func
             where: { id: chat.id },
             data: { lastMessageAt: new Date() },
         });
-        logger.info(`📤 WABA Operator: Message sent by user ${(_e = req.user) === null || _e === void 0 ? void 0 : _e.id} to chat ${chatId}`);
+        logger.info(`📤 WABA Operator: Message sent by user ${res.locals.userId} to chat ${chatId}`);
         res.json({
             success: true,
-            messageId: (_g = (_f = result.messages) === null || _f === void 0 ? void 0 : _f[0]) === null || _g === void 0 ? void 0 : _g.id,
+            messageId: (_d = (_c = result.messages) === null || _c === void 0 ? void 0 : _c[0]) === null || _d === void 0 ? void 0 : _d.id,
             message: savedMessage
         });
     }
@@ -511,13 +511,12 @@ exports.operatorSendMessage = operatorSendMessage;
  * GET /api/waba/operator/message-status/:messageId
  */
 const getMessageStatus = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a;
     try {
         const { messageId } = req.params;
         const message = yield authStorage_1.prisma.message.findFirst({
             where: {
                 id: parseInt(messageId),
-                organizationId: (_a = req.user) === null || _a === void 0 ? void 0 : _a.organizationId,
+                organizationId: res.locals.organizationId,
             },
             select: {
                 id: true,
@@ -557,14 +556,13 @@ exports.getMessageStatus = getMessageStatus;
  * GET /api/waba/operator/chat/:chatId/messages
  */
 const getChatMessages = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a;
     try {
         const { chatId } = req.params;
         const { limit = '50', offset = '0' } = req.query;
         const chat = yield authStorage_1.prisma.chat.findFirst({
             where: {
                 id: parseInt(chatId),
-                organizationId: (_a = req.user) === null || _a === void 0 ? void 0 : _a.organizationId,
+                organizationId: res.locals.organizationId,
             },
         });
         if (!chat) {
@@ -610,7 +608,7 @@ const getChatMessages = (req, res) => __awaiter(void 0, void 0, void 0, function
 });
 exports.getChatMessages = getChatMessages;
 /**
- * Получение списка шаблонов сообщений
+ * Получение шаблонов сообщений
  * GET /api/waba/templates
  */
 const getTemplates = (req, res) => __awaiter(void 0, void 0, void 0, function* () {

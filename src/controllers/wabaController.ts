@@ -8,13 +8,6 @@ import pino from 'pino';
 
 const logger = pino({ level: 'info' });
 
-interface AuthRequest extends Request {
-  user?: {
-    id: number;
-    organizationId: number;
-  };
-}
-
 /**
  * Webhook verification для WhatsApp Business API
  * GET /api/waba/webhook
@@ -283,7 +276,7 @@ async function handleIncomingMessage(orgPhone: any, message: any, contact?: any)
  * Отправка сообщения через WABA
  * POST /api/waba/send
  */
-export const sendMessage = async (req: AuthRequest, res: Response) => {
+export const sendMessage = async (req: Request, res: Response) => {
   try {
     const { organizationPhoneId, to, message, type = 'text' } = req.body;
 
@@ -295,7 +288,7 @@ export const sendMessage = async (req: AuthRequest, res: Response) => {
     const orgPhone = await prisma.organizationPhone.findFirst({
       where: {
         id: organizationPhoneId,
-        organizationId: req.user?.organizationId,
+        organizationId: res.locals.organizationId,
         connectionType: 'waba',
       },
     });
@@ -419,7 +412,7 @@ export const sendMessage = async (req: AuthRequest, res: Response) => {
         type,
         timestamp: new Date(),
         status: 'sent',
-        senderUserId: req.user?.id,
+        senderUserId: res.locals.userId,
         isReadByOperator: true,
       },
     });
@@ -444,7 +437,7 @@ export const sendMessage = async (req: AuthRequest, res: Response) => {
  * Отправка сообщения оператором (упрощённый API)
  * POST /api/waba/operator/send
  */
-export const operatorSendMessage = async (req: AuthRequest, res: Response) => {
+export const operatorSendMessage = async (req: Request, res: Response) => {
   try {
     const { chatId, message, type = 'text', mediaUrl, caption, filename } = req.body;
 
@@ -456,7 +449,7 @@ export const operatorSendMessage = async (req: AuthRequest, res: Response) => {
     const chat = await prisma.chat.findFirst({
       where: {
         id: chatId,
-        organizationId: req.user?.organizationId,
+        organizationId: res.locals.organizationId,
       },
       include: {
         organizationPhone: true,
@@ -520,7 +513,7 @@ export const operatorSendMessage = async (req: AuthRequest, res: Response) => {
         type: type,
         timestamp: new Date(),
         status: 'sent',
-        senderUserId: req.user?.id,
+        senderUserId: res.locals.userId,
         isReadByOperator: true,
       },
     });
@@ -531,7 +524,7 @@ export const operatorSendMessage = async (req: AuthRequest, res: Response) => {
       data: { lastMessageAt: new Date() },
     });
 
-    logger.info(`📤 WABA Operator: Message sent by user ${req.user?.id} to chat ${chatId}`);
+    logger.info(`📤 WABA Operator: Message sent by user ${res.locals.userId} to chat ${chatId}`);
 
     res.json({ 
       success: true, 
@@ -548,14 +541,14 @@ export const operatorSendMessage = async (req: AuthRequest, res: Response) => {
  * Получение статуса доставки сообщения
  * GET /api/waba/operator/message-status/:messageId
  */
-export const getMessageStatus = async (req: AuthRequest, res: Response) => {
+export const getMessageStatus = async (req: Request, res: Response) => {
   try {
     const { messageId } = req.params;
 
     const message = await prisma.message.findFirst({
       where: {
         id: parseInt(messageId),
-        organizationId: req.user?.organizationId,
+        organizationId: res.locals.organizationId,
       },
       select: {
         id: true,
@@ -595,7 +588,7 @@ export const getMessageStatus = async (req: AuthRequest, res: Response) => {
  * Получение истории сообщений чата с WABA статусами
  * GET /api/waba/operator/chat/:chatId/messages
  */
-export const getChatMessages = async (req: AuthRequest, res: Response) => {
+export const getChatMessages = async (req: Request, res: Response) => {
   try {
     const { chatId } = req.params;
     const { limit = '50', offset = '0' } = req.query;
@@ -603,7 +596,7 @@ export const getChatMessages = async (req: AuthRequest, res: Response) => {
     const chat = await prisma.chat.findFirst({
       where: {
         id: parseInt(chatId),
-        organizationId: req.user?.organizationId,
+        organizationId: res.locals.organizationId,
       },
     });
 
@@ -656,10 +649,10 @@ export const getChatMessages = async (req: AuthRequest, res: Response) => {
 };
 
 /**
- * Получение списка шаблонов сообщений
+ * Получение шаблонов сообщений
  * GET /api/waba/templates
  */
-export const getTemplates = async (req: AuthRequest, res: Response) => {
+export const getTemplates = async (req: Request, res: Response) => {
   try {
     const { organizationPhoneId } = req.query;
 
