@@ -13,6 +13,9 @@ router.post('/send', mediaController_1.uploadSingle, mediaController_1.uploadAnd
 // Просто загрузить медиафайл (без отправки)
 // POST /api/media/upload
 router.post('/upload', mediaController_1.uploadSingle, mediaController_1.uploadMediaOnly);
+// Загрузить медиафайл для использования в WABA (возвращает mediaUrl)
+// POST /api/media/upload-for-waba
+router.post('/upload-for-waba', mediaController_1.uploadSingle, mediaController_1.uploadMediaForWABA);
 // Отправить медиафайл по chatId
 // POST /api/media/send-by-chat
 router.post('/send-by-chat', mediaController_1.sendMediaByChatId);

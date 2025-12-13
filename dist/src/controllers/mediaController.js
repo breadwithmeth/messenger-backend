@@ -13,7 +13,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendMediaByChatId = exports.uploadMediaOnly = exports.uploadAndSendMedia = exports.uploadSingle = void 0;
+exports.sendMediaByChatId = exports.uploadMediaForWABA = exports.uploadMediaOnly = exports.uploadAndSendMedia = exports.uploadSingle = void 0;
 const multer_1 = __importDefault(require("multer"));
 const mediaService_1 = require("../services/mediaService");
 const baileys_1 = require("../config/baileys");
@@ -227,6 +227,66 @@ const uploadMediaOnly = (req, res) => __awaiter(void 0, void 0, void 0, function
     }
 });
 exports.uploadMediaOnly = uploadMediaOnly;
+/**
+ * Загрузить медиафайл для использования в WABA
+ * Возвращает публичный URL для передачи в WABA API
+ * POST /api/media/upload-for-waba
+ */
+const uploadMediaForWABA = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const { mediaType } = req.body;
+    const organizationId = res.locals.organizationId;
+    const file = req.file;
+    if (!mediaType || !file) {
+        return res.status(400).json({
+            error: 'Отсутствуют необходимые параметры: mediaType или файл'
+        });
+    }
+    const allowedMediaTypes = ['image', 'video', 'document', 'audio'];
+    if (!allowedMediaTypes.includes(mediaType)) {
+        return res.status(400).json({
+            error: `Неподдерживаемый тип медиа. Разрешены: ${allowedMediaTypes.join(', ')}`
+        });
+    }
+    // Валидация файла
+    const validation = (0, mediaService_1.validateMediaFile)(file.buffer, file.mimetype, mediaType);
+    if (!validation.valid) {
+        return res.status(400).json({ error: validation.error });
+    }
+    try {
+        // Сохранение файла
+        const savedMedia = yield (0, mediaService_1.saveUploadedMedia)(file.buffer, file.originalname, file.mimetype, mediaType);
+        if (!savedMedia.success) {
+            return res.status(500).json({
+                error: 'Ошибка сохранения файла',
+                details: savedMedia.error
+            });
+        }
+        logger.info(`✅ [WABA] Медиафайл "${file.originalname}" загружен для организации ${organizationId}`);
+        // Возвращаем URL для использования в WABA API
+        res.status(200).json({
+            success: true,
+            mediaUrl: savedMedia.url, // Публичный URL для WABA
+            fileName: savedMedia.fileName,
+            mediaType,
+            size: savedMedia.size,
+            mimeType: savedMedia.mimeType,
+            // Дополнительная информация для клиента
+            metadata: {
+                originalName: file.originalname,
+                uploadedAt: new Date().toISOString(),
+                organizationId,
+            }
+        });
+    }
+    catch (error) {
+        logger.error(`❌ [WABA] Ошибка загрузки медиафайла:`, error);
+        res.status(500).json({
+            error: 'Ошибка загрузки медиафайла',
+            details: error.message
+        });
+    }
+});
+exports.uploadMediaForWABA = uploadMediaForWABA;
 /**
  * Отправить медиафайл по chatId
  */

@@ -262,6 +262,78 @@ export const uploadMediaOnly = async (req: Request, res: Response) => {
 };
 
 /**
+ * Загрузить медиафайл для использования в WABA
+ * Возвращает публичный URL для передачи в WABA API
+ * POST /api/media/upload-for-waba
+ */
+export const uploadMediaForWABA = async (req: Request, res: Response) => {
+  const { mediaType } = req.body;
+  const organizationId = res.locals.organizationId;
+  const file = req.file;
+
+  if (!mediaType || !file) {
+    return res.status(400).json({ 
+      error: 'Отсутствуют необходимые параметры: mediaType или файл' 
+    });
+  }
+
+  const allowedMediaTypes: Array<'image' | 'video' | 'document' | 'audio'> = ['image', 'video', 'document', 'audio'];
+  if (!allowedMediaTypes.includes(mediaType)) {
+    return res.status(400).json({ 
+      error: `Неподдерживаемый тип медиа. Разрешены: ${allowedMediaTypes.join(', ')}` 
+    });
+  }
+
+  // Валидация файла
+  const validation = validateMediaFile(file.buffer, file.mimetype, mediaType);
+  if (!validation.valid) {
+    return res.status(400).json({ error: validation.error });
+  }
+
+  try {
+    // Сохранение файла
+    const savedMedia = await saveUploadedMedia(
+      file.buffer,
+      file.originalname,
+      file.mimetype,
+      mediaType
+    );
+
+    if (!savedMedia.success) {
+      return res.status(500).json({ 
+        error: 'Ошибка сохранения файла', 
+        details: savedMedia.error 
+      });
+    }
+
+    logger.info(`✅ [WABA] Медиафайл "${file.originalname}" загружен для организации ${organizationId}`);
+    
+    // Возвращаем URL для использования в WABA API
+    res.status(200).json({
+      success: true,
+      mediaUrl: savedMedia.url,  // Публичный URL для WABA
+      fileName: savedMedia.fileName,
+      mediaType,
+      size: savedMedia.size,
+      mimeType: savedMedia.mimeType,
+      // Дополнительная информация для клиента
+      metadata: {
+        originalName: file.originalname,
+        uploadedAt: new Date().toISOString(),
+        organizationId,
+      }
+    });
+
+  } catch (error: any) {
+    logger.error(`❌ [WABA] Ошибка загрузки медиафайла:`, error);
+    res.status(500).json({ 
+      error: 'Ошибка загрузки медиафайла', 
+      details: error.message 
+    });
+  }
+};
+
+/**
  * Отправить медиафайл по chatId
  */
 export const sendMediaByChatId = async (req: Request, res: Response) => {

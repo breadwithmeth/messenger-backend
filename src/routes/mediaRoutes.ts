@@ -5,7 +5,8 @@ import {
   uploadAndSendMedia,
   uploadMediaOnly,
   uploadSingle,
-  sendMediaByChatId
+  sendMediaByChatId,
+  uploadMediaForWABA
 } from '../controllers/mediaController';
 import { authMiddleware } from '../middlewares/authMiddleware';
 
@@ -21,6 +22,10 @@ router.post('/send', uploadSingle, uploadAndSendMedia);
 // Просто загрузить медиафайл (без отправки)
 // POST /api/media/upload
 router.post('/upload', uploadSingle, uploadMediaOnly);
+
+// Загрузить медиафайл для использования в WABA (возвращает mediaUrl)
+// POST /api/media/upload-for-waba
+router.post('/upload-for-waba', uploadSingle, uploadMediaForWABA);
 
 // Отправить медиафайл по chatId
 // POST /api/media/send-by-chat
