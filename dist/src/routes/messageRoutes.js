@@ -14,5 +14,8 @@ router.post('/send-media', authMiddleware_1.authMiddleware, messageController_1.
 // Маршрут для отправки сообщения по номеру тикета
 // Упрощенный API - нужен только ticketNumber и text
 router.post('/send-by-ticket', authMiddleware_1.authMiddleware, messageController_1.sendMessageByTicket);
+// Универсальный маршрут для отправки сообщений по chatId
+// Автоматически определяет тип подключения (Baileys или WABA)
+router.post('/send-by-chat', authMiddleware_1.authMiddleware, messageController_1.sendMessageByChat);
 exports.default = router;
 //# sourceMappingURL=messageRoutes.js.map

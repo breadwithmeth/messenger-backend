@@ -342,3 +342,309 @@ export const sendMessageByTicket = async (req: Request, res: Response) => {
     });
   }
 };
+
+/**
+ * Универсальный эндпоинт для отправки сообщений по chatId
+ * Автоматически определяет тип подключения (Baileys или WABA) и использует соответствующий сервис
+ * POST /api/messages/send-by-chat
+ */
+export const sendMessageByChat = async (req: Request, res: Response) => {
+  try {
+    const organizationId = res.locals.organizationId;
+    const userId = res.locals.userId;
+    const { chatId, text, type = 'text', mediaUrl, caption, filename, template } = req.body;
+
+    // Валидация
+    if (!chatId || isNaN(parseInt(chatId))) {
+      logger.warn(`[sendMessageByChat] Некорректный chatId: "${chatId}". Ожидалось число.`);
+      return res.status(400).json({ error: 'Некорректный chatId. Ожидалось число.' });
+    }
+
+    if (type === 'text' && (!text || typeof text !== 'string' || text.trim() === '')) {
+      logger.warn('[sendMessageByChat] Отсутствует или пустой параметр text для типа text.');
+      return res.status(400).json({ error: 'Параметр text обязателен для типа text.' });
+    }
+
+    if ((type === 'image' || type === 'document' || type === 'video' || type === 'audio') && !mediaUrl) {
+      logger.warn(`[sendMessageByChat] Отсутствует mediaUrl для типа ${type}.`);
+      return res.status(400).json({ error: `Параметр mediaUrl обязателен для типа ${type}.` });
+    }
+
+    if (type === 'template' && (!template || !template.name)) {
+      logger.warn('[sendMessageByChat] Отсутствует template объект для типа template.');
+      return res.status(400).json({ error: 'Параметр template с полем name обязателен для типа template.' });
+    }
+
+    // Находим чат с информацией о типе подключения и канале
+    const chat = await prisma.chat.findFirst({
+      where: {
+        id: parseInt(chatId),
+        organizationId: organizationId,
+      },
+      include: {
+        organizationPhone: {
+          select: {
+            id: true,
+            phoneJid: true,
+            connectionType: true,
+            wabaAccessToken: true,
+            wabaPhoneNumberId: true,
+          },
+        },
+        telegramBot: {
+          select: {
+            id: true,
+            botUsername: true,
+          },
+        },
+      },
+    });
+
+    if (!chat) {
+      logger.warn(`[sendMessageByChat] Чат с ID ${chatId} не найден или не принадлежит организации ${organizationId}.`);
+      return res.status(404).json({ error: 'Чат не найден или не принадлежит вашей организации.' });
+    }
+
+    const channel = chat.channel;
+    let sentMessage: any;
+    let messageContent = '';
+
+    // Определяем метод отправки в зависимости от канала
+    if (channel === 'telegram') {
+      // Используем Telegram Bot API
+      logger.info(`[sendMessageByChat] Используем Telegram для чата ${chatId}`);
+
+      if (!chat.telegramBot || !chat.telegramChatId) {
+        logger.error(`[sendMessageByChat] У чата ${chatId} отсутствует telegramBot или telegramChatId.`);
+        return res.status(500).json({ error: 'У чата отсутствует привязка к Telegram боту.' });
+      }
+
+      const { sendTelegramMessage } = await import('../services/telegramService');
+
+      // Telegram поддерживает только текстовые сообщения через этот эндпоинт
+      if (type !== 'text') {
+        return res.status(400).json({ 
+          error: `Тип ${type} пока не поддерживается для Telegram через этот эндпоинт. Используйте специализированные методы Telegram Bot API.` 
+        });
+      }
+
+      try {
+        sentMessage = await sendTelegramMessage(
+          chat.telegramBot.id,
+          chat.telegramChatId,
+          text,
+          { userId }
+        );
+
+        logger.info(`[sendMessageByChat] Telegram сообщение отправлено в чат ${chatId}, messageId: ${sentMessage.message_id}`);
+        
+        return res.status(200).json({
+          success: true,
+          messageId: sentMessage.message_id,
+          chatId: chat.id,
+          channel: 'telegram',
+        });
+      } catch (error: any) {
+        logger.error(`[sendMessageByChat] Ошибка отправки Telegram сообщения:`, error);
+        return res.status(500).json({ 
+          error: 'Не удалось отправить сообщение через Telegram.', 
+          details: error.message 
+        });
+      }
+
+    } else if (channel === 'whatsapp') {
+      // WhatsApp: определяем тип подключения (Baileys или WABA)
+      if (!chat.organizationPhone) {
+        logger.error(`[sendMessageByChat] У чата ${chatId} отсутствует organizationPhone.`);
+        return res.status(500).json({ error: 'У чата отсутствует привязка к телефону организации.' });
+      }
+
+      const connectionType = chat.organizationPhone.connectionType || 'baileys';
+
+      if (connectionType === 'waba') {
+      // Используем WABA API
+      logger.info(`[sendMessageByChat] Используем WABA для чата ${chatId}`);
+      
+      const { createWABAService } = await import('../services/wabaService');
+      const wabaService = await createWABAService(chat.organizationPhone.id);
+      
+      if (!wabaService) {
+        logger.error(`[sendMessageByChat] WABA сервис не настроен для organizationPhoneId ${chat.organizationPhone.id}`);
+        return res.status(500).json({ error: 'WABA сервис не настроен для этого телефона.' });
+      }
+
+      const recipientPhone = chat.remoteJid.replace('@s.whatsapp.net', '');
+
+      // Отправляем через WABA в зависимости от типа
+      switch (type) {
+        case 'text':
+          sentMessage = await wabaService.sendTextMessage(recipientPhone, text);
+          messageContent = text;
+          break;
+        
+        case 'image':
+          sentMessage = await wabaService.sendImage(recipientPhone, mediaUrl, caption);
+          messageContent = caption || '[Image]';
+          break;
+        
+        case 'document':
+          sentMessage = await wabaService.sendDocument(recipientPhone, mediaUrl, filename, caption);
+          messageContent = caption || `[Document: ${filename || 'file'}]`;
+          break;
+        
+        case 'video':
+          sentMessage = await wabaService.sendMessage({
+            to: recipientPhone,
+            type: 'video',
+            video: { link: mediaUrl, caption }
+          });
+          messageContent = caption || '[Video]';
+          break;
+        
+        case 'audio':
+          sentMessage = await wabaService.sendMessage({
+            to: recipientPhone,
+            type: 'audio',
+            audio: { link: mediaUrl }
+          });
+          messageContent = '[Audio]';
+          break;
+        
+        case 'template':
+          sentMessage = await wabaService.sendTemplateMessage(
+            recipientPhone,
+            template.name,
+            template.language || 'ru',
+            template.components
+          );
+          messageContent = `Template: ${template.name}`;
+          break;
+        
+        default:
+          return res.status(400).json({ error: `Неподдерживаемый тип сообщения: ${type}` });
+      }
+
+      // Сохраняем сообщение в БД
+      const savedMessage = await prisma.message.create({
+        data: {
+          chatId: chat.id,
+          organizationPhoneId: chat.organizationPhone.id,
+          organizationId: chat.organizationId,
+          channel: 'whatsapp',
+          whatsappMessageId: sentMessage.messages?.[0]?.id,
+          receivingPhoneJid: chat.organizationPhone.phoneJid,
+          remoteJid: chat.remoteJid,
+          senderJid: chat.organizationPhone.phoneJid,
+          fromMe: true,
+          content: messageContent,
+          mediaUrl: mediaUrl || null,
+          type: type,
+          timestamp: new Date(),
+          status: 'sent',
+          senderUserId: userId,
+          isReadByOperator: true,
+        },
+      });
+
+      // Обновляем lastMessageAt
+      await prisma.chat.update({
+        where: { id: chat.id },
+        data: { lastMessageAt: new Date() },
+      });
+
+      logger.info(`[sendMessageByChat] WABA сообщение отправлено в чат ${chatId}, messageId: ${sentMessage.messages?.[0]?.id}`);
+      
+      return res.status(200).json({
+        success: true,
+        messageId: sentMessage.messages?.[0]?.id,
+        chatId: chat.id,
+        channel: 'whatsapp',
+        connectionType: 'waba',
+        message: savedMessage,
+      });
+
+    } else {
+      // Используем Baileys
+      logger.info(`[sendMessageByChat] Используем Baileys для чата ${chatId}`);
+      
+      const sock = getBaileysSock(chat.organizationPhone.id);
+
+      if (!sock || !sock.user) {
+        logger.warn(`[sendMessageByChat] Baileys сокет для organizationPhoneId ${chat.organizationPhone.id} не готов.`);
+        return res.status(503).json({
+          error: 'WhatsApp аккаунт не готов к отправке сообщений. Попробуйте позже.',
+          details: 'Socket not ready or user not authenticated.'
+        });
+      }
+
+      const normalizedReceiverJid = jidNormalizedUser(chat.remoteJid);
+
+      if (!normalizedReceiverJid) {
+        logger.error(`[sendMessageByChat] Некорректный remoteJid: "${chat.remoteJid}".`);
+        return res.status(500).json({ error: 'Некорректный remoteJid в базе данных.' });
+      }
+
+      // Для Baileys поддерживаем только text и media (не template)
+      let messageContentObj: any;
+
+      switch (type) {
+        case 'text':
+          messageContentObj = { text };
+          break;
+        
+        case 'image':
+        case 'document':
+        case 'video':
+        case 'audio':
+          return res.status(400).json({ 
+            error: `Тип ${type} пока не поддерживается для Baileys через этот эндпоинт. Используйте /send-media.` 
+          });
+        
+        case 'template':
+          return res.status(400).json({ 
+            error: 'Шаблоны не поддерживаются для Baileys подключений. Используйте только WABA.' 
+          });
+        
+        default:
+          return res.status(400).json({ error: `Неподдерживаемый тип сообщения: ${type}` });
+      }
+
+      sentMessage = await sendMessage(
+        sock,
+        normalizedReceiverJid,
+        messageContentObj,
+        organizationId,
+        chat.organizationPhone.id,
+        chat.organizationPhone.phoneJid,
+        userId
+      );
+
+      if (!sentMessage) {
+        logger.error(`[sendMessageByChat] Baileys сообщение не было отправлено для чата ${chatId}.`);
+        return res.status(500).json({ error: 'Не удалось отправить сообщение.' });
+      }
+
+      logger.info(`[sendMessageByChat] Baileys сообщение отправлено в чат ${chatId}, messageId: ${sentMessage.key.id}`);
+      
+      return res.status(200).json({
+        success: true,
+        messageId: sentMessage.key.id,
+        chatId: chat.id,
+        channel: 'whatsapp',
+        connectionType: 'baileys',
+      });
+      }
+    } else {
+      // Неизвестный канал
+      logger.error(`[sendMessageByChat] Неподдерживаемый канал: ${channel}`);
+      return res.status(400).json({ error: `Неподдерживаемый канал: ${channel}` });
+    }
+
+  } catch (error: any) {
+    logger.error(`[sendMessageByChat] Ошибка при отправке сообщения:`, error);
+    res.status(500).json({
+      error: 'Не удалось отправить сообщение.',
+      details: error.message,
+    });
+  }
+};

@@ -4,7 +4,7 @@
 
 # Конфигурация
 BASE_URL="https://bm.drawbridge.kz"
-TOKEN="YOUR_JWT_TOKEN"  # Замените на ваш токен
+TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsIm9yZ2FuaXphdGlvbklkIjoxLCJpYXQiOjE3NjQ4NzY3NTksImV4cCI6MTc2NTQ4MTU1OX0.mVt5sBotYVrnUa4zMpBFMa14WjNgwZOOOtIZtbdBm2E"  # Замените на ваш токен
 CHAT_ID="123"           # Замените на ID чата
 
 echo "🧪 Тестирование отправки шаблонов WABA..."
