@@ -19,6 +19,7 @@ exports.createWABAService = createWABAService;
 const axios_1 = __importDefault(require("axios"));
 const authStorage_1 = require("../config/authStorage");
 const pino_1 = __importDefault(require("pino"));
+const storageService_1 = require("./storageService");
 const logger = (0, pino_1.default)({ level: 'info' });
 class WABAService {
     constructor(config) {
@@ -216,6 +217,76 @@ class WABAService {
                 throw error;
             }
         });
+    }
+    /**
+     * Скачать медиа-файл из WhatsApp и загрузить на R2
+     */
+    downloadAndUploadMedia(mediaId, mimeType) {
+        return __awaiter(this, void 0, void 0, function* () {
+            var _a;
+            try {
+                // Шаг 1: Получаем URL медиа-файла
+                const mediaInfoUrl = `${this.baseUrl}/${mediaId}`;
+                const mediaInfoResponse = yield axios_1.default.get(mediaInfoUrl, {
+                    headers: {
+                        'Authorization': `Bearer ${this.config.accessToken}`,
+                    },
+                });
+                const mediaUrl = mediaInfoResponse.data.url;
+                logger.info(`📥 WABA: Получен URL медиа-файла: ${mediaId}`);
+                // Шаг 2: Скачиваем файл
+                const mediaResponse = yield axios_1.default.get(mediaUrl, {
+                    headers: {
+                        'Authorization': `Bearer ${this.config.accessToken}`,
+                    },
+                    responseType: 'arraybuffer',
+                });
+                const buffer = Buffer.from(mediaResponse.data);
+                logger.info(`📦 WABA: Скачан файл размером ${buffer.length} байт`);
+                // Шаг 3: Определяем расширение файла
+                const ext = this.getExtensionFromMimeType(mimeType);
+                const timestamp = Date.now();
+                const random = Math.random().toString(36).substring(2, 8);
+                const filename = `waba_${timestamp}_${random}${ext}`;
+                // Шаг 4: Загружаем на R2
+                const publicUrl = yield (0, storageService_1.saveMedia)(buffer, filename, mimeType);
+                logger.info(`✅ WABA: Файл загружен на R2: ${publicUrl}`);
+                return publicUrl;
+            }
+            catch (error) {
+                logger.error('❌ WABA: Ошибка скачивания/загрузки медиа:', ((_a = error.response) === null || _a === void 0 ? void 0 : _a.data) || error.message);
+                throw error;
+            }
+        });
+    }
+    /**
+     * Получить расширение файла по MIME-типу
+     */
+    getExtensionFromMimeType(mimeType) {
+        const mimeMap = {
+            'image/jpeg': '.jpg',
+            'image/jpg': '.jpg',
+            'image/png': '.png',
+            'image/gif': '.gif',
+            'image/webp': '.webp',
+            'video/mp4': '.mp4',
+            'video/mpeg': '.mpeg',
+            'video/webm': '.webm',
+            'audio/mpeg': '.mp3',
+            'audio/mp3': '.mp3',
+            'audio/ogg': '.ogg',
+            'audio/wav': '.wav',
+            'audio/aac': '.aac',
+            'audio/mp4': '.m4a',
+            'application/pdf': '.pdf',
+            'application/msword': '.doc',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+            'application/vnd.ms-excel': '.xls',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+            'text/plain': '.txt',
+            'text/csv': '.csv',
+        };
+        return mimeMap[mimeType] || '';
     }
 }
 exports.WABAService = WABAService;

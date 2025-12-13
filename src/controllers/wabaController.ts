@@ -196,19 +196,70 @@ async function handleIncomingMessage(orgPhone: any, message: any, contact?: any)
       content = message.image?.caption || '';
       messageType = 'image';
       mimeType = message.image?.mime_type;
-      // Здесь можно загрузить изображение с серверов WhatsApp
+      
+      // Скачиваем изображение с серверов WhatsApp и загружаем на R2
+      if (message.image?.id) {
+        const wabaService = await createWABAService(orgPhone.id);
+        if (wabaService) {
+          try {
+            mediaUrl = await wabaService.downloadAndUploadMedia(message.image.id, mimeType);
+            logger.info(`✅ WABA: Изображение загружено на R2: ${mediaUrl}`);
+          } catch (error) {
+            logger.error('❌ WABA: Ошибка загрузки изображения:', error);
+          }
+        }
+      }
     } else if (message.type === 'document') {
       content = message.document?.caption || '';
       messageType = 'document';
       filename = message.document?.filename;
       mimeType = message.document?.mime_type;
+      
+      // Скачиваем документ с серверов WhatsApp и загружаем на R2
+      if (message.document?.id) {
+        const wabaService = await createWABAService(orgPhone.id);
+        if (wabaService) {
+          try {
+            mediaUrl = await wabaService.downloadAndUploadMedia(message.document.id, mimeType);
+            logger.info(`✅ WABA: Документ загружен на R2: ${mediaUrl}`);
+          } catch (error) {
+            logger.error('❌ WABA: Ошибка загрузки документа:', error);
+          }
+        }
+      }
     } else if (message.type === 'audio') {
       messageType = 'audio';
       mimeType = message.audio?.mime_type;
+      
+      // Скачиваем аудио с серверов WhatsApp и загружаем на R2
+      if (message.audio?.id) {
+        const wabaService = await createWABAService(orgPhone.id);
+        if (wabaService) {
+          try {
+            mediaUrl = await wabaService.downloadAndUploadMedia(message.audio.id, mimeType);
+            logger.info(`✅ WABA: Аудио загружено на R2: ${mediaUrl}`);
+          } catch (error) {
+            logger.error('❌ WABA: Ошибка загрузки аудио:', error);
+          }
+        }
+      }
     } else if (message.type === 'video') {
       content = message.video?.caption || '';
       messageType = 'video';
       mimeType = message.video?.mime_type;
+      
+      // Скачиваем видео с серверов WhatsApp и загружаем на R2
+      if (message.video?.id) {
+        const wabaService = await createWABAService(orgPhone.id);
+        if (wabaService) {
+          try {
+            mediaUrl = await wabaService.downloadAndUploadMedia(message.video.id, mimeType);
+            logger.info(`✅ WABA: Видео загружено на R2: ${mediaUrl}`);
+          } catch (error) {
+            logger.error('❌ WABA: Ошибка загрузки видео:', error);
+          }
+        }
+      }
     } else if (message.type === 'button') {
       content = message.button?.text || '';
       messageType = 'button';

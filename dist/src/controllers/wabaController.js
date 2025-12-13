@@ -178,7 +178,7 @@ function handleMessageStatus(organizationPhoneId, status) {
  */
 function handleIncomingMessage(orgPhone, message, contact) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s;
         try {
             // Нормализуем номер в формат WhatsApp JID
             const phoneNumber = message.from;
@@ -201,33 +201,84 @@ function handleIncomingMessage(orgPhone, message, contact) {
                 content = ((_c = message.image) === null || _c === void 0 ? void 0 : _c.caption) || '';
                 messageType = 'image';
                 mimeType = (_d = message.image) === null || _d === void 0 ? void 0 : _d.mime_type;
-                // Здесь можно загрузить изображение с серверов WhatsApp
+                // Скачиваем изображение с серверов WhatsApp и загружаем на R2
+                if ((_e = message.image) === null || _e === void 0 ? void 0 : _e.id) {
+                    const wabaService = yield (0, wabaService_1.createWABAService)(orgPhone.id);
+                    if (wabaService) {
+                        try {
+                            mediaUrl = yield wabaService.downloadAndUploadMedia(message.image.id, mimeType);
+                            logger.info(`✅ WABA: Изображение загружено на R2: ${mediaUrl}`);
+                        }
+                        catch (error) {
+                            logger.error('❌ WABA: Ошибка загрузки изображения:', error);
+                        }
+                    }
+                }
             }
             else if (message.type === 'document') {
-                content = ((_e = message.document) === null || _e === void 0 ? void 0 : _e.caption) || '';
+                content = ((_f = message.document) === null || _f === void 0 ? void 0 : _f.caption) || '';
                 messageType = 'document';
-                filename = (_f = message.document) === null || _f === void 0 ? void 0 : _f.filename;
-                mimeType = (_g = message.document) === null || _g === void 0 ? void 0 : _g.mime_type;
+                filename = (_g = message.document) === null || _g === void 0 ? void 0 : _g.filename;
+                mimeType = (_h = message.document) === null || _h === void 0 ? void 0 : _h.mime_type;
+                // Скачиваем документ с серверов WhatsApp и загружаем на R2
+                if ((_j = message.document) === null || _j === void 0 ? void 0 : _j.id) {
+                    const wabaService = yield (0, wabaService_1.createWABAService)(orgPhone.id);
+                    if (wabaService) {
+                        try {
+                            mediaUrl = yield wabaService.downloadAndUploadMedia(message.document.id, mimeType);
+                            logger.info(`✅ WABA: Документ загружен на R2: ${mediaUrl}`);
+                        }
+                        catch (error) {
+                            logger.error('❌ WABA: Ошибка загрузки документа:', error);
+                        }
+                    }
+                }
             }
             else if (message.type === 'audio') {
                 messageType = 'audio';
-                mimeType = (_h = message.audio) === null || _h === void 0 ? void 0 : _h.mime_type;
+                mimeType = (_k = message.audio) === null || _k === void 0 ? void 0 : _k.mime_type;
+                // Скачиваем аудио с серверов WhatsApp и загружаем на R2
+                if ((_l = message.audio) === null || _l === void 0 ? void 0 : _l.id) {
+                    const wabaService = yield (0, wabaService_1.createWABAService)(orgPhone.id);
+                    if (wabaService) {
+                        try {
+                            mediaUrl = yield wabaService.downloadAndUploadMedia(message.audio.id, mimeType);
+                            logger.info(`✅ WABA: Аудио загружено на R2: ${mediaUrl}`);
+                        }
+                        catch (error) {
+                            logger.error('❌ WABA: Ошибка загрузки аудио:', error);
+                        }
+                    }
+                }
             }
             else if (message.type === 'video') {
-                content = ((_j = message.video) === null || _j === void 0 ? void 0 : _j.caption) || '';
+                content = ((_m = message.video) === null || _m === void 0 ? void 0 : _m.caption) || '';
                 messageType = 'video';
-                mimeType = (_k = message.video) === null || _k === void 0 ? void 0 : _k.mime_type;
+                mimeType = (_o = message.video) === null || _o === void 0 ? void 0 : _o.mime_type;
+                // Скачиваем видео с серверов WhatsApp и загружаем на R2
+                if ((_p = message.video) === null || _p === void 0 ? void 0 : _p.id) {
+                    const wabaService = yield (0, wabaService_1.createWABAService)(orgPhone.id);
+                    if (wabaService) {
+                        try {
+                            mediaUrl = yield wabaService.downloadAndUploadMedia(message.video.id, mimeType);
+                            logger.info(`✅ WABA: Видео загружено на R2: ${mediaUrl}`);
+                        }
+                        catch (error) {
+                            logger.error('❌ WABA: Ошибка загрузки видео:', error);
+                        }
+                    }
+                }
             }
             else if (message.type === 'button') {
-                content = ((_l = message.button) === null || _l === void 0 ? void 0 : _l.text) || '';
+                content = ((_q = message.button) === null || _q === void 0 ? void 0 : _q.text) || '';
                 messageType = 'button';
             }
             else if (message.type === 'interactive') {
-                if (((_m = message.interactive) === null || _m === void 0 ? void 0 : _m.type) === 'button_reply') {
+                if (((_r = message.interactive) === null || _r === void 0 ? void 0 : _r.type) === 'button_reply') {
                     content = message.interactive.button_reply.title;
                     messageType = 'interactive_button';
                 }
-                else if (((_o = message.interactive) === null || _o === void 0 ? void 0 : _o.type) === 'list_reply') {
+                else if (((_s = message.interactive) === null || _s === void 0 ? void 0 : _s.type) === 'list_reply') {
                     content = message.interactive.list_reply.title;
                     messageType = 'interactive_list';
                 }
