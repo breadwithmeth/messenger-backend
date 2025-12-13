@@ -419,30 +419,81 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
         return res.status(500).json({ error: 'У чата отсутствует привязка к Telegram боту.' });
       }
 
-      const { sendTelegramMessage } = await import('../services/telegramService');
-
-      // Telegram поддерживает только текстовые сообщения через этот эндпоинт
-      if (type !== 'text') {
-        return res.status(400).json({ 
-          error: `Тип ${type} пока не поддерживается для Telegram через этот эндпоинт. Используйте специализированные методы Telegram Bot API.` 
-        });
-      }
+      const { 
+        sendTelegramMessage,
+        sendTelegramPhoto,
+        sendTelegramDocument,
+        sendTelegramVideo,
+        sendTelegramAudio,
+      } = await import('../services/telegramService');
 
       try {
-        sentMessage = await sendTelegramMessage(
-          chat.telegramBot.id,
-          chat.telegramChatId,
-          text,
-          { userId }
-        );
+        // Обработка разных типов сообщений
+        if (type === 'text') {
+          sentMessage = await sendTelegramMessage(
+            chat.telegramBot.id,
+            chat.telegramChatId,
+            text,
+            { userId }
+          );
+        } else if (type === 'image') {
+          if (!mediaUrl) {
+            return res.status(400).json({ error: 'Отсутствует mediaUrl для изображения' });
+          }
+          sentMessage = await sendTelegramPhoto(
+            chat.telegramBot.id,
+            chat.telegramChatId,
+            mediaUrl,
+            text || caption,
+            { userId }
+          );
+        } else if (type === 'document') {
+          if (!mediaUrl) {
+            return res.status(400).json({ error: 'Отсутствует mediaUrl для документа' });
+          }
+          sentMessage = await sendTelegramDocument(
+            chat.telegramBot.id,
+            chat.telegramChatId,
+            mediaUrl,
+            text || caption,
+            { userId, filename }
+          );
+        } else if (type === 'video') {
+          if (!mediaUrl) {
+            return res.status(400).json({ error: 'Отсутствует mediaUrl для видео' });
+          }
+          sentMessage = await sendTelegramVideo(
+            chat.telegramBot.id,
+            chat.telegramChatId,
+            mediaUrl,
+            text || caption,
+            { userId }
+          );
+        } else if (type === 'audio') {
+          if (!mediaUrl) {
+            return res.status(400).json({ error: 'Отсутствует mediaUrl для аудио' });
+          }
+          sentMessage = await sendTelegramAudio(
+            chat.telegramBot.id,
+            chat.telegramChatId,
+            mediaUrl,
+            text || caption,
+            { userId }
+          );
+        } else {
+          return res.status(400).json({ 
+            error: `Тип ${type} не поддерживается для Telegram. Поддерживаются: text, image, document, video, audio` 
+          });
+        }
 
-        logger.info(`[sendMessageByChat] Telegram сообщение отправлено в чат ${chatId}, messageId: ${sentMessage.message_id}`);
+        logger.info(`[sendMessageByChat] Telegram сообщение (${type}) отправлено в чат ${chatId}, messageId: ${sentMessage.message_id}`);
         
         return res.status(200).json({
           success: true,
           messageId: sentMessage.message_id,
           chatId: chat.id,
           channel: 'telegram',
+          type,
         });
       } catch (error: any) {
         logger.error(`[sendMessageByChat] Ошибка отправки Telegram сообщения:`, error);

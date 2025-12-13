@@ -50,6 +50,10 @@ exports.startTelegramBot = startTelegramBot;
 exports.stopTelegramBot = stopTelegramBot;
 exports.getTelegramBot = getTelegramBot;
 exports.sendTelegramMessage = sendTelegramMessage;
+exports.sendTelegramPhoto = sendTelegramPhoto;
+exports.sendTelegramDocument = sendTelegramDocument;
+exports.sendTelegramVideo = sendTelegramVideo;
+exports.sendTelegramAudio = sendTelegramAudio;
 exports.startAllTelegramBots = startAllTelegramBots;
 exports.stopAllTelegramBots = stopAllTelegramBots;
 const node_telegram_bot_api_1 = __importDefault(require("node-telegram-bot-api"));
@@ -468,6 +472,239 @@ function sendTelegramMessage(botId, chatId, content, options) {
         }
         catch (error) {
             logger.error(`[Telegram] Ошибка отправки сообщения:`, error);
+            throw error;
+        }
+    });
+}
+/**
+ * Отправка фото через Telegram бота
+ */
+function sendTelegramPhoto(botId, chatId, photoUrl, caption, options) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const telegram = getTelegramBot(botId);
+        if (!telegram) {
+            throw new Error(`Telegram бот ID ${botId} не активен`);
+        }
+        try {
+            const sendOptions = {};
+            if (caption) {
+                sendOptions.caption = caption;
+            }
+            if (options === null || options === void 0 ? void 0 : options.replyToMessageId) {
+                sendOptions.reply_to_message_id = options.replyToMessageId;
+            }
+            const sent = yield telegram.sendPhoto(chatId, photoUrl, sendOptions);
+            // Сохраняем в БД
+            const chat = yield authStorage_1.prisma.chat.findFirst({
+                where: {
+                    channel: 'telegram',
+                    telegramBotId: botId,
+                    telegramChatId: chatId,
+                },
+            });
+            if (chat) {
+                yield authStorage_1.prisma.message.create({
+                    data: {
+                        organizationId: chat.organizationId,
+                        channel: 'telegram',
+                        telegramBotId: botId,
+                        telegramMessageId: sent.message_id,
+                        telegramChatId: chatId,
+                        chatId: chat.id,
+                        fromMe: true,
+                        content: caption || '',
+                        type: 'image',
+                        mediaUrl: photoUrl,
+                        timestamp: new Date(sent.date * 1000),
+                        status: 'sent',
+                        senderUserId: options === null || options === void 0 ? void 0 : options.userId,
+                    },
+                });
+                yield authStorage_1.prisma.chat.update({
+                    where: { id: chat.id },
+                    data: { lastMessageAt: new Date() },
+                });
+                logger.info(`[Telegram] Отправлено фото в чат ${chatId}`);
+            }
+            return sent;
+        }
+        catch (error) {
+            logger.error(`[Telegram] Ошибка отправки фото:`, error);
+            throw error;
+        }
+    });
+}
+/**
+ * Отправка документа через Telegram бота
+ */
+function sendTelegramDocument(botId, chatId, documentUrl, caption, options) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const telegram = getTelegramBot(botId);
+        if (!telegram) {
+            throw new Error(`Telegram бот ID ${botId} не активен`);
+        }
+        try {
+            const sendOptions = {};
+            if (caption) {
+                sendOptions.caption = caption;
+            }
+            if (options === null || options === void 0 ? void 0 : options.replyToMessageId) {
+                sendOptions.reply_to_message_id = options.replyToMessageId;
+            }
+            const sent = yield telegram.sendDocument(chatId, documentUrl, sendOptions);
+            // Сохраняем в БД
+            const chat = yield authStorage_1.prisma.chat.findFirst({
+                where: {
+                    channel: 'telegram',
+                    telegramBotId: botId,
+                    telegramChatId: chatId,
+                },
+            });
+            if (chat) {
+                yield authStorage_1.prisma.message.create({
+                    data: {
+                        organizationId: chat.organizationId,
+                        channel: 'telegram',
+                        telegramBotId: botId,
+                        telegramMessageId: sent.message_id,
+                        telegramChatId: chatId,
+                        chatId: chat.id,
+                        fromMe: true,
+                        content: caption || '',
+                        type: 'document',
+                        mediaUrl: documentUrl,
+                        filename: options === null || options === void 0 ? void 0 : options.filename,
+                        timestamp: new Date(sent.date * 1000),
+                        status: 'sent',
+                        senderUserId: options === null || options === void 0 ? void 0 : options.userId,
+                    },
+                });
+                yield authStorage_1.prisma.chat.update({
+                    where: { id: chat.id },
+                    data: { lastMessageAt: new Date() },
+                });
+                logger.info(`[Telegram] Отправлен документ в чат ${chatId}`);
+            }
+            return sent;
+        }
+        catch (error) {
+            logger.error(`[Telegram] Ошибка отправки документа:`, error);
+            throw error;
+        }
+    });
+}
+/**
+ * Отправка видео через Telegram бота
+ */
+function sendTelegramVideo(botId, chatId, videoUrl, caption, options) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const telegram = getTelegramBot(botId);
+        if (!telegram) {
+            throw new Error(`Telegram бот ID ${botId} не активен`);
+        }
+        try {
+            const sendOptions = {};
+            if (caption) {
+                sendOptions.caption = caption;
+            }
+            if (options === null || options === void 0 ? void 0 : options.replyToMessageId) {
+                sendOptions.reply_to_message_id = options.replyToMessageId;
+            }
+            const sent = yield telegram.sendVideo(chatId, videoUrl, sendOptions);
+            // Сохраняем в БД
+            const chat = yield authStorage_1.prisma.chat.findFirst({
+                where: {
+                    channel: 'telegram',
+                    telegramBotId: botId,
+                    telegramChatId: chatId,
+                },
+            });
+            if (chat) {
+                yield authStorage_1.prisma.message.create({
+                    data: {
+                        organizationId: chat.organizationId,
+                        channel: 'telegram',
+                        telegramBotId: botId,
+                        telegramMessageId: sent.message_id,
+                        telegramChatId: chatId,
+                        chatId: chat.id,
+                        fromMe: true,
+                        content: caption || '',
+                        type: 'video',
+                        mediaUrl: videoUrl,
+                        timestamp: new Date(sent.date * 1000),
+                        status: 'sent',
+                        senderUserId: options === null || options === void 0 ? void 0 : options.userId,
+                    },
+                });
+                yield authStorage_1.prisma.chat.update({
+                    where: { id: chat.id },
+                    data: { lastMessageAt: new Date() },
+                });
+                logger.info(`[Telegram] Отправлено видео в чат ${chatId}`);
+            }
+            return sent;
+        }
+        catch (error) {
+            logger.error(`[Telegram] Ошибка отправки видео:`, error);
+            throw error;
+        }
+    });
+}
+/**
+ * Отправка аудио через Telegram бота
+ */
+function sendTelegramAudio(botId, chatId, audioUrl, caption, options) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const telegram = getTelegramBot(botId);
+        if (!telegram) {
+            throw new Error(`Telegram бот ID ${botId} не активен`);
+        }
+        try {
+            const sendOptions = {};
+            if (caption) {
+                sendOptions.caption = caption;
+            }
+            if (options === null || options === void 0 ? void 0 : options.replyToMessageId) {
+                sendOptions.reply_to_message_id = options.replyToMessageId;
+            }
+            const sent = yield telegram.sendAudio(chatId, audioUrl, sendOptions);
+            // Сохраняем в БД
+            const chat = yield authStorage_1.prisma.chat.findFirst({
+                where: {
+                    channel: 'telegram',
+                    telegramBotId: botId,
+                    telegramChatId: chatId,
+                },
+            });
+            if (chat) {
+                yield authStorage_1.prisma.message.create({
+                    data: {
+                        organizationId: chat.organizationId,
+                        channel: 'telegram',
+                        telegramBotId: botId,
+                        telegramMessageId: sent.message_id,
+                        telegramChatId: chatId,
+                        chatId: chat.id,
+                        fromMe: true,
+                        content: caption || '',
+                        type: 'audio',
+                        mediaUrl: audioUrl,
+                        timestamp: new Date(sent.date * 1000),
+                        status: 'sent',
+                        senderUserId: options === null || options === void 0 ? void 0 : options.userId,
+                    },
+                });
+                yield authStorage_1.prisma.chat.update({
+                    where: { id: chat.id },
+                    data: { lastMessageAt: new Date() },
+                });
+                logger.info(`[Telegram] Отправлено аудио в чат ${chatId}`);
+            }
+            return sent;
+        }
+        catch (error) {
+            logger.error(`[Telegram] Ошибка отправки аудио:`, error);
             throw error;
         }
     });
