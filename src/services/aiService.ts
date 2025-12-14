@@ -7,8 +7,12 @@ import pino from 'pino';
 const logger = pino({ level: 'info' });
 
 // DeepSeek API configuration
-const DEEPSEEK_API_KEY = 'sk-56d3d0fbcde040fabc9c411aab80fdf1';
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
 const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
+
+if (!DEEPSEEK_API_KEY) {
+  logger.warn('[AI Service] DEEPSEEK_API_KEY не установлен в переменных окружения');
+}
 
 const openai = new OpenAI({
   apiKey: DEEPSEEK_API_KEY,
