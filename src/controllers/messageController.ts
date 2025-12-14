@@ -604,6 +604,26 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
       });
 
       logger.info(`[sendMessageByChat] WABA сообщение отправлено в чат ${chatId}, messageId: ${sentMessage.messages?.[0]?.id}`);
+
+      // Отправляем Socket.IO уведомление о новом сообщении от оператора
+      const { notifyNewMessage } = await import('../services/socketService');
+      try {
+        notifyNewMessage(organizationId, {
+          id: savedMessage.id,
+          chatId: savedMessage.chatId,
+          content: savedMessage.content,
+          type: savedMessage.type,
+          mediaUrl: savedMessage.mediaUrl,
+          filename: savedMessage.filename,
+          fromMe: true,
+          timestamp: savedMessage.timestamp,
+          status: savedMessage.status,
+          senderUserId: userId,
+          channel: 'whatsapp',
+        });
+      } catch (socketError) {
+        logger.error('[Socket.IO] Ошибка отправки уведомления:', socketError);
+      }
       
       return res.status(200).json({
         success: true,
@@ -676,6 +696,9 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
       }
 
       logger.info(`[sendMessageByChat] Baileys сообщение отправлено в чат ${chatId}, messageId: ${sentMessage.key.id}`);
+
+      // Socket.IO уведомление отправляется автоматически в baileys.ts через sendMessage()
+      // Дополнительное уведомление не требуется, так как baileys.ts уже обрабатывает это
       
       return res.status(200).json({
         success: true,

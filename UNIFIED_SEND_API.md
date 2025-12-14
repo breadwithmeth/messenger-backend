@@ -9,8 +9,19 @@
 ✅ **Один эндпоинт** вместо трех разных API  
 ✅ **Автоматическое определение** канала и типа подключения  
 ✅ **Поддержка трех каналов**: WhatsApp (Baileys/WABA) и Telegram  
-✅ **Поддержка всех типов** сообщений для WABA  
+✅ **Поддержка всех типов** сообщений для WABA и Telegram  
 ✅ **Унифицированный интерфейс** для фронтенда  
+
+## Поддерживаемые типы сообщений по каналам
+
+| Тип | WhatsApp (Baileys) | WhatsApp (WABA) | Telegram |
+|-----|-------------------|-----------------|----------|
+| `text` | ✅ | ✅ | ✅ |
+| `image` | ❌ | ✅ | ✅ |
+| `document` | ❌ | ✅ | ✅ |
+| `video` | ❌ | ✅ | ✅ |
+| `audio` | ❌ | ✅ | ✅ |
+| `template` | ❌ | ✅ | ❌ |  
 
 ## Эндпоинт
 
@@ -39,11 +50,12 @@ POST /api/messages/send-by-chat
 
 | Параметр | Тип | Обязательный | Описание |
 |----------|-----|--------------|----------|
-| `mediaUrl` | string | Да | URL медиафайла (только для WABA). Используйте `/api/media/upload-for-waba` для загрузки |
-| `caption` | string | Нет | Подпись к медиафайлу |
+| `mediaUrl` | string | Да | URL медиафайла. Используйте `/api/media/upload-for-waba` для загрузки на R2 |
+| `caption` | string | Нет | Подпись к медиафайлу (текст сообщения) |
+| `text` | string | Нет | Альтернатива `caption` |
 | `filename` | string | Нет | Имя файла (для document) |
 
-> **💡 Как загрузить медиафайл:** Используйте эндпоинт [`POST /api/media/upload-for-waba`](./WABA_MEDIA_UPLOAD.md) для загрузки файла и получения `mediaUrl`
+> **💡 Как загрузить медиафайл:** Используйте эндпоинт [`POST /api/media/upload-for-waba`](./WABA_MEDIA_UPLOAD.md) для загрузки файла на Cloudflare R2 и получения публичного `mediaUrl`. Полученный URL работает как для WhatsApp, так и для Telegram.
 
 ### Параметры для шаблонов (type: "template")
 
@@ -175,6 +187,63 @@ curl -X POST https://bm.drawbridge.kz/api/messages/send-by-chat \
     "chatId": 456,
     "type": "text",
     "text": "Привет из Telegram!"
+  }'
+```
+
+### 7. Telegram (изображение)
+
+```bash
+curl -X POST https://bm.drawbridge.kz/api/messages/send-by-chat \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "chatId": 456,
+    "type": "image",
+    "mediaUrl": "https://r2.drawbridge.kz/media/image_123.jpg",
+    "caption": "Смотри фото!"
+  }'
+```
+
+### 8. Telegram (документ)
+
+```bash
+curl -X POST https://bm.drawbridge.kz/api/messages/send-by-chat \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "chatId": 456,
+    "type": "document",
+    "mediaUrl": "https://r2.drawbridge.kz/media/document_123.pdf",
+    "filename": "report.pdf",
+    "caption": "Ваш отчет"
+  }'
+```
+
+### 9. Telegram (видео)
+
+```bash
+curl -X POST https://bm.drawbridge.kz/api/messages/send-by-chat \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "chatId": 456,
+    "type": "video",
+    "mediaUrl": "https://r2.drawbridge.kz/media/video_123.mp4",
+    "caption": "Обучающее видео"
+  }'
+```
+
+### 10. Telegram (аудио)
+
+```bash
+curl -X POST https://bm.drawbridge.kz/api/messages/send-by-chat \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "chatId": 456,
+    "type": "audio",
+    "mediaUrl": "https://r2.drawbridge.kz/media/audio_123.mp3",
+    "caption": "Голосовое сообщение"
   }'
 ```
 

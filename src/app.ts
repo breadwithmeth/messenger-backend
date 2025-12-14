@@ -14,6 +14,7 @@ import mediaRoutes from './routes/mediaRoutes';
 import ticketRoutes from './routes/ticketRoutes';
 import telegramRoutes from './routes/telegramRoutes'; // <-- НОВОЕ
 import wabaRoutes from './routes/wabaRoutes'; // <-- WABA интеграция
+import aiRoutes from './routes/aiRoutes'; // <-- AI предложения ответов
 import errorHandler from './middlewares/errorHandler'; // Corrected import path
 import cors, { CorsOptions } from 'cors';
 import path from 'path'; // <--- ДОБАВИТЬ
@@ -92,6 +93,7 @@ console.log('✅ Unread маршруты подключены');
 app.use('/api/media', mediaRoutes); // Маршруты для загрузки и отправки медиафайлов
 app.use('/api/tickets', ticketRoutes); // Маршруты для тикет-системы
 app.use('/api/telegram', telegramRoutes); // <-- НОВОЕ: Маршруты для Telegram
+app.use('/api/ai', aiRoutes); // <-- AI предложения ответов
 
 // 404 JSON для несуществующих маршрутов
 app.use((req, res) => {

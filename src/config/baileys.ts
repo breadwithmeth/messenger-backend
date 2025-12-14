@@ -27,6 +27,7 @@ import pino from 'pino';
 import { Buffer } from 'buffer';
 import * as fs from 'fs/promises'; // Для работы с файловой системой (удаление папок)
 import path from 'path'; // Для работы с путями файлов
+import { notifyNewChat, notifyNewMessage, notifyChatsUpdated } from '../services/socketService'; // Socket.IO
 
 const logger = pino({ level: 'info' });
 
@@ -419,6 +420,23 @@ export async function ensureChat(
               },
             });
             // logger.info(`✅ Создан новый чат для JID: ${normalizedRemoteJid} (Ваш номер: ${myJidNormalized || '(пусто)'}, Организация: ${organizationId}, Phone ID: ${organizationPhoneId}, ID чата: ${chat.id}, Тикет #${nextTicketNumber})`);
+            
+            // Отправляем Socket.IO уведомление о новом чате
+            try {
+              notifyNewChat(organizationId, {
+                id: chat.id,
+                remoteJid: chat.remoteJid,
+                name: chat.name,
+                channel: 'whatsapp',
+                ticketNumber: chat.ticketNumber,
+                status: chat.status,
+                priority: chat.priority,
+                lastMessageAt: chat.lastMessageAt,
+                unreadCount: 0,
+              });
+            } catch (socketError) {
+              logger.error('[Socket.IO] Ошибка отправки уведомления о новом чате:', socketError);
+            }
           } catch (e: any) {
             // Возможна гонка и уникальный конфликт — пробуем перечитать
             if (e?.code === 'P2002') {
@@ -1078,6 +1096,24 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
                         lastMessageAt: timestampDate,
                     },
                 });
+            }
+
+            // Отправляем Socket.IO уведомление о новом сообщении
+            try {
+              notifyNewMessage(organizationId, {
+                id: savedMessage.id,
+                chatId: savedMessage.chatId,
+                content: savedMessage.content,
+                type: savedMessage.type,
+                mediaUrl: savedMessage.mediaUrl,
+                filename: savedMessage.filename,
+                fromMe: savedMessage.fromMe,
+                timestamp: savedMessage.timestamp,
+                status: savedMessage.status,
+                senderJid: savedMessage.senderJid,
+              });
+            } catch (socketError) {
+              logger.error('[Socket.IO] Ошибка отправки уведомления о новом сообщении:', socketError);
             }
 
           // logger.info(`💾 Сообщение (тип: ${messageType}, ID: ${savedMessage.id}) сохранено в БД (JID собеседника: ${remoteJid}, Ваш номер: ${phoneJid}, chatId: ${savedMessage.chatId}).`);

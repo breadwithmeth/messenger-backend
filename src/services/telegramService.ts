@@ -325,7 +325,7 @@ async function handleIncomingMessage(
     }
 
     // Сохраняем сообщение в БД
-    await prisma.message.create({
+    const savedMessage = await prisma.message.create({
       data: {
         organizationId,
         channel: 'telegram',
@@ -357,6 +357,26 @@ async function handleIncomingMessage(
     });
 
     logger.info(`[Telegram] Сохранено входящее сообщение от ${username || userId} в чат #${chat.id}`);
+
+    // Отправляем Socket.IO уведомление о новом сообщении
+    const { notifyNewMessage } = await import('./socketService');
+    try {
+      notifyNewMessage(organizationId, {
+        id: savedMessage.id,
+        chatId: savedMessage.chatId,
+        content: savedMessage.content,
+        type: savedMessage.type,
+        mediaUrl: savedMessage.mediaUrl,
+        filename: savedMessage.filename,
+        fromMe: savedMessage.fromMe,
+        timestamp: savedMessage.timestamp,
+        status: savedMessage.status,
+        telegramUsername: savedMessage.telegramUsername,
+        channel: 'telegram',
+      });
+    } catch (socketError) {
+      logger.error('[Socket.IO] Ошибка отправки уведомления Telegram:', socketError);
+    }
   } catch (error: any) {
     logger.error(`[Telegram] Ошибка обработки входящего сообщения:`, error);
   }

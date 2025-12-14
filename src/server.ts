@@ -2,6 +2,7 @@ import http from 'http';
 import app from './app';
 import { startWaSession } from './services/waService'; // Импортируйте startWaSession
 import { startAllTelegramBots, stopAllTelegramBots } from './services/telegramService'; // <-- НОВОЕ
+import { initializeSocketIO } from './services/socketService'; // <-- Socket.IO
 import pino from 'pino'; // Добавьте импорт pino
 import { prisma } from './config/authStorage'; // Импортируйте prisma
 
@@ -9,6 +10,10 @@ const PORT = process.env.PORT || 3000;
 
 const server = http.createServer(app);
 const logger = pino({ level: 'info' }); // Инициализируйте logger
+
+// Инициализируем Socket.IO
+initializeSocketIO(server);
+logger.info('[ServerInit] Socket.IO инициализирован');
 async function initializeConnectedSessions() {
   logger.info('[ServerInit] Начинаем инициализацию ранее подключенных WhatsApp сессий...');
   try {
@@ -48,8 +53,10 @@ async function initializeConnectedSessions() {
   }
 }
 
-app.listen(PORT, async () => {
+server.listen(PORT, async () => {
   console.log(`Server is running on port ${PORT}`);
+  logger.info(`[ServerInit] HTTP сервер запущен на порту ${PORT}`);
+  logger.info(`[ServerInit] Socket.IO доступен на ws://localhost:${PORT}`);
   
   // Вызываем функцию инициализации WhatsApp сессий после старта сервера
   await initializeConnectedSessions();
