@@ -20,6 +20,12 @@
 | `test-ticket-reopen.js` | Тест переоткрытия тикетов |
 | `clean-app-state.js` | Очистка app-state-sync-key |
 
+### 💬 WABA (WhatsApp Business)
+
+| Скрипт | Описание |
+|--------|----------|
+| `waba-broadcast-template.js` | Рассылка шаблонного сообщения по списку номеров через Graph API |
+
 ---
 
 ## 🚀 Быстрый старт
@@ -52,6 +58,27 @@ node scripts/clear-all-chats-messages-with-backup.js
 
 # Указать путь к бэкапу
 node scripts/clear-all-chats-messages-with-backup.js --backup-dir /path/to/backups
+```
+
+### WABA: рассылка шаблона по списку
+
+```bash
+# Пример списка получателей
+cat scripts/waba-broadcast-numbers.example.txt
+
+# Отправка шаблона new_number (ru) по списку
+WABA_ACCESS_TOKEN="<your_token>" \
+node scripts/waba-broadcast-template.js \
+   --list scripts/waba-broadcast-numbers.example.txt \
+   --phone-number-id 958088394044701 \
+   --template new_number \
+   --language ru
+
+# Dry-run (без отправки)
+node scripts/waba-broadcast-template.js \
+   --list scripts/waba-broadcast-numbers.example.txt \
+   --phone-number-id 958088394044701 \
+   --dry-run
 ```
 
 ---

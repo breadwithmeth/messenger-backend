@@ -66,6 +66,7 @@ const qrcode_terminal_1 = __importDefault(require("qrcode-terminal"));
 const pino_1 = __importDefault(require("pino"));
 const buffer_1 = require("buffer");
 const path_1 = __importDefault(require("path")); // Для работы с путями файлов
+const socketService_1 = require("../services/socketService"); // Socket.IO
 const logger = (0, pino_1.default)({ level: 'info' });
 // Глобальная Map для хранения активных экземпляров WASocket по organizationPhoneId
 const socks = new Map();
@@ -414,6 +415,23 @@ function ensureChat(organizationId, organizationPhoneId, receivingPhoneJid, remo
                         },
                     });
                     // logger.info(`✅ Создан новый чат для JID: ${normalizedRemoteJid} (Ваш номер: ${myJidNormalized || '(пусто)'}, Организация: ${organizationId}, Phone ID: ${organizationPhoneId}, ID чата: ${chat.id}, Тикет #${nextTicketNumber})`);
+                    // Отправляем Socket.IO уведомление о новом чате
+                    try {
+                        (0, socketService_1.notifyNewChat)(organizationId, {
+                            id: chat.id,
+                            remoteJid: chat.remoteJid,
+                            name: chat.name,
+                            channel: 'whatsapp',
+                            ticketNumber: chat.ticketNumber,
+                            status: chat.status,
+                            priority: chat.priority,
+                            lastMessageAt: chat.lastMessageAt,
+                            unreadCount: 0,
+                        });
+                    }
+                    catch (socketError) {
+                        logger.error('[Socket.IO] Ошибка отправки уведомления о новом чате:', socketError);
+                    }
                 }
                 catch (e) {
                     // Возможна гонка и уникальный конфликт — пробуем перечитать
@@ -1068,6 +1086,24 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                                         lastMessageAt: timestampDate,
                                     },
                                 });
+                            }
+                            // Отправляем Socket.IO уведомление о новом сообщении
+                            try {
+                                (0, socketService_1.notifyNewMessage)(organizationId, {
+                                    id: savedMessage.id,
+                                    chatId: savedMessage.chatId,
+                                    content: savedMessage.content,
+                                    type: savedMessage.type,
+                                    mediaUrl: savedMessage.mediaUrl,
+                                    filename: savedMessage.filename,
+                                    fromMe: savedMessage.fromMe,
+                                    timestamp: savedMessage.timestamp,
+                                    status: savedMessage.status,
+                                    senderJid: savedMessage.senderJid,
+                                });
+                            }
+                            catch (socketError) {
+                                logger.error('[Socket.IO] Ошибка отправки уведомления о новом сообщении:', socketError);
                             }
                             // logger.info(`💾 Сообщение (тип: ${messageType}, ID: ${savedMessage.id}) сохранено в БД (JID собеседника: ${remoteJid}, Ваш номер: ${phoneJid}, chatId: ${savedMessage.chatId}).`);
                         }

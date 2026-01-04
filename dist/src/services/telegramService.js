@@ -330,7 +330,7 @@ function handleIncomingMessage(telegram, msg, organizationId, botId) {
                 }
             }
             // Сохраняем сообщение в БД
-            yield authStorage_1.prisma.message.create({
+            const savedMessage = yield authStorage_1.prisma.message.create({
                 data: {
                     organizationId,
                     channel: 'telegram',
@@ -360,6 +360,26 @@ function handleIncomingMessage(telegram, msg, organizationId, botId) {
                 },
             });
             logger.info(`[Telegram] Сохранено входящее сообщение от ${username || userId} в чат #${chat.id}`);
+            // Отправляем Socket.IO уведомление о новом сообщении
+            const { notifyNewMessage } = yield Promise.resolve().then(() => __importStar(require('./socketService')));
+            try {
+                notifyNewMessage(organizationId, {
+                    id: savedMessage.id,
+                    chatId: savedMessage.chatId,
+                    content: savedMessage.content,
+                    type: savedMessage.type,
+                    mediaUrl: savedMessage.mediaUrl,
+                    filename: savedMessage.filename,
+                    fromMe: savedMessage.fromMe,
+                    timestamp: savedMessage.timestamp,
+                    status: savedMessage.status,
+                    telegramUsername: savedMessage.telegramUsername,
+                    channel: 'telegram',
+                });
+            }
+            catch (socketError) {
+                logger.error('[Socket.IO] Ошибка отправки уведомления Telegram:', socketError);
+            }
         }
         catch (error) {
             logger.error(`[Telegram] Ошибка обработки входящего сообщения:`, error);

@@ -38,6 +38,7 @@ Authorization: Bearer YOUR_JWT_TOKEN
   - Query:
     - status: open | pending | closed (опц.)
     - assigned: 'true' | 'false' (опц.) — только назначенные/неназначенные
+    - assignedUserId: number (опц.) — фильтр по конкретному оператору (по умолчанию текущий пользователь, если assigned='true')
     - priority: low | normal | high | urgent (опц.)
     - includeProfile: true|false (опц.) — добавляет displayName из Chat.name
   - Сортировка: по unreadCount desc, затем lastMessageAt desc

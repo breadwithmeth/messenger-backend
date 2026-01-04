@@ -16,11 +16,15 @@ const http_1 = __importDefault(require("http"));
 const app_1 = __importDefault(require("./app"));
 const waService_1 = require("./services/waService"); // Импортируйте startWaSession
 const telegramService_1 = require("./services/telegramService"); // <-- НОВОЕ
+const socketService_1 = require("./services/socketService"); // <-- Socket.IO
 const pino_1 = __importDefault(require("pino")); // Добавьте импорт pino
 const authStorage_1 = require("./config/authStorage"); // Импортируйте prisma
 const PORT = process.env.PORT || 3000;
 const server = http_1.default.createServer(app_1.default);
 const logger = (0, pino_1.default)({ level: 'info' }); // Инициализируйте logger
+// Инициализируем Socket.IO
+(0, socketService_1.initializeSocketIO)(server);
+logger.info('[ServerInit] Socket.IO инициализирован');
 function initializeConnectedSessions() {
     return __awaiter(this, void 0, void 0, function* () {
         logger.info('[ServerInit] Начинаем инициализацию ранее подключенных WhatsApp сессий...');
@@ -59,8 +63,10 @@ function initializeConnectedSessions() {
         }
     });
 }
-app_1.default.listen(PORT, () => __awaiter(void 0, void 0, void 0, function* () {
+server.listen(PORT, () => __awaiter(void 0, void 0, void 0, function* () {
     console.log(`Server is running on port ${PORT}`);
+    logger.info(`[ServerInit] HTTP сервер запущен на порту ${PORT}`);
+    logger.info(`[ServerInit] Socket.IO доступен на ws://localhost:${PORT}`);
     // Вызываем функцию инициализации WhatsApp сессий после старта сервера
     yield initializeConnectedSessions();
     // Запускаем все активные Telegram боты

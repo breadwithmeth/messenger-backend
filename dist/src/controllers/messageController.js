@@ -51,6 +51,7 @@ const baileys_1 = require("../config/baileys");
 const baileys_2 = require("@whiskeysockets/baileys");
 const pino_1 = __importDefault(require("pino"));
 const authStorage_1 = require("../config/authStorage"); // Для получения phoneJid
+const axios_1 = __importDefault(require("axios"));
 const logger = (0, pino_1.default)({ level: 'info' });
 const sendTextMessage = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { organizationPhoneId, receiverJid, text } = req.body;
@@ -527,6 +528,26 @@ const sendMessageByChat = (req, res) => __awaiter(void 0, void 0, void 0, functi
                     data: { lastMessageAt: new Date() },
                 });
                 logger.info(`[sendMessageByChat] WABA сообщение отправлено в чат ${chatId}, messageId: ${(_d = (_c = sentMessage.messages) === null || _c === void 0 ? void 0 : _c[0]) === null || _d === void 0 ? void 0 : _d.id}`);
+                // Отправляем Socket.IO уведомление о новом сообщении от оператора
+                const { notifyNewMessage } = yield Promise.resolve().then(() => __importStar(require('../services/socketService')));
+                try {
+                    notifyNewMessage(organizationId, {
+                        id: savedMessage.id,
+                        chatId: savedMessage.chatId,
+                        content: savedMessage.content,
+                        type: savedMessage.type,
+                        mediaUrl: savedMessage.mediaUrl,
+                        filename: savedMessage.filename,
+                        fromMe: true,
+                        timestamp: savedMessage.timestamp,
+                        status: savedMessage.status,
+                        senderUserId: userId,
+                        channel: 'whatsapp',
+                    });
+                }
+                catch (socketError) {
+                    logger.error('[Socket.IO] Ошибка отправки уведомления:', socketError);
+                }
                 return res.status(200).json({
                     success: true,
                     messageId: (_f = (_e = sentMessage.messages) === null || _e === void 0 ? void 0 : _e[0]) === null || _f === void 0 ? void 0 : _f.id,
@@ -552,8 +573,9 @@ const sendMessageByChat = (req, res) => __awaiter(void 0, void 0, void 0, functi
                     logger.error(`[sendMessageByChat] Некорректный remoteJid: "${chat.remoteJid}".`);
                     return res.status(500).json({ error: 'Некорректный remoteJid в базе данных.' });
                 }
-                // Для Baileys поддерживаем только text и media (не template)
+                // Для Baileys поддерживаем text и media (не template)
                 let messageContentObj;
+                let savedMediaPath;
                 switch (type) {
                     case 'text':
                         messageContentObj = { text };
@@ -561,10 +583,51 @@ const sendMessageByChat = (req, res) => __awaiter(void 0, void 0, void 0, functi
                     case 'image':
                     case 'document':
                     case 'video':
-                    case 'audio':
-                        return res.status(400).json({
-                            error: `Тип ${type} пока не поддерживается для Baileys через этот эндпоинт. Используйте /send-media.`
-                        });
+                    case 'audio': {
+                        if (!mediaUrl) {
+                            return res.status(400).json({
+                                error: `Отсутствует mediaUrl для типа ${type}.`
+                            });
+                        }
+                        try {
+                            // Скачиваем медиафайл
+                            logger.info(`[sendMessageByChat] Скачиваем медиа для Baileys: ${type} - ${mediaUrl}`);
+                            const response = yield axios_1.default.get(mediaUrl, { responseType: 'arraybuffer' });
+                            const buffer = Buffer.from(response.data);
+                            // Создаем объект контента для Baileys в зависимости от типа
+                            const mediaContent = {
+                                caption: caption || text || '',
+                            };
+                            if (type === 'image') {
+                                mediaContent.image = buffer;
+                                messageContentObj = mediaContent;
+                            }
+                            else if (type === 'video') {
+                                mediaContent.video = buffer;
+                                messageContentObj = mediaContent;
+                            }
+                            else if (type === 'audio') {
+                                mediaContent.audio = buffer;
+                                mediaContent.mimetype = 'audio/ogg; codecs=opus';
+                                messageContentObj = mediaContent;
+                            }
+                            else if (type === 'document') {
+                                mediaContent.document = buffer;
+                                mediaContent.fileName = filename || 'document';
+                                mediaContent.mimetype = 'application/octet-stream';
+                                messageContentObj = mediaContent;
+                            }
+                            // Сохраняем информацию о медиа для последующей записи в БД
+                            savedMediaPath = mediaUrl;
+                        }
+                        catch (error) {
+                            logger.error(`[sendMessageByChat] Ошибка при скачивании медиа:`, error.message);
+                            return res.status(500).json({
+                                error: `Не удалось скачать медиафайл: ${error.message}`
+                            });
+                        }
+                        break;
+                    }
                     case 'template':
                         return res.status(400).json({
                             error: 'Шаблоны не поддерживаются для Baileys подключений. Используйте только WABA.'
@@ -572,12 +635,17 @@ const sendMessageByChat = (req, res) => __awaiter(void 0, void 0, void 0, functi
                     default:
                         return res.status(400).json({ error: `Неподдерживаемый тип сообщения: ${type}` });
                 }
-                sentMessage = yield (0, baileys_1.sendMessage)(sock, normalizedReceiverJid, messageContentObj, organizationId, chat.organizationPhone.id, chat.organizationPhone.phoneJid, userId);
+                sentMessage = yield (0, baileys_1.sendMessage)(sock, normalizedReceiverJid, messageContentObj, organizationId, chat.organizationPhone.id, chat.organizationPhone.phoneJid, userId, {
+                    mediaUrl: savedMediaPath,
+                    filename: filename,
+                });
                 if (!sentMessage) {
                     logger.error(`[sendMessageByChat] Baileys сообщение не было отправлено для чата ${chatId}.`);
                     return res.status(500).json({ error: 'Не удалось отправить сообщение.' });
                 }
                 logger.info(`[sendMessageByChat] Baileys сообщение отправлено в чат ${chatId}, messageId: ${sentMessage.key.id}`);
+                // Socket.IO уведомление отправляется автоматически в baileys.ts через sendMessage()
+                // Дополнительное уведомление не требуется, так как baileys.ts уже обрабатывает это
                 return res.status(200).json({
                     success: true,
                     messageId: sentMessage.key.id,

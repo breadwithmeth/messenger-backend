@@ -5,6 +5,9 @@ import { getBaileysSock, sendMessage } from '../config/baileys';
 import { jidNormalizedUser } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import { prisma } from '../config/authStorage'; // Для получения phoneJid
+import axios from 'axios';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const logger = pino({ level: 'info' });
 
@@ -655,8 +658,9 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
         return res.status(500).json({ error: 'Некорректный remoteJid в базе данных.' });
       }
 
-      // Для Baileys поддерживаем только text и media (не template)
+      // Для Baileys поддерживаем text и media (не template)
       let messageContentObj: any;
+      let savedMediaPath: string | undefined;
 
       switch (type) {
         case 'text':
@@ -666,10 +670,53 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
         case 'image':
         case 'document':
         case 'video':
-        case 'audio':
-          return res.status(400).json({ 
-            error: `Тип ${type} пока не поддерживается для Baileys через этот эндпоинт. Используйте /send-media.` 
-          });
+        case 'audio': {
+          if (!mediaUrl) {
+            return res.status(400).json({ 
+              error: `Отсутствует mediaUrl для типа ${type}.` 
+            });
+          }
+
+          try {
+            // Скачиваем медиафайл
+            logger.info(`[sendMessageByChat] Скачиваем медиа для Baileys: ${type} - ${mediaUrl}`);
+            
+            const response = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
+            const buffer = Buffer.from(response.data);
+
+            // Создаем объект контента для Baileys в зависимости от типа
+            const mediaContent: any = {
+              caption: caption || text || '',
+            };
+
+            if (type === 'image') {
+              mediaContent.image = buffer;
+              messageContentObj = mediaContent;
+            } else if (type === 'video') {
+              mediaContent.video = buffer;
+              messageContentObj = mediaContent;
+            } else if (type === 'audio') {
+              mediaContent.audio = buffer;
+              mediaContent.mimetype = 'audio/ogg; codecs=opus';
+              messageContentObj = mediaContent;
+            } else if (type === 'document') {
+              mediaContent.document = buffer;
+              mediaContent.fileName = filename || 'document';
+              mediaContent.mimetype = 'application/octet-stream';
+              messageContentObj = mediaContent;
+            }
+
+            // Сохраняем информацию о медиа для последующей записи в БД
+            savedMediaPath = mediaUrl;
+
+          } catch (error: any) {
+            logger.error(`[sendMessageByChat] Ошибка при скачивании медиа:`, error.message);
+            return res.status(500).json({ 
+              error: `Не удалось скачать медиафайл: ${error.message}` 
+            });
+          }
+          break;
+        }
         
         case 'template':
           return res.status(400).json({ 
@@ -687,7 +734,11 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
         organizationId,
         chat.organizationPhone.id,
         chat.organizationPhone.phoneJid,
-        userId
+        userId,
+        {
+          mediaUrl: savedMediaPath,
+          filename: filename,
+        }
       );
 
       if (!sentMessage) {
