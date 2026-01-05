@@ -32,6 +32,8 @@ export async function listChats(req: Request, res: Response) {
       priority, 
       channel, 
       includeProfile, 
+      search, // Новый параметр для поиска по тексту сообщения или номеру телефона
+      searchType, // 'message', 'phone', или 'all' (по умолчанию)
       limit = '50', 
       offset = '0',
       sortBy = 'lastMessageAt', // Поле для сортировки
@@ -51,6 +53,74 @@ export async function listChats(req: Request, res: Response) {
     let whereCondition: any = {
       organizationId: organizationId,
     };
+
+    // Фильтрация по поиску (текст сообщения или номер телефона)
+    if (search && typeof search === 'string' && search.trim().length > 0) {
+      const searchQuery = search.trim();
+      const searchLower = searchQuery.toLowerCase();
+      const searchType_ = searchType === 'message' ? 'message' : searchType === 'phone' ? 'phone' : 'all';
+
+      logger.info(`[listChats] Поиск по: ${searchType_}, запрос: "${searchQuery}"`);
+
+      if (searchType_ === 'phone' || searchType_ === 'all') {
+        // Поиск по номеру телефона (remoteJid содержит номер)
+        // Номера в формате: 79001234567@s.whatsapp.net или 123456789 (для Telegram)
+        whereCondition.OR = whereCondition.OR || [];
+        whereCondition.OR.push({
+          remoteJid: {
+            contains: searchQuery.replace(/\D/g, ''), // Ищем только цифры
+            mode: 'insensitive',
+          },
+        });
+        
+        // Также ищем в имени чата
+        whereCondition.OR.push({
+          name: {
+            contains: searchQuery,
+            mode: 'insensitive',
+          },
+        });
+
+        // Для Telegram - поиск по username
+        whereCondition.OR.push({
+          telegramUsername: {
+            contains: searchQuery,
+            mode: 'insensitive',
+          },
+        });
+      }
+
+      if (searchType_ === 'message' || searchType_ === 'all') {
+        // Поиск по тексту сообщений - используем messages relation
+        const matchingChats = await prisma.chat.findMany({
+          where: {
+            organizationId: organizationId,
+            messages: {
+              some: {
+                content: {
+                  contains: searchQuery,
+                  mode: 'insensitive',
+                },
+              },
+            },
+          },
+          select: { id: true },
+        });
+
+        const matchingChatIds = matchingChats.map(chat => chat.id);
+        if (matchingChatIds.length > 0) {
+          whereCondition.OR = whereCondition.OR || [];
+          whereCondition.OR.push({
+            id: { in: matchingChatIds },
+          });
+        }
+      }
+
+      // Если результат пуст для OR условия, нужно обработать это правильно
+      if (whereCondition.OR && whereCondition.OR.length === 0) {
+        delete whereCondition.OR;
+      }
+    }
 
     // Фильтрация по каналу (whatsapp или telegram)
     if (channel && typeof channel === 'string' && (channel === 'whatsapp' || channel === 'telegram')) {

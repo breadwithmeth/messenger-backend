@@ -34,15 +34,25 @@ Authorization: Bearer YOUR_JWT_TOKEN
 1) Чаты (/api/chats)
 
 - GET /api/chats
-  - Описание: список чатов организации с фильтрами.
+  - Описание: список чатов организации с фильтрами и поиском.
   - Query:
     - status: open | pending | closed (опц.)
     - assigned: 'true' | 'false' (опц.) — только назначенные/неназначенные
     - assignedUserId: number (опц.) — фильтр по конкретному оператору (по умолчанию текущий пользователь, если assigned='true')
     - priority: low | normal | high | urgent (опц.)
+    - channel: whatsapp | telegram (опц.)
     - includeProfile: true|false (опц.) — добавляет displayName из Chat.name
-  - Сортировка: по unreadCount desc, затем lastMessageAt desc
-  - Ответ: { chats: [...], total: number }
+    - search: string (опц.) — поиск по тексту сообщения, номеру телефона или имени чата
+    - searchType: 'message' | 'phone' | 'all' (опц., по умолчанию 'all') — тип поиска:
+      - 'message' — поиск только по тексту сообщений
+      - 'phone' — поиск по номеру телефона, remoteJid или имени чата
+      - 'all' — поиск по обоим критериям
+    - limit: number (опц., по умолчанию 50, максимум 100)
+    - offset: number (опц., по умолчанию 0) — для пагинации
+    - sortBy: lastMessageAt | createdAt | priority | unreadCount | status | name (опц.)
+    - sortOrder: asc | desc (опц., по умолчанию desc)
+  - Сортировка: по умолчанию по priority DESC, затем unreadCount DESC, затем lastMessageAt DESC
+  - Ответ: { chats: [...], pagination: { total, limit, offset, hasMore } }
 - GET /api/chats/:remoteJid/profile?organizationPhoneId=ID
   - Описание: вернуть фото профиля для собеседника (если доступно по приватности)
   - Ответ: { jid, photoUrl|null }
@@ -232,21 +242,37 @@ curl -X POST http://localhost:3000/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"admin@example.com","password":"secret"}'
 
-2) Мои чаты за вчера (все статусы):
+2) Получить все чаты организации:
+curl -X GET "http://localhost:3000/api/chats" \
+  -H "Authorization: Bearer $TOKEN"
+
+3) Поиск чатов по номеру телефона:
+curl -X GET "http://localhost:3000/api/chats?search=79001234567&searchType=phone" \
+  -H "Authorization: Bearer $TOKEN"
+
+4) Поиск чатов по тексту сообщения:
+curl -X GET "http://localhost:3000/api/chats?search=привет&searchType=message" \
+  -H "Authorization: Bearer $TOKEN"
+
+5) Поиск по номеру телефона И тексту:
+curl -X GET "http://localhost:3000/api/chats?search=hello&searchType=all" \
+  -H "Authorization: Bearer $TOKEN"
+
+6) Мои чаты за вчера (все статусы):
 curl -X GET "http://localhost:3000/api/chat-assignment/my-assigned?from=2025-07-18T00:00:00Z&to=2025-07-18T23:59:59Z" \
   -H "Authorization: Bearer $TOKEN"
 
-3) Неназначенные чаты за сегодня:
+7) Неназначенные чаты за сегодня:
 curl -X GET "http://localhost:3000/api/chat-assignment/unassigned?from=$(date -u +%Y-%m-%d)T00:00:00Z" \
   -H "Authorization: Bearer $TOKEN"
 
-4) Отправка текста:
+8) Отправка текста:
 curl -X POST http://localhost:3000/api/messages/send-text \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"organizationPhoneId":1,"receiverJid":"79001234567@s.whatsapp.net","text":"Привет!"}'
 
-5) Медиа: upload+send по chatId:
+9) Медиа: upload+send по chatId:
 curl -X POST http://localhost:3000/api/media/send \
   -H "Authorization: Bearer $TOKEN" \
   -F "media=@/path/to/file.jpg" \

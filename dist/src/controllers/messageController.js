@@ -334,26 +334,45 @@ exports.sendMessageByTicket = sendMessageByTicket;
  * POST /api/messages/send-by-chat
  */
 const sendMessageByChat = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b, _c, _d, _e, _f;
+    var _a, _b, _c, _d, _e, _f, _g;
     try {
         const organizationId = res.locals.organizationId;
         const userId = res.locals.userId;
         const { chatId, text, type = 'text', mediaUrl, caption, filename, template } = req.body;
+        logger.info(`[sendMessageByChat] Начало обработки запроса`, {
+            chatId,
+            type,
+            organizationId,
+            userId,
+            hasMediaUrl: !!mediaUrl,
+            hasText: !!text,
+        });
         // Валидация
         if (!chatId || isNaN(parseInt(chatId))) {
-            logger.warn(`[sendMessageByChat] Некорректный chatId: "${chatId}". Ожидалось число.`);
+            logger.error(`[sendMessageByChat] ОШИБКА ВАЛИДАЦИИ: Некорректный chatId: "${chatId}". Ожидалось число.`, {
+                providedChatId: chatId,
+                type: typeof chatId,
+            });
             return res.status(400).json({ error: 'Некорректный chatId. Ожидалось число.' });
         }
         if (type === 'text' && (!text || typeof text !== 'string' || text.trim() === '')) {
-            logger.warn('[sendMessageByChat] Отсутствует или пустой параметр text для типа text.');
+            logger.error(`[sendMessageByChat] ОШИБКА ВАЛИДАЦИИ: Отсутствует или пустой параметр text для типа text.`, {
+                providedText: text,
+                type: typeof text,
+            });
             return res.status(400).json({ error: 'Параметр text обязателен для типа text.' });
         }
         if ((type === 'image' || type === 'document' || type === 'video' || type === 'audio') && !mediaUrl) {
-            logger.warn(`[sendMessageByChat] Отсутствует mediaUrl для типа ${type}.`);
+            logger.error(`[sendMessageByChat] ОШИБКА ВАЛИДАЦИИ: Отсутствует mediaUrl для типа ${type}.`, {
+                requestedType: type,
+                providedMediaUrl: mediaUrl,
+            });
             return res.status(400).json({ error: `Параметр mediaUrl обязателен для типа ${type}.` });
         }
         if (type === 'template' && (!template || !template.name)) {
-            logger.warn('[sendMessageByChat] Отсутствует template объект для типа template.');
+            logger.error(`[sendMessageByChat] ОШИБКА ВАЛИДАЦИИ: Отсутствует template объект для типа template.`, {
+                providedTemplate: template,
+            });
             return res.status(400).json({ error: 'Параметр template с полем name обязателен для типа template.' });
         }
         // Находим чат с информацией о типе подключения и канале
@@ -381,7 +400,10 @@ const sendMessageByChat = (req, res) => __awaiter(void 0, void 0, void 0, functi
             },
         });
         if (!chat) {
-            logger.warn(`[sendMessageByChat] Чат с ID ${chatId} не найден или не принадлежит организации ${organizationId}.`);
+            logger.error(`[sendMessageByChat] ОШИБКА БД: Чат с ID ${chatId} не найден или не принадлежит организации ${organizationId}.`, {
+                chatId: parseInt(chatId),
+                organizationId,
+            });
             return res.status(404).json({ error: 'Чат не найден или не принадлежит вашей организации.' });
         }
         const channel = chat.channel;
@@ -409,28 +431,53 @@ const sendMessageByChat = (req, res) => __awaiter(void 0, void 0, void 0, functi
                 }
                 else if (type === 'document') {
                     if (!mediaUrl) {
+                        logger.error(`[sendMessageByChat] ОШИБКА: Отсутствует mediaUrl для документа в Telegram`, {
+                            chatId,
+                            type,
+                            channel,
+                        });
                         return res.status(400).json({ error: 'Отсутствует mediaUrl для документа' });
                     }
                     sentMessage = yield sendTelegramDocument(chat.telegramBot.id, chat.telegramChatId, mediaUrl, text || caption, { userId, filename });
                 }
                 else if (type === 'video') {
                     if (!mediaUrl) {
+                        logger.error(`[sendMessageByChat] ОШИБКА: Отсутствует mediaUrl для видео в Telegram`, {
+                            chatId,
+                            type,
+                            channel,
+                        });
                         return res.status(400).json({ error: 'Отсутствует mediaUrl для видео' });
                     }
                     sentMessage = yield sendTelegramVideo(chat.telegramBot.id, chat.telegramChatId, mediaUrl, text || caption, { userId });
                 }
                 else if (type === 'audio') {
                     if (!mediaUrl) {
+                        logger.error(`[sendMessageByChat] ОШИБКА: Отсутствует mediaUrl для аудио в Telegram`, {
+                            chatId,
+                            type,
+                            channel,
+                        });
                         return res.status(400).json({ error: 'Отсутствует mediaUrl для аудио' });
                     }
                     sentMessage = yield sendTelegramAudio(chat.telegramBot.id, chat.telegramChatId, mediaUrl, text || caption, { userId });
                 }
                 else {
+                    logger.error(`[sendMessageByChat] ОШИБКА: Неподдерживаемый тип сообщения для Telegram`, {
+                        requestedType: type,
+                        chatId,
+                        channel,
+                    });
                     return res.status(400).json({
                         error: `Тип ${type} не поддерживается для Telegram. Поддерживаются: text, image, document, video, audio`
                     });
                 }
-                logger.info(`[sendMessageByChat] Telegram сообщение (${type}) отправлено в чат ${chatId}, messageId: ${sentMessage.message_id}`);
+                logger.info(`[sendMessageByChat] Успешно: Telegram сообщение (${type}) отправлено в чат ${chatId}`, {
+                    messageId: sentMessage.message_id,
+                    type,
+                    chatId,
+                    telegramChatId: chat.telegramChatId,
+                });
                 return res.status(200).json({
                     success: true,
                     messageId: sentMessage.message_id,
@@ -460,25 +507,39 @@ const sendMessageByChat = (req, res) => __awaiter(void 0, void 0, void 0, functi
                 const { createWABAService } = yield Promise.resolve().then(() => __importStar(require('../services/wabaService')));
                 const wabaService = yield createWABAService(chat.organizationPhone.id);
                 if (!wabaService) {
-                    logger.error(`[sendMessageByChat] WABA сервис не настроен для organizationPhoneId ${chat.organizationPhone.id}`);
+                    logger.error(`[sendMessageByChat] ОШИБКА: WABA сервис не настроен`, {
+                        organizationPhoneId: chat.organizationPhone.id,
+                        chatId,
+                        type,
+                    });
                     return res.status(500).json({ error: 'WABA сервис не настроен для этого телефона.' });
                 }
                 const recipientPhone = chat.remoteJid.replace('@s.whatsapp.net', '');
+                logger.info(`[sendMessageByChat] Отправка WABA сообщения`, {
+                    type,
+                    recipientPhone,
+                    chatId,
+                    organizationPhoneId: chat.organizationPhone.id,
+                });
                 // Отправляем через WABA в зависимости от типа
                 switch (type) {
                     case 'text':
+                        logger.debug(`[sendMessageByChat] Отправка text через WABA`);
                         sentMessage = yield wabaService.sendTextMessage(recipientPhone, text);
                         messageContent = text;
                         break;
                     case 'image':
+                        logger.debug(`[sendMessageByChat] Отправка image через WABA`, { mediaUrl, caption });
                         sentMessage = yield wabaService.sendImage(recipientPhone, mediaUrl, caption);
                         messageContent = caption || '[Image]';
                         break;
                     case 'document':
+                        logger.debug(`[sendMessageByChat] Отправка document через WABA`, { mediaUrl, filename, caption });
                         sentMessage = yield wabaService.sendDocument(recipientPhone, mediaUrl, filename, caption);
                         messageContent = caption || `[Document: ${filename || 'file'}]`;
                         break;
                     case 'video':
+                        logger.debug(`[sendMessageByChat] Отправка video через WABA`, { mediaUrl, caption });
                         sentMessage = yield wabaService.sendMessage({
                             to: recipientPhone,
                             type: 'video',
@@ -487,6 +548,7 @@ const sendMessageByChat = (req, res) => __awaiter(void 0, void 0, void 0, functi
                         messageContent = caption || '[Video]';
                         break;
                     case 'audio':
+                        logger.debug(`[sendMessageByChat] Отправка audio через WABA`, { mediaUrl });
                         sentMessage = yield wabaService.sendMessage({
                             to: recipientPhone,
                             type: 'audio',
@@ -495,11 +557,27 @@ const sendMessageByChat = (req, res) => __awaiter(void 0, void 0, void 0, functi
                         messageContent = '[Audio]';
                         break;
                     case 'template':
+                        logger.debug(`[sendMessageByChat] Отправка template через WABA`, {
+                            templateName: template.name,
+                            language: template.language
+                        });
                         sentMessage = yield wabaService.sendTemplateMessage(recipientPhone, template.name, template.language || 'ru', template.components);
                         messageContent = `Template: ${template.name}`;
                         break;
                     default:
+                        logger.error(`[sendMessageByChat] ОШИБКА: Неподдерживаемый тип сообщения для WABA`, {
+                            requestedType: type,
+                            chatId,
+                            channel,
+                        });
                         return res.status(400).json({ error: `Неподдерживаемый тип сообщения: ${type}` });
+                }
+                if (!sentMessage) {
+                    logger.error(`[sendMessageByChat] ОШИБКА ОТПРАВКИ: WABA сообщение не было отправлено`, {
+                        type,
+                        chatId,
+                        recipientPhone,
+                    });
                 }
                 // Сохраняем сообщение в БД
                 const savedMessage = yield authStorage_1.prisma.message.create({
@@ -527,7 +605,13 @@ const sendMessageByChat = (req, res) => __awaiter(void 0, void 0, void 0, functi
                     where: { id: chat.id },
                     data: { lastMessageAt: new Date() },
                 });
-                logger.info(`[sendMessageByChat] WABA сообщение отправлено в чат ${chatId}, messageId: ${(_d = (_c = sentMessage.messages) === null || _c === void 0 ? void 0 : _c[0]) === null || _d === void 0 ? void 0 : _d.id}`);
+                logger.info(`[sendMessageByChat] Успешно: WABA сообщение отправлено в чат ${chatId}`, {
+                    messageId: (_d = (_c = sentMessage.messages) === null || _c === void 0 ? void 0 : _c[0]) === null || _d === void 0 ? void 0 : _d.id,
+                    type,
+                    chatId,
+                    remoteJid: chat.remoteJid,
+                    organizationPhoneId: chat.organizationPhone.id,
+                });
                 // Отправляем Socket.IO уведомление о новом сообщении от оператора
                 const { notifyNewMessage } = yield Promise.resolve().then(() => __importStar(require('../services/socketService')));
                 try {
@@ -594,6 +678,11 @@ const sendMessageByChat = (req, res) => __awaiter(void 0, void 0, void 0, functi
                             logger.info(`[sendMessageByChat] Скачиваем медиа для Baileys: ${type} - ${mediaUrl}`);
                             const response = yield axios_1.default.get(mediaUrl, { responseType: 'arraybuffer' });
                             const buffer = Buffer.from(response.data);
+                            logger.info(`[sendMessageByChat] Медиафайл успешно скачан`, {
+                                type,
+                                bufferSize: buffer.length,
+                                responseStatus: response.status,
+                            });
                             // Создаем объект контента для Baileys в зависимости от типа
                             const mediaContent = {
                                 caption: caption || text || '',
@@ -621,7 +710,14 @@ const sendMessageByChat = (req, res) => __awaiter(void 0, void 0, void 0, functi
                             savedMediaPath = mediaUrl;
                         }
                         catch (error) {
-                            logger.error(`[sendMessageByChat] Ошибка при скачивании медиа:`, error.message);
+                            logger.error(`[sendMessageByChat] ОШИБКА при скачивании медиа`, {
+                                type,
+                                mediaUrl,
+                                errorMessage: error.message,
+                                errorCode: error.code,
+                                errorStack: error.stack,
+                                response: (_g = error.response) === null || _g === void 0 ? void 0 : _g.status,
+                            });
                             return res.status(500).json({
                                 error: `Не удалось скачать медиафайл: ${error.message}`
                             });
@@ -640,10 +736,21 @@ const sendMessageByChat = (req, res) => __awaiter(void 0, void 0, void 0, functi
                     filename: filename,
                 });
                 if (!sentMessage) {
-                    logger.error(`[sendMessageByChat] Baileys сообщение не было отправлено для чата ${chatId}.`);
+                    logger.error(`[sendMessageByChat] ОШИБКА ОТПРАВКИ: Baileys сообщение не было отправлено для чата ${chatId}`, {
+                        chatId,
+                        type,
+                        remoteJid: chat.remoteJid,
+                        connectionType: chat.organizationPhone.connectionType,
+                    });
                     return res.status(500).json({ error: 'Не удалось отправить сообщение.' });
                 }
-                logger.info(`[sendMessageByChat] Baileys сообщение отправлено в чат ${chatId}, messageId: ${sentMessage.key.id}`);
+                logger.info(`[sendMessageByChat] Успешно: Baileys сообщение отправлено в чат ${chatId}`, {
+                    messageId: sentMessage.key.id,
+                    type,
+                    chatId,
+                    remoteJid: chat.remoteJid,
+                    organizationPhoneId: chat.organizationPhone.id,
+                });
                 // Socket.IO уведомление отправляется автоматически в baileys.ts через sendMessage()
                 // Дополнительное уведомление не требуется, так как baileys.ts уже обрабатывает это
                 return res.status(200).json({
@@ -662,7 +769,17 @@ const sendMessageByChat = (req, res) => __awaiter(void 0, void 0, void 0, functi
         }
     }
     catch (error) {
-        logger.error(`[sendMessageByChat] Ошибка при отправке сообщения:`, error);
+        logger.error(`[sendMessageByChat] Критическая ошибка при отправке сообщения в чат ${req.body.chatId}`, {
+            errorMessage: error.message,
+            errorStack: error.stack,
+            errorCode: error.code,
+            requestBody: {
+                chatId: req.body.chatId,
+                type: req.body.type,
+                hasMediaUrl: !!req.body.mediaUrl,
+                hasText: !!req.body.text,
+            },
+        });
         res.status(500).json({
             error: 'Не удалось отправить сообщение.',
             details: error.message,
