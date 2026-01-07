@@ -847,6 +847,8 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                             let filename;
                             let mimeType;
                             let size;
+                            let quotedMessageId;
+                            let quotedContent;
                             const messageContent = msg.message;
                             // Разбор различных типов сообщений
                             if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.conversation) {
@@ -863,10 +865,10 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                                 // --- ОБРАБОТКА ОТВЕТА ---
                                 const contextInfo = messageContent.extendedTextMessage.contextInfo;
                                 if (contextInfo === null || contextInfo === void 0 ? void 0 : contextInfo.quotedMessage) {
-                                    const quotedMessageId = (_g = contextInfo.stanzaId) !== null && _g !== void 0 ? _g : undefined;
+                                    quotedMessageId = (_g = contextInfo.stanzaId) !== null && _g !== void 0 ? _g : undefined;
                                     const qm = contextInfo.quotedMessage;
                                     // Получаем текст из разных возможных полей цитируемого сообщения
-                                    const quotedContent = qm.conversation ||
+                                    quotedContent = qm.conversation ||
                                         ((_h = qm.extendedTextMessage) === null || _h === void 0 ? void 0 : _h.text) ||
                                         ((_j = qm.imageMessage) === null || _j === void 0 ? void 0 : _j.caption) ||
                                         ((_k = qm.videoMessage) === null || _k === void 0 ? void 0 : _k.caption) ||
@@ -1064,6 +1066,9 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                                     organizationId: organizationId,
                                     // Входящие сообщения по умолчанию не прочитаны оператором
                                     isReadByOperator: msg.key.fromMe || false, // Исходящие считаем прочитанными
+                                    // --- СОХРАНЕНИЕ ДАННЫХ ОТВЕТОВ ---
+                                    quotedMessageId: quotedMessageId,
+                                    quotedContent: quotedContent,
                                 },
                             });
                             // Увеличиваем счетчик непрочитанных сообщений для входящих сообщений

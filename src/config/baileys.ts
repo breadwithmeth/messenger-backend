@@ -864,6 +864,8 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
             let filename: string | undefined;
             let mimeType: string | undefined;
             let size: number | undefined;
+            let quotedMessageId: string | undefined;
+            let quotedContent: string | undefined;
 
             const messageContent = msg.message;
             
@@ -882,10 +884,10 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
                 // --- ОБРАБОТКА ОТВЕТА ---
                 const contextInfo = messageContent.extendedTextMessage.contextInfo;
                 if (contextInfo?.quotedMessage) {
-                    const quotedMessageId = contextInfo.stanzaId ?? undefined;
+                    quotedMessageId = contextInfo.stanzaId ?? undefined;
                     const qm = contextInfo.quotedMessage;
                     // Получаем текст из разных возможных полей цитируемого сообщения
-                    const quotedContent = qm.conversation || 
+                    quotedContent = qm.conversation || 
                                     qm.extendedTextMessage?.text ||
                                     qm.imageMessage?.caption ||
                                     qm.videoMessage?.caption ||
@@ -1076,6 +1078,9 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
                     organizationId: organizationId,
                     // Входящие сообщения по умолчанию не прочитаны оператором
                     isReadByOperator: msg.key.fromMe || false, // Исходящие считаем прочитанными
+                    // --- СОХРАНЕНИЕ ДАННЫХ ОТВЕТОВ ---
+                    quotedMessageId: quotedMessageId,
+                    quotedContent: quotedContent,
                 },
             });
 
