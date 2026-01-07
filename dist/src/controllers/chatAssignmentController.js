@@ -126,7 +126,7 @@ const unassignChat = (req, res) => __awaiter(void 0, void 0, void 0, function* (
             data: {
                 assignedUserId: null,
                 assignedAt: null,
-                status: 'pending',
+                status: 'open',
             },
         });
         logger.info(`✅ Назначение чата ${chatId} снято`);
@@ -149,7 +149,7 @@ exports.unassignChat = unassignChat;
  * Получает список всех чатов, назначенных текущему оператору за определенный промежуток времени
  * Поддерживает фильтрацию по времени: ?from=2024-01-01T00:00:00Z&to=2024-01-02T23:59:59Z
  * Поддерживает фильтрацию по статусу: ?status=open (опционально)
- * Возвращает чаты со всеми статусами (open, pending, closed) если статус не указан
+ * Возвращает чаты со всеми статусами (open, closed) если статус не указан
  */
 const getMyAssignedChats = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const organizationId = res.locals.organizationId;
@@ -300,7 +300,7 @@ const getUnassignedChats = (req, res) => __awaiter(void 0, void 0, void 0, funct
         }
         const unassignedChats = yield authStorage_1.prisma.chat.findMany({
             where: Object.assign({ organizationId: organizationId, assignedUserId: null, status: {
-                    in: ['open', 'pending'],
+                    in: ['open'],
                 } }, dateFilter),
             include: {
                 organizationPhone: {

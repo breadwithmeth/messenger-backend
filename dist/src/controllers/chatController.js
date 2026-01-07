@@ -116,9 +116,19 @@ function listChats(req, res) {
             if (channel && typeof channel === 'string' && (channel === 'whatsapp' || channel === 'telegram')) {
                 whereCondition.channel = channel;
             }
-            // Фильтрация по статусу
-            if (status && typeof status === 'string') {
-                whereCondition.status = status;
+            // Фильтрация по статусу (поддерживаются несколько статусов, разделённых запятой)
+            if (status && typeof status === 'string' && status.trim().length > 0) {
+                const statuses = status.split(',').map(s => s.trim()).filter(s => s.length > 0);
+                const validStatuses = ['open', 'closed'];
+                const filteredStatuses = statuses.filter(s => validStatuses.includes(s));
+                if (filteredStatuses.length > 0) {
+                    if (filteredStatuses.length === 1) {
+                        whereCondition.status = filteredStatuses[0];
+                    }
+                    else {
+                        whereCondition.status = { in: filteredStatuses };
+                    }
+                }
             }
             // Фильтрация по приоритету
             if (priority && typeof priority === 'string') {

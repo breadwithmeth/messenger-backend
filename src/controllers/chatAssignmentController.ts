@@ -130,7 +130,7 @@ export const unassignChat = async (req: Request, res: Response) => {
       data: {
         assignedUserId: null,
         assignedAt: null,
-        status: 'pending',
+        status: 'open',
       },
     });
 
@@ -153,7 +153,7 @@ export const unassignChat = async (req: Request, res: Response) => {
  * Получает список всех чатов, назначенных текущему оператору за определенный промежуток времени
  * Поддерживает фильтрацию по времени: ?from=2024-01-01T00:00:00Z&to=2024-01-02T23:59:59Z
  * Поддерживает фильтрацию по статусу: ?status=open (опционально)
- * Возвращает чаты со всеми статусами (open, pending, closed) если статус не указан
+ * Возвращает чаты со всеми статусами (open, closed) если статус не указан
  */
 export const getMyAssignedChats = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId;
@@ -328,7 +328,7 @@ export const getUnassignedChats = async (req: Request, res: Response) => {
         organizationId: organizationId,
         assignedUserId: null,
         status: {
-          in: ['open', 'pending'],
+          in: ['open'],
         },
         ...dateFilter, // Добавляем фильтр по времени
       },

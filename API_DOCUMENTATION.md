@@ -36,7 +36,7 @@ Authorization: Bearer YOUR_JWT_TOKEN
 - GET /api/chats
   - Описание: список чатов организации с фильтрами и поиском.
   - Query:
-    - status: open | pending | closed (опц.)
+    - status: open | closed или несколько через запятую: open,closed (опц.)
     - assigned: 'true' | 'false' (опц.) — только назначенные/неназначенные
     - assignedUserId: number (опц.) — фильтр по конкретному оператору (по умолчанию текущий пользователь, если assigned='true')
     - priority: low | normal | high | urgent (опц.)
@@ -71,7 +71,7 @@ Authorization: Bearer YOUR_JWT_TOKEN
 
 - POST /api/chat-assignment/unassign
   - Body: { chatId: number }
-  - Эффект: снимает назначение (assignedUserId = null, status -> 'pending')
+  - Эффект: снимает назначение (assignedUserId = null, status остаётся 'open')
   - Ответ: { success, chat, message }
 
 - GET /api/chat-assignment/my-assigned
@@ -80,11 +80,11 @@ Authorization: Bearer YOUR_JWT_TOKEN
   - Query:
     - from: ISO 8601 (опц.) — нижняя граница по lastMessageAt
     - to: ISO 8601 (опц., по умолчанию now) — верхняя граница
-    - status: open | pending | closed (опц.)
+    - status: open | closed (опц.)
   - Ответ: { chats: [...], total, filters: { from, to } }
 
 - GET /api/chat-assignment/unassigned
-  - Описание: неназначенные чаты организации со статусами open|pending
+  - Описание: неназначенные чаты организации со статусом open
   - Query: from, to (как выше)
   - Ответ: { chats: [...], total, filters }
 
@@ -246,33 +246,41 @@ curl -X POST http://localhost:3000/api/auth/login \
 curl -X GET "http://localhost:3000/api/chats" \
   -H "Authorization: Bearer $TOKEN"
 
-3) Поиск чатов по номеру телефона:
+3) Получить чаты только со статусом "open":
+curl -X GET "http://localhost:3000/api/chats?status=open" \
+  -H "Authorization: Bearer $TOKEN"
+
+4) Получить чаты со статусами "open" или "closed":
+curl -X GET "http://localhost:3000/api/chats?status=open,closed" \
+  -H "Authorization: Bearer $TOKEN"
+
+5) Поиск чатов по номеру телефона:
 curl -X GET "http://localhost:3000/api/chats?search=79001234567&searchType=phone" \
   -H "Authorization: Bearer $TOKEN"
 
-4) Поиск чатов по тексту сообщения:
+6) Поиск чатов по тексту сообщения:
 curl -X GET "http://localhost:3000/api/chats?search=привет&searchType=message" \
   -H "Authorization: Bearer $TOKEN"
 
-5) Поиск по номеру телефона И тексту:
+7) Поиск по номеру телефона И тексту:
 curl -X GET "http://localhost:3000/api/chats?search=hello&searchType=all" \
   -H "Authorization: Bearer $TOKEN"
 
-6) Мои чаты за вчера (все статусы):
+8) Мои чаты за вчера (все статусы):
 curl -X GET "http://localhost:3000/api/chat-assignment/my-assigned?from=2025-07-18T00:00:00Z&to=2025-07-18T23:59:59Z" \
   -H "Authorization: Bearer $TOKEN"
 
-7) Неназначенные чаты за сегодня:
+9) Неназначенные чаты за сегодня:
 curl -X GET "http://localhost:3000/api/chat-assignment/unassigned?from=$(date -u +%Y-%m-%d)T00:00:00Z" \
   -H "Authorization: Bearer $TOKEN"
 
-8) Отправка текста:
+10) Отправка текста:
 curl -X POST http://localhost:3000/api/messages/send-text \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"organizationPhoneId":1,"receiverJid":"79001234567@s.whatsapp.net","text":"Привет!"}'
 
-9) Медиа: upload+send по chatId:
+11) Медиа: upload+send по chatId:
 curl -X POST http://localhost:3000/api/media/send \
   -H "Authorization: Bearer $TOKEN" \
   -F "media=@/path/to/file.jpg" \

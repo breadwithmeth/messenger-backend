@@ -105,7 +105,7 @@ export const getUnreadCount = async (req: Request, res: Response) => {
         chat: {
           assignedUserId: userId,
           status: {
-            in: ['open', 'pending'],
+            in: ['open', 'closed'],
           },
         },
       },
@@ -117,7 +117,7 @@ export const getUnreadCount = async (req: Request, res: Response) => {
         organizationId: organizationId,
         assignedUserId: userId,
         status: {
-          in: ['open', 'pending'],
+          in: ['open', 'closed'],
         },
         unreadCount: {
           gt: 0,
@@ -179,7 +179,7 @@ export const getMessageStats = async (req: Request, res: Response) => {
           not: null,
         },
         status: {
-          in: ['open', 'pending'],
+          in: ['open', 'closed'],
         },
       },
     });
@@ -189,7 +189,7 @@ export const getMessageStats = async (req: Request, res: Response) => {
         organizationId,
         assignedUserId: null,
         status: {
-          in: ['open', 'pending'],
+          in: ['open', 'closed'],
         },
       },
     });

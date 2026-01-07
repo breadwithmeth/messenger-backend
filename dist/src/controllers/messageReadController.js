@@ -107,7 +107,7 @@ const getUnreadCount = (req, res) => __awaiter(void 0, void 0, void 0, function*
                 chat: {
                     assignedUserId: userId,
                     status: {
-                        in: ['open', 'pending'],
+                        in: ['open', 'closed'],
                     },
                 },
             },
@@ -118,7 +118,7 @@ const getUnreadCount = (req, res) => __awaiter(void 0, void 0, void 0, function*
                 organizationId: organizationId,
                 assignedUserId: userId,
                 status: {
-                    in: ['open', 'pending'],
+                    in: ['open', 'closed'],
                 },
                 unreadCount: {
                     gt: 0,
@@ -176,7 +176,7 @@ const getMessageStats = (req, res) => __awaiter(void 0, void 0, void 0, function
                     not: null,
                 },
                 status: {
-                    in: ['open', 'pending'],
+                    in: ['open', 'closed'],
                 },
             },
         });
@@ -185,7 +185,7 @@ const getMessageStats = (req, res) => __awaiter(void 0, void 0, void 0, function
                 organizationId,
                 assignedUserId: null,
                 status: {
-                    in: ['open', 'pending'],
+                    in: ['open', 'closed'],
                 },
             },
         });
