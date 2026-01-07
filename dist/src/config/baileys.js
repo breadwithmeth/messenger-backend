@@ -813,7 +813,7 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
         }
         // Обработчик получения новых сообщений
         currentSock.ev.on('messages.upsert', (_a) => __awaiter(this, [_a], void 0, function* ({ messages, type }) {
-            var _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x;
+            var _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v;
             if (type === 'notify') {
                 for (const msg of messages) {
                     try {
@@ -847,11 +847,7 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                             let filename;
                             let mimeType;
                             let size;
-                            // --- НОВЫЕ ПЕРЕМЕННЫЕ ДЛЯ ОТВЕТОВ ---
-                            let quotedMessageId;
-                            let quotedContent;
                             const messageContent = msg.message;
-                            console.log((_h = (_g = messageContent.extendedTextMessage) === null || _g === void 0 ? void 0 : _g.contextInfo) === null || _h === void 0 ? void 0 : _h.quotedMessage);
                             // Разбор различных типов сообщений
                             if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.conversation) {
                                 content = messageContent.conversation;
@@ -864,18 +860,26 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                             else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.extendedTextMessage) {
                                 content = messageContent.extendedTextMessage.text || undefined;
                                 messageType = "text";
-                                // --- НАЧАЛО: ОБРАБОТКА ОТВЕТА ---
+                                // --- ОБРАБОТКА ОТВЕТА ---
                                 const contextInfo = messageContent.extendedTextMessage.contextInfo;
                                 if (contextInfo === null || contextInfo === void 0 ? void 0 : contextInfo.quotedMessage) {
-                                    quotedMessageId = (_j = contextInfo.stanzaId) !== null && _j !== void 0 ? _j : undefined;
+                                    const quotedMessageId = (_g = contextInfo.stanzaId) !== null && _g !== void 0 ? _g : undefined;
                                     const qm = contextInfo.quotedMessage;
                                     // Получаем текст из разных возможных полей цитируемого сообщения
-                                    quotedContent = qm.conversation ||
-                                        ((_k = qm.extendedTextMessage) === null || _k === void 0 ? void 0 : _k.text) ||
-                                        ((_l = qm.imageMessage) === null || _l === void 0 ? void 0 : _l.caption) ||
-                                        ((_m = qm.videoMessage) === null || _m === void 0 ? void 0 : _m.caption) ||
-                                        ((_o = qm.documentMessage) === null || _o === void 0 ? void 0 : _o.fileName) ||
+                                    const quotedContent = qm.conversation ||
+                                        ((_h = qm.extendedTextMessage) === null || _h === void 0 ? void 0 : _h.text) ||
+                                        ((_j = qm.imageMessage) === null || _j === void 0 ? void 0 : _j.caption) ||
+                                        ((_k = qm.videoMessage) === null || _k === void 0 ? void 0 : _k.caption) ||
+                                        ((_l = qm.documentMessage) === null || _l === void 0 ? void 0 : _l.fileName) ||
                                         '[Медиафайл]'; // Плейсхолдер для медиа без текста
+                                    // Добавляем информацию об ответе к основному контенту
+                                    const replyText = `ответил на: "${quotedContent}"`;
+                                    if (content) {
+                                        content = `${replyText}\n\n${content}`;
+                                    }
+                                    else {
+                                        content = replyText;
+                                    }
                                     if (!msg.key.fromMe) {
                                         logger.info(`  [reply] Ответ на сообщение ID: ${quotedMessageId}`);
                                     }
@@ -966,7 +970,7 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                             }
                             else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.contactsArrayMessage) {
                                 messageType = "contacts_array";
-                                content = `Контакты: ${((_p = messageContent.contactsArrayMessage.contacts) === null || _p === void 0 ? void 0 : _p.map(c => c.displayName || c.vcard).join(', ')) || 'пусто'}`;
+                                content = `Контакты: ${((_m = messageContent.contactsArrayMessage.contacts) === null || _m === void 0 ? void 0 : _m.map(c => c.displayName || c.vcard).join(', ')) || 'пусто'}`;
                                 // Логируем только входящие сообщения
                                 if (!msg.key.fromMe) {
                                     logger.info(`📥 [${messageType}] Входящее: ${content} от ${remoteJid}`);
@@ -974,7 +978,7 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                             }
                             else if (messageContent === null || messageContent === void 0 ? void 0 : messageContent.reactionMessage) {
                                 messageType = "reaction";
-                                content = `Реакция "${messageContent.reactionMessage.text}" на сообщение ${(_q = messageContent.reactionMessage.key) === null || _q === void 0 ? void 0 : _q.id}`;
+                                content = `Реакция "${messageContent.reactionMessage.text}" на сообщение ${(_o = messageContent.reactionMessage.key) === null || _o === void 0 ? void 0 : _o.id}`;
                                 // Логируем только входящие сообщения
                                 if (!msg.key.fromMe) {
                                     logger.info(`📥 [${messageType}] Входящее: ${content} от ${remoteJid}`);
@@ -1018,7 +1022,7 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                             }
                             const timestampDate = new Date(timestampInSeconds * 1000);
                             // Сохраняем сообщение в БД
-                            const myJid = (0, baileys_1.jidNormalizedUser)(((_r = currentSock === null || currentSock === void 0 ? void 0 : currentSock.user) === null || _r === void 0 ? void 0 : _r.id) || phoneJid) || '';
+                            const myJid = (0, baileys_1.jidNormalizedUser)(((_p = currentSock === null || currentSock === void 0 ? void 0 : currentSock.user) === null || _p === void 0 ? void 0 : _p.id) || phoneJid) || '';
                             const contactName = msg.pushName || undefined;
                             const chatId = yield ensureChat(organizationId, organizationPhoneId, myJid, remoteJid, contactName);
                             // --- АВТОМАТИЧЕСКОЕ СОЗДАНИЕ КЛИЕНТА (ВРЕМЕННО ОТКЛЮЧЕНО) ---
@@ -1060,9 +1064,6 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                                     organizationId: organizationId,
                                     // Входящие сообщения по умолчанию не прочитаны оператором
                                     isReadByOperator: msg.key.fromMe || false, // Исходящие считаем прочитанными
-                                    // --- СОХРАНЕНИЕ ДАННЫХ ОТВЕТОВ ---
-                                    quotedMessageId: quotedMessageId,
-                                    quotedContent: quotedContent,
                                 },
                             });
                             // Увеличиваем счетчик непрочитанных сообщений для входящих сообщений
@@ -1109,9 +1110,9 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                         }
                         catch (error) {
                             // Обработка ошибки Bad MAC из libsignal
-                            if (((_s = error === null || error === void 0 ? void 0 : error.message) === null || _s === void 0 ? void 0 : _s.includes('Bad MAC')) ||
-                                ((_t = error === null || error === void 0 ? void 0 : error.message) === null || _t === void 0 ? void 0 : _t.includes('verifyMAC')) ||
-                                ((_u = error === null || error === void 0 ? void 0 : error.stack) === null || _u === void 0 ? void 0 : _u.includes('libsignal'))) {
+                            if (((_q = error === null || error === void 0 ? void 0 : error.message) === null || _q === void 0 ? void 0 : _q.includes('Bad MAC')) ||
+                                ((_r = error === null || error === void 0 ? void 0 : error.message) === null || _r === void 0 ? void 0 : _r.includes('verifyMAC')) ||
+                                ((_s = error === null || error === void 0 ? void 0 : error.stack) === null || _s === void 0 ? void 0 : _s.includes('libsignal'))) {
                                 logger.error(`❌ Session error (Bad MAC) при обработке сообщения от ${remoteJid}:`, error.message);
                                 // Вызываем обработчик Bad MAC ошибки
                                 const recovered = yield handleBadMacError(organizationId, organizationPhoneId, phoneJid);
@@ -1144,9 +1145,9 @@ function startBaileys(organizationId, organizationPhoneId, phoneJid) {
                         // Обработка критических ошибок на уровне обработки сообщения
                         logger.error(`❌ Критическая ошибка при обработке сообщения:`, outerError);
                         // Проверяем на Bad MAC даже на верхнем уровне
-                        if (((_v = outerError === null || outerError === void 0 ? void 0 : outerError.message) === null || _v === void 0 ? void 0 : _v.includes('Bad MAC')) ||
-                            ((_w = outerError === null || outerError === void 0 ? void 0 : outerError.message) === null || _w === void 0 ? void 0 : _w.includes('verifyMAC')) ||
-                            ((_x = outerError === null || outerError === void 0 ? void 0 : outerError.stack) === null || _x === void 0 ? void 0 : _x.includes('libsignal'))) {
+                        if (((_t = outerError === null || outerError === void 0 ? void 0 : outerError.message) === null || _t === void 0 ? void 0 : _t.includes('Bad MAC')) ||
+                            ((_u = outerError === null || outerError === void 0 ? void 0 : outerError.message) === null || _u === void 0 ? void 0 : _u.includes('verifyMAC')) ||
+                            ((_v = outerError === null || outerError === void 0 ? void 0 : outerError.stack) === null || _v === void 0 ? void 0 : _v.includes('libsignal'))) {
                             logger.error(`❌ Критическая Session error (Bad MAC). Попытка восстановления...`);
                             yield handleBadMacError(organizationId, organizationPhoneId, phoneJid);
                         }

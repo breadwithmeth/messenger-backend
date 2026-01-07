@@ -864,12 +864,9 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
             let filename: string | undefined;
             let mimeType: string | undefined;
             let size: number | undefined;
-            // --- НОВЫЕ ПЕРЕМЕННЫЕ ДЛЯ ОТВЕТОВ ---
-            let quotedMessageId: string | undefined;
-            let quotedContent: string | undefined;
 
             const messageContent = msg.message;
-            console.log(messageContent.extendedTextMessage?.contextInfo?.quotedMessage)
+            
             // Разбор различных типов сообщений
             if (messageContent?.conversation) {
                 content = messageContent.conversation;
@@ -882,18 +879,27 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
                 content = messageContent.extendedTextMessage.text || undefined;
                 messageType = "text";
                 
-                // --- НАЧАЛО: ОБРАБОТКА ОТВЕТА ---
+                // --- ОБРАБОТКА ОТВЕТА ---
                 const contextInfo = messageContent.extendedTextMessage.contextInfo;
                 if (contextInfo?.quotedMessage) {
-                    quotedMessageId = contextInfo.stanzaId ?? undefined;
+                    const quotedMessageId = contextInfo.stanzaId ?? undefined;
                     const qm = contextInfo.quotedMessage;
                     // Получаем текст из разных возможных полей цитируемого сообщения
-                    quotedContent = qm.conversation || 
+                    const quotedContent = qm.conversation || 
                                     qm.extendedTextMessage?.text ||
                                     qm.imageMessage?.caption ||
                                     qm.videoMessage?.caption ||
                                     qm.documentMessage?.fileName ||
                                     '[Медиафайл]'; // Плейсхолдер для медиа без текста
+                    
+                    // Добавляем информацию об ответе к основному контенту
+                    const replyText = `ответил на: "${quotedContent}"`;
+                    if (content) {
+                        content = `${replyText}\n\n${content}`;
+                    } else {
+                        content = replyText;
+                    }
+                    
                     if (!msg.key.fromMe) {
                       logger.info(`  [reply] Ответ на сообщение ID: ${quotedMessageId}`);
                     }
@@ -1070,9 +1076,6 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
                     organizationId: organizationId,
                     // Входящие сообщения по умолчанию не прочитаны оператором
                     isReadByOperator: msg.key.fromMe || false, // Исходящие считаем прочитанными
-                    // --- СОХРАНЕНИЕ ДАННЫХ ОТВЕТОВ ---
-                    quotedMessageId: quotedMessageId,
-                    quotedContent: quotedContent,
                 },
             });
 
