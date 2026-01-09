@@ -365,6 +365,31 @@ function handleIncomingMessage(orgPhone, message, contact) {
                     messageType = 'interactive_list';
                 }
             }
+            else if (message.type === 'location') {
+                // Обработка геолокации
+                messageType = 'location';
+                const location = message.location;
+                // Формируем красивое текстовое представление геолокации
+                const locationParts = [];
+                if (location.name)
+                    locationParts.push(location.name);
+                if (location.address && location.address !== location.name)
+                    locationParts.push(location.address);
+                const locationText = locationParts.length > 0
+                    ? locationParts.join(', ')
+                    : 'Геолокация';
+                // Создаем Google Maps ссылку для удобства
+                const mapsUrl = `https://www.google.com/maps?q=${location.latitude},${location.longitude}`;
+                content = `📍 ${locationText}\nКоординаты: ${location.latitude}, ${location.longitude}\nКарта: ${mapsUrl}`;
+                console.log('📍 WABA: Получена геолокация:', {
+                    name: location.name,
+                    address: location.address,
+                    latitude: location.latitude,
+                    longitude: location.longitude,
+                    mapsUrl
+                });
+                logger.info(`📍 WABA: Геолокация получена: ${locationText} (${location.latitude}, ${location.longitude})`);
+            }
             // Добавляем информацию о реплае к контенту (после обработки всех типов сообщений)
             if (quotedContent) {
                 const replyText = `ответил на: "${quotedContent}"`;
