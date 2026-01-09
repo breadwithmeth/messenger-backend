@@ -212,7 +212,7 @@ function handleMessageStatus(organizationPhoneId, status) {
  */
 function handleIncomingMessage(orgPhone, message, contact) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t;
         try {
             // Логируем полную структуру входящего сообщения
             console.log('📨 WABA: Входящее сообщение (полная структура):');
@@ -234,61 +234,57 @@ function handleIncomingMessage(orgPhone, message, contact) {
             let quotedMessageId;
             let quotedContent;
             // --- ОБРАБОТКА ОТВЕТА В WABA (общая для всех типов) ---
-            if ((_b = message.context) === null || _b === void 0 ? void 0 : _b.quoted_message_id) {
-                quotedMessageId = message.context.quoted_message_id;
+            // В WABA структура реплая: message.context = { from: "...", id: "wamid..." }
+            if ((_b = message.context) === null || _b === void 0 ? void 0 : _b.id) {
+                quotedMessageId = message.context.id;
                 console.log('🔄 WABA: Обнаружен реплай! Context:', JSON.stringify(message.context, null, 2));
-                // Пытаемся получить текст цитируемого сообщения из context
-                const quotedMsg = (_c = message.context) === null || _c === void 0 ? void 0 : _c.quoted_message;
-                if (quotedMsg) {
-                    // Извлекаем текст из разных типов сообщений
-                    if ((_d = quotedMsg.text) === null || _d === void 0 ? void 0 : _d.body) {
-                        quotedContent = quotedMsg.text.body;
+                // Пытаемся найти цитируемое сообщение в БД
+                const quotedDbMsg = yield authStorage_1.prisma.message.findFirst({
+                    where: {
+                        whatsappMessageId: quotedMessageId,
+                        organizationPhoneId: orgPhone.id,
+                    },
+                    select: { content: true, type: true, mediaUrl: true },
+                });
+                if (quotedDbMsg) {
+                    // Извлекаем контент в зависимости от типа
+                    if (quotedDbMsg.type === 'text') {
+                        quotedContent = quotedDbMsg.content;
                     }
-                    else if ((_e = quotedMsg.image) === null || _e === void 0 ? void 0 : _e.caption) {
-                        quotedContent = quotedMsg.image.caption || '[Изображение]';
+                    else if (quotedDbMsg.type === 'image') {
+                        quotedContent = quotedDbMsg.content || '[Изображение]';
                     }
-                    else if ((_f = quotedMsg.video) === null || _f === void 0 ? void 0 : _f.caption) {
-                        quotedContent = quotedMsg.video.caption || '[Видео]';
+                    else if (quotedDbMsg.type === 'video') {
+                        quotedContent = quotedDbMsg.content || '[Видео]';
                     }
-                    else if ((_g = quotedMsg.document) === null || _g === void 0 ? void 0 : _g.caption) {
-                        quotedContent = quotedMsg.document.caption || `[Документ: ${quotedMsg.document.filename || 'file'}]`;
+                    else if (quotedDbMsg.type === 'document') {
+                        quotedContent = quotedDbMsg.content || '[Документ]';
                     }
-                    else if (quotedMsg.audio) {
+                    else if (quotedDbMsg.type === 'audio') {
                         quotedContent = '[Аудио]';
                     }
                     else {
-                        quotedContent = '[Медиафайл]';
+                        quotedContent = `[${quotedDbMsg.type}]`;
                     }
+                    console.log('✅ WABA: Найдено цитируемое сообщение:', quotedContent);
                 }
-                // Если цитируемого текста нет, пытаемся найти сообщение в БД
-                if (!quotedContent && quotedMessageId) {
-                    const quotedDbMsg = yield authStorage_1.prisma.message.findFirst({
-                        where: {
-                            whatsappMessageId: quotedMessageId,
-                            organizationPhoneId: orgPhone.id,
-                        },
-                        select: { content: true, type: true },
-                    });
-                    if (quotedDbMsg) {
-                        quotedContent = quotedDbMsg.content || `[${quotedDbMsg.type}]`;
-                    }
-                    else {
-                        quotedContent = '[Сообщение не найдено]';
-                    }
+                else {
+                    quotedContent = '[Сообщение не найдено]';
+                    console.log('⚠️ WABA: Цитируемое сообщение не найдено в БД, ID:', quotedMessageId);
                 }
                 logger.info(`  [reply] Ответ на сообщение ID: ${quotedMessageId}, текст: "${quotedContent}"`);
             }
             // --- КОНЕЦ: ОБРАБОТКА ОТВЕТА В WABA ---
             if (message.type === 'text') {
-                content = ((_h = message.text) === null || _h === void 0 ? void 0 : _h.body) || '';
+                content = ((_c = message.text) === null || _c === void 0 ? void 0 : _c.body) || '';
                 messageType = 'text';
             }
             else if (message.type === 'image') {
-                content = ((_j = message.image) === null || _j === void 0 ? void 0 : _j.caption) || '';
+                content = ((_d = message.image) === null || _d === void 0 ? void 0 : _d.caption) || '';
                 messageType = 'image';
-                mimeType = (_k = message.image) === null || _k === void 0 ? void 0 : _k.mime_type;
+                mimeType = (_e = message.image) === null || _e === void 0 ? void 0 : _e.mime_type;
                 // Скачиваем изображение с серверов WhatsApp и загружаем на R2
-                if ((_l = message.image) === null || _l === void 0 ? void 0 : _l.id) {
+                if ((_f = message.image) === null || _f === void 0 ? void 0 : _f.id) {
                     const wabaService = yield (0, wabaService_1.createWABAService)(orgPhone.id);
                     if (wabaService) {
                         try {
@@ -302,12 +298,12 @@ function handleIncomingMessage(orgPhone, message, contact) {
                 }
             }
             else if (message.type === 'document') {
-                content = ((_m = message.document) === null || _m === void 0 ? void 0 : _m.caption) || '';
+                content = ((_g = message.document) === null || _g === void 0 ? void 0 : _g.caption) || '';
                 messageType = 'document';
-                filename = (_o = message.document) === null || _o === void 0 ? void 0 : _o.filename;
-                mimeType = (_p = message.document) === null || _p === void 0 ? void 0 : _p.mime_type;
+                filename = (_h = message.document) === null || _h === void 0 ? void 0 : _h.filename;
+                mimeType = (_j = message.document) === null || _j === void 0 ? void 0 : _j.mime_type;
                 // Скачиваем документ с серверов WhatsApp и загружаем на R2
-                if ((_q = message.document) === null || _q === void 0 ? void 0 : _q.id) {
+                if ((_k = message.document) === null || _k === void 0 ? void 0 : _k.id) {
                     const wabaService = yield (0, wabaService_1.createWABAService)(orgPhone.id);
                     if (wabaService) {
                         try {
@@ -322,9 +318,9 @@ function handleIncomingMessage(orgPhone, message, contact) {
             }
             else if (message.type === 'audio') {
                 messageType = 'audio';
-                mimeType = (_r = message.audio) === null || _r === void 0 ? void 0 : _r.mime_type;
+                mimeType = (_l = message.audio) === null || _l === void 0 ? void 0 : _l.mime_type;
                 // Скачиваем аудио с серверов WhatsApp и загружаем на R2
-                if ((_s = message.audio) === null || _s === void 0 ? void 0 : _s.id) {
+                if ((_m = message.audio) === null || _m === void 0 ? void 0 : _m.id) {
                     const wabaService = yield (0, wabaService_1.createWABAService)(orgPhone.id);
                     if (wabaService) {
                         try {
@@ -338,11 +334,11 @@ function handleIncomingMessage(orgPhone, message, contact) {
                 }
             }
             else if (message.type === 'video') {
-                content = ((_t = message.video) === null || _t === void 0 ? void 0 : _t.caption) || '';
+                content = ((_o = message.video) === null || _o === void 0 ? void 0 : _o.caption) || '';
                 messageType = 'video';
-                mimeType = (_u = message.video) === null || _u === void 0 ? void 0 : _u.mime_type;
+                mimeType = (_p = message.video) === null || _p === void 0 ? void 0 : _p.mime_type;
                 // Скачиваем видео с серверов WhatsApp и загружаем на R2
-                if ((_v = message.video) === null || _v === void 0 ? void 0 : _v.id) {
+                if ((_q = message.video) === null || _q === void 0 ? void 0 : _q.id) {
                     const wabaService = yield (0, wabaService_1.createWABAService)(orgPhone.id);
                     if (wabaService) {
                         try {
@@ -356,15 +352,15 @@ function handleIncomingMessage(orgPhone, message, contact) {
                 }
             }
             else if (message.type === 'button') {
-                content = ((_w = message.button) === null || _w === void 0 ? void 0 : _w.text) || '';
+                content = ((_r = message.button) === null || _r === void 0 ? void 0 : _r.text) || '';
                 messageType = 'button';
             }
             else if (message.type === 'interactive') {
-                if (((_x = message.interactive) === null || _x === void 0 ? void 0 : _x.type) === 'button_reply') {
+                if (((_s = message.interactive) === null || _s === void 0 ? void 0 : _s.type) === 'button_reply') {
                     content = message.interactive.button_reply.title;
                     messageType = 'interactive_button';
                 }
-                else if (((_y = message.interactive) === null || _y === void 0 ? void 0 : _y.type) === 'list_reply') {
+                else if (((_t = message.interactive) === null || _t === void 0 ? void 0 : _t.type) === 'list_reply') {
                     content = message.interactive.list_reply.title;
                     messageType = 'interactive_list';
                 }

@@ -198,43 +198,40 @@ async function handleIncomingMessage(orgPhone: any, message: any, contact?: any)
     let quotedContent: string | undefined;
 
     // --- ОБРАБОТКА ОТВЕТА В WABA (общая для всех типов) ---
-    if (message.context?.quoted_message_id) {
-      quotedMessageId = message.context.quoted_message_id;
+    // В WABA структура реплая: message.context = { from: "...", id: "wamid..." }
+    if (message.context?.id) {
+      quotedMessageId = message.context.id;
       console.log('🔄 WABA: Обнаружен реплай! Context:', JSON.stringify(message.context, null, 2));
       
-      // Пытаемся получить текст цитируемого сообщения из context
-      const quotedMsg = message.context?.quoted_message;
-      if (quotedMsg) {
-        // Извлекаем текст из разных типов сообщений
-        if (quotedMsg.text?.body) {
-          quotedContent = quotedMsg.text.body;
-        } else if (quotedMsg.image?.caption) {
-          quotedContent = quotedMsg.image.caption || '[Изображение]';
-        } else if (quotedMsg.video?.caption) {
-          quotedContent = quotedMsg.video.caption || '[Видео]';
-        } else if (quotedMsg.document?.caption) {
-          quotedContent = quotedMsg.document.caption || `[Документ: ${quotedMsg.document.filename || 'file'}]`;
-        } else if (quotedMsg.audio) {
+      // Пытаемся найти цитируемое сообщение в БД
+      const quotedDbMsg = await prisma.message.findFirst({
+        where: {
+          whatsappMessageId: quotedMessageId,
+          organizationPhoneId: orgPhone.id,
+        },
+        select: { content: true, type: true, mediaUrl: true },
+      });
+      
+      if (quotedDbMsg) {
+        // Извлекаем контент в зависимости от типа
+        if (quotedDbMsg.type === 'text') {
+          quotedContent = quotedDbMsg.content;
+        } else if (quotedDbMsg.type === 'image') {
+          quotedContent = quotedDbMsg.content || '[Изображение]';
+        } else if (quotedDbMsg.type === 'video') {
+          quotedContent = quotedDbMsg.content || '[Видео]';
+        } else if (quotedDbMsg.type === 'document') {
+          quotedContent = quotedDbMsg.content || '[Документ]';
+        } else if (quotedDbMsg.type === 'audio') {
           quotedContent = '[Аудио]';
         } else {
-          quotedContent = '[Медиафайл]';
+          quotedContent = `[${quotedDbMsg.type}]`;
         }
-      }
-      
-      // Если цитируемого текста нет, пытаемся найти сообщение в БД
-      if (!quotedContent && quotedMessageId) {
-        const quotedDbMsg = await prisma.message.findFirst({
-          where: {
-            whatsappMessageId: quotedMessageId,
-            organizationPhoneId: orgPhone.id,
-          },
-          select: { content: true, type: true },
-        });
-        if (quotedDbMsg) {
-          quotedContent = quotedDbMsg.content || `[${quotedDbMsg.type}]`;
-        } else {
-          quotedContent = '[Сообщение не найдено]';
-        }
+        
+        console.log('✅ WABA: Найдено цитируемое сообщение:', quotedContent);
+      } else {
+        quotedContent = '[Сообщение не найдено]';
+        console.log('⚠️ WABA: Цитируемое сообщение не найдено в БД, ID:', quotedMessageId);
       }
       
       logger.info(`  [reply] Ответ на сообщение ID: ${quotedMessageId}, текст: "${quotedContent}"`);

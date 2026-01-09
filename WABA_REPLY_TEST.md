@@ -9,6 +9,30 @@
 2. ✅ **Возврат данных реплая через API** - добавлено поле `quotedContent` в ответы API
 3. ✅ **Улучшенное извлечение текста** - корректная обработка цитируемых сообщений разных типов
 
+## Структура реплая в WABA
+
+WABA присылает реплаи в следующем формате:
+```json
+{
+  "context": {
+    "from": "77054810862",
+    "id": "wamid.HBgLNzcwNTQ4MTA4NjIVAgASGBQzQjc5QUZDNDE5QzdGNDBDNDBCQwA="
+  },
+  "from": "77054810862",
+  "id": "wamid.HBgLNzcwNTQ4MTA4NjIVAgASGBQzQjAyM0FENkU5NzAzM0Q4RTZGQwA=",
+  "timestamp": "1767989655",
+  "text": {
+    "body": "тест2"
+  },
+  "type": "text"
+}
+```
+
+**Важно:** 
+- `context.id` содержит ID цитируемого сообщения
+- Текст цитируемого сообщения НЕ передается в webhook
+- Необходимо искать его в базе данных по `whatsappMessageId = context.id`
+
 ## Измененные файлы
 
 - `src/controllers/wabaController.ts` - обработка входящих реплаев для всех типов сообщений
