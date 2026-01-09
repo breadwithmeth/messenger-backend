@@ -58,8 +58,8 @@ app.use((req, res, next) => {
 });
 // --- ДОБАВЛЯЕМ ОБЩЕЕ ЛОГИРОВАНИЕ ВСЕХ ЗАПРОСОВ ---
 app.use((req, res, next) => {
-    console.log(`🌐 INCOMING REQUEST: ${req.method} ${req.originalUrl}`);
-    console.log(`🌐 Headers:`, req.headers);
+    // console.log(`🌐 INCOMING REQUEST: ${req.method} ${req.originalUrl}`);
+    // console.log(`🌐 Headers:`, req.headers);
     next();
 });
 // --- ДОБАВИТЬ: Раздача статических файлов ---
