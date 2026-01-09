@@ -211,7 +211,7 @@ function handleMessageStatus(organizationPhoneId, status) {
  */
 function handleIncomingMessage(orgPhone, message, contact) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y;
         try {
             // Нормализуем номер в формат WhatsApp JID
             const phoneNumber = message.from;
@@ -226,16 +226,63 @@ function handleIncomingMessage(orgPhone, message, contact) {
             let mediaUrl;
             let filename;
             let mimeType;
+            let quotedMessageId;
+            let quotedContent;
+            // --- ОБРАБОТКА ОТВЕТА В WABA (общая для всех типов) ---
+            if ((_b = message.context) === null || _b === void 0 ? void 0 : _b.quoted_message_id) {
+                quotedMessageId = message.context.quoted_message_id;
+                // Пытаемся получить текст цитируемого сообщения из context
+                const quotedMsg = (_c = message.context) === null || _c === void 0 ? void 0 : _c.quoted_message;
+                if (quotedMsg) {
+                    // Извлекаем текст из разных типов сообщений
+                    if ((_d = quotedMsg.text) === null || _d === void 0 ? void 0 : _d.body) {
+                        quotedContent = quotedMsg.text.body;
+                    }
+                    else if ((_e = quotedMsg.image) === null || _e === void 0 ? void 0 : _e.caption) {
+                        quotedContent = quotedMsg.image.caption || '[Изображение]';
+                    }
+                    else if ((_f = quotedMsg.video) === null || _f === void 0 ? void 0 : _f.caption) {
+                        quotedContent = quotedMsg.video.caption || '[Видео]';
+                    }
+                    else if ((_g = quotedMsg.document) === null || _g === void 0 ? void 0 : _g.caption) {
+                        quotedContent = quotedMsg.document.caption || `[Документ: ${quotedMsg.document.filename || 'file'}]`;
+                    }
+                    else if (quotedMsg.audio) {
+                        quotedContent = '[Аудио]';
+                    }
+                    else {
+                        quotedContent = '[Медиафайл]';
+                    }
+                }
+                // Если цитируемого текста нет, пытаемся найти сообщение в БД
+                if (!quotedContent && quotedMessageId) {
+                    const quotedDbMsg = yield authStorage_1.prisma.message.findFirst({
+                        where: {
+                            whatsappMessageId: quotedMessageId,
+                            organizationPhoneId: orgPhone.id,
+                        },
+                        select: { content: true, type: true },
+                    });
+                    if (quotedDbMsg) {
+                        quotedContent = quotedDbMsg.content || `[${quotedDbMsg.type}]`;
+                    }
+                    else {
+                        quotedContent = '[Сообщение не найдено]';
+                    }
+                }
+                logger.info(`  [reply] Ответ на сообщение ID: ${quotedMessageId}, текст: "${quotedContent}"`);
+            }
+            // --- КОНЕЦ: ОБРАБОТКА ОТВЕТА В WABA ---
             if (message.type === 'text') {
-                content = ((_b = message.text) === null || _b === void 0 ? void 0 : _b.body) || '';
+                content = ((_h = message.text) === null || _h === void 0 ? void 0 : _h.body) || '';
                 messageType = 'text';
             }
             else if (message.type === 'image') {
-                content = ((_c = message.image) === null || _c === void 0 ? void 0 : _c.caption) || '';
+                content = ((_j = message.image) === null || _j === void 0 ? void 0 : _j.caption) || '';
                 messageType = 'image';
-                mimeType = (_d = message.image) === null || _d === void 0 ? void 0 : _d.mime_type;
+                mimeType = (_k = message.image) === null || _k === void 0 ? void 0 : _k.mime_type;
                 // Скачиваем изображение с серверов WhatsApp и загружаем на R2
-                if ((_e = message.image) === null || _e === void 0 ? void 0 : _e.id) {
+                if ((_l = message.image) === null || _l === void 0 ? void 0 : _l.id) {
                     const wabaService = yield (0, wabaService_1.createWABAService)(orgPhone.id);
                     if (wabaService) {
                         try {
@@ -249,12 +296,12 @@ function handleIncomingMessage(orgPhone, message, contact) {
                 }
             }
             else if (message.type === 'document') {
-                content = ((_f = message.document) === null || _f === void 0 ? void 0 : _f.caption) || '';
+                content = ((_m = message.document) === null || _m === void 0 ? void 0 : _m.caption) || '';
                 messageType = 'document';
-                filename = (_g = message.document) === null || _g === void 0 ? void 0 : _g.filename;
-                mimeType = (_h = message.document) === null || _h === void 0 ? void 0 : _h.mime_type;
+                filename = (_o = message.document) === null || _o === void 0 ? void 0 : _o.filename;
+                mimeType = (_p = message.document) === null || _p === void 0 ? void 0 : _p.mime_type;
                 // Скачиваем документ с серверов WhatsApp и загружаем на R2
-                if ((_j = message.document) === null || _j === void 0 ? void 0 : _j.id) {
+                if ((_q = message.document) === null || _q === void 0 ? void 0 : _q.id) {
                     const wabaService = yield (0, wabaService_1.createWABAService)(orgPhone.id);
                     if (wabaService) {
                         try {
@@ -269,9 +316,9 @@ function handleIncomingMessage(orgPhone, message, contact) {
             }
             else if (message.type === 'audio') {
                 messageType = 'audio';
-                mimeType = (_k = message.audio) === null || _k === void 0 ? void 0 : _k.mime_type;
+                mimeType = (_r = message.audio) === null || _r === void 0 ? void 0 : _r.mime_type;
                 // Скачиваем аудио с серверов WhatsApp и загружаем на R2
-                if ((_l = message.audio) === null || _l === void 0 ? void 0 : _l.id) {
+                if ((_s = message.audio) === null || _s === void 0 ? void 0 : _s.id) {
                     const wabaService = yield (0, wabaService_1.createWABAService)(orgPhone.id);
                     if (wabaService) {
                         try {
@@ -285,11 +332,11 @@ function handleIncomingMessage(orgPhone, message, contact) {
                 }
             }
             else if (message.type === 'video') {
-                content = ((_m = message.video) === null || _m === void 0 ? void 0 : _m.caption) || '';
+                content = ((_t = message.video) === null || _t === void 0 ? void 0 : _t.caption) || '';
                 messageType = 'video';
-                mimeType = (_o = message.video) === null || _o === void 0 ? void 0 : _o.mime_type;
+                mimeType = (_u = message.video) === null || _u === void 0 ? void 0 : _u.mime_type;
                 // Скачиваем видео с серверов WhatsApp и загружаем на R2
-                if ((_p = message.video) === null || _p === void 0 ? void 0 : _p.id) {
+                if ((_v = message.video) === null || _v === void 0 ? void 0 : _v.id) {
                     const wabaService = yield (0, wabaService_1.createWABAService)(orgPhone.id);
                     if (wabaService) {
                         try {
@@ -303,17 +350,27 @@ function handleIncomingMessage(orgPhone, message, contact) {
                 }
             }
             else if (message.type === 'button') {
-                content = ((_q = message.button) === null || _q === void 0 ? void 0 : _q.text) || '';
+                content = ((_w = message.button) === null || _w === void 0 ? void 0 : _w.text) || '';
                 messageType = 'button';
             }
             else if (message.type === 'interactive') {
-                if (((_r = message.interactive) === null || _r === void 0 ? void 0 : _r.type) === 'button_reply') {
+                if (((_x = message.interactive) === null || _x === void 0 ? void 0 : _x.type) === 'button_reply') {
                     content = message.interactive.button_reply.title;
                     messageType = 'interactive_button';
                 }
-                else if (((_s = message.interactive) === null || _s === void 0 ? void 0 : _s.type) === 'list_reply') {
+                else if (((_y = message.interactive) === null || _y === void 0 ? void 0 : _y.type) === 'list_reply') {
                     content = message.interactive.list_reply.title;
                     messageType = 'interactive_list';
+                }
+            }
+            // Добавляем информацию о реплае к контенту (после обработки всех типов сообщений)
+            if (quotedContent) {
+                const replyText = `ответил на: "${quotedContent}"`;
+                if (content) {
+                    content = `${replyText}\n\n${content}`;
+                }
+                else {
+                    content = replyText;
                 }
             }
             // Логируем входящее сообщение
@@ -340,6 +397,9 @@ function handleIncomingMessage(orgPhone, message, contact) {
                     timestamp,
                     status: 'received',
                     isReadByOperator: false,
+                    // --- СОХРАНЕНИЕ ДАННЫХ ОТВЕТОВ ---
+                    quotedMessageId: quotedMessageId,
+                    quotedContent: quotedContent,
                 },
             });
             // Увеличиваем счётчик непрочитанных
@@ -698,6 +758,8 @@ const getChatMessages = (req, res) => __awaiter(void 0, void 0, void 0, function
                 timestamp: true,
                 status: true,
                 isReadByOperator: true,
+                quotedMessageId: true,
+                quotedContent: true, // Добавлено для отображения реплаев
                 senderUser: {
                     select: {
                         id: true,

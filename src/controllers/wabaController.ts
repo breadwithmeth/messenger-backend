@@ -188,6 +188,51 @@ async function handleIncomingMessage(orgPhone: any, message: any, contact?: any)
     let mediaUrl: string | undefined;
     let filename: string | undefined;
     let mimeType: string | undefined;
+    let quotedMessageId: string | undefined;
+    let quotedContent: string | undefined;
+
+    // --- ОБРАБОТКА ОТВЕТА В WABA (общая для всех типов) ---
+    if (message.context?.quoted_message_id) {
+      quotedMessageId = message.context.quoted_message_id;
+      
+      // Пытаемся получить текст цитируемого сообщения из context
+      const quotedMsg = message.context?.quoted_message;
+      if (quotedMsg) {
+        // Извлекаем текст из разных типов сообщений
+        if (quotedMsg.text?.body) {
+          quotedContent = quotedMsg.text.body;
+        } else if (quotedMsg.image?.caption) {
+          quotedContent = quotedMsg.image.caption || '[Изображение]';
+        } else if (quotedMsg.video?.caption) {
+          quotedContent = quotedMsg.video.caption || '[Видео]';
+        } else if (quotedMsg.document?.caption) {
+          quotedContent = quotedMsg.document.caption || `[Документ: ${quotedMsg.document.filename || 'file'}]`;
+        } else if (quotedMsg.audio) {
+          quotedContent = '[Аудио]';
+        } else {
+          quotedContent = '[Медиафайл]';
+        }
+      }
+      
+      // Если цитируемого текста нет, пытаемся найти сообщение в БД
+      if (!quotedContent && quotedMessageId) {
+        const quotedDbMsg = await prisma.message.findFirst({
+          where: {
+            whatsappMessageId: quotedMessageId,
+            organizationPhoneId: orgPhone.id,
+          },
+          select: { content: true, type: true },
+        });
+        if (quotedDbMsg) {
+          quotedContent = quotedDbMsg.content || `[${quotedDbMsg.type}]`;
+        } else {
+          quotedContent = '[Сообщение не найдено]';
+        }
+      }
+      
+      logger.info(`  [reply] Ответ на сообщение ID: ${quotedMessageId}, текст: "${quotedContent}"`);
+    }
+    // --- КОНЕЦ: ОБРАБОТКА ОТВЕТА В WABA ---
 
     if (message.type === 'text') {
       content = message.text?.body || '';
@@ -273,6 +318,16 @@ async function handleIncomingMessage(orgPhone: any, message: any, contact?: any)
       }
     }
 
+    // Добавляем информацию о реплае к контенту (после обработки всех типов сообщений)
+    if (quotedContent) {
+      const replyText = `ответил на: "${quotedContent}"`;
+      if (content) {
+        content = `${replyText}\n\n${content}`;
+      } else {
+        content = replyText;
+      }
+    }
+
     // Логируем входящее сообщение
     logger.info(`📥 WABA: Входящее [${messageType}]: "${content}" от ${remoteJid} (${contactName || 'Unknown'})`);
 
@@ -305,6 +360,9 @@ async function handleIncomingMessage(orgPhone: any, message: any, contact?: any)
         timestamp,
         status: 'received',
         isReadByOperator: false,
+        // --- СОХРАНЕНИЕ ДАННЫХ ОТВЕТОВ ---
+        quotedMessageId: quotedMessageId,
+        quotedContent: quotedContent,
       },
     });
 
@@ -706,6 +764,8 @@ export const getChatMessages = async (req: Request, res: Response) => {
         timestamp: true,
         status: true,
         isReadByOperator: true,
+        quotedMessageId: true,
+        quotedContent: true, // Добавлено для отображения реплаев
         senderUser: {
           select: {
             id: true,

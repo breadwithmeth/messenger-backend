@@ -252,6 +252,8 @@ function listChats(req, res) {
                             type: true,
                             isReadByOperator: true,
                             mediaUrl: true,
+                            quotedMessageId: true,
+                            quotedContent: true, // Добавлено для отображения реплаев в последнем сообщении
                         },
                     },
                 },
@@ -351,6 +353,7 @@ const getChatMessages = (req, res) => __awaiter(void 0, void 0, void 0, function
                 status: true,
                 isReadByOperator: true,
                 quotedMessageId: true,
+                quotedContent: true, // Добавлено для отображения реплаев
                 senderUser: {
                     select: {
                         id: true,

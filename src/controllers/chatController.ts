@@ -268,6 +268,8 @@ export async function listChats(req: Request, res: Response) {
             type: true,
             isReadByOperator: true,
             mediaUrl: true,
+            quotedMessageId: true,
+            quotedContent: true, // Добавлено для отображения реплаев в последнем сообщении
           },
         },
       },
@@ -382,6 +384,7 @@ export const getChatMessages = async (req: Request, res: Response) => {
         status: true,
         isReadByOperator: true,
         quotedMessageId: true,
+        quotedContent: true, // Добавлено для отображения реплаев
         senderUser: {
           select: {
             id: true,
