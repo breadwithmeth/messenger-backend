@@ -132,6 +132,7 @@ async function processWebhookChange(change: any) {
 
     // Обработка входящих сообщений
     if (value.messages) {
+      console.log('📩 WABA: New incoming messages received:', JSON.stringify(value.messages, null, 2));
       const contacts = value.contacts || [];
       for (const message of value.messages) {
         // Находим контакт отправителя
