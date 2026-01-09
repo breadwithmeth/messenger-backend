@@ -213,6 +213,10 @@ function handleIncomingMessage(orgPhone, message, contact) {
     return __awaiter(this, void 0, void 0, function* () {
         var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y;
         try {
+            // Логируем полную структуру входящего сообщения
+            console.log('📨 WABA: Входящее сообщение (полная структура):');
+            console.log(JSON.stringify(message, null, 2));
+            console.log('---');
             // Нормализуем номер в формат WhatsApp JID
             const phoneNumber = message.from;
             const remoteJid = phoneNumber.includes('@') ? phoneNumber : `${phoneNumber}@s.whatsapp.net`;
@@ -231,6 +235,7 @@ function handleIncomingMessage(orgPhone, message, contact) {
             // --- ОБРАБОТКА ОТВЕТА В WABA (общая для всех типов) ---
             if ((_b = message.context) === null || _b === void 0 ? void 0 : _b.quoted_message_id) {
                 quotedMessageId = message.context.quoted_message_id;
+                console.log('🔄 WABA: Обнаружен реплай! Context:', JSON.stringify(message.context, null, 2));
                 // Пытаемся получить текст цитируемого сообщения из context
                 const quotedMsg = (_c = message.context) === null || _c === void 0 ? void 0 : _c.quoted_message;
                 if (quotedMsg) {
