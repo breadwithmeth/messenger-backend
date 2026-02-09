@@ -19,6 +19,7 @@ exports.disconnectOrganizationPhone = disconnectOrganizationPhone;
 const authStorage_1 = require("../config/authStorage");
 const baileys_1 = require("../config/baileys");
 const pino_1 = __importDefault(require("pino"));
+const ws_1 = __importDefault(require("ws"));
 const logger = (0, pino_1.default)({ level: 'info' });
 /**
  * Создает новую запись о WhatsApp-номере для организации.
@@ -125,14 +126,26 @@ function connectOrganizationPhone(req, res) {
                 logger.warn(`[connectOrganizationPhone] JID телефона не установлен для organizationPhoneId: ${organizationPhoneId}.`);
                 return res.status(400).json({ error: 'Phone JID is not set for this organization phone.' });
             }
-            // !!! ВНИМАНИЕ: УДАЛЕНА ПРОВЕРКА НА СУЩЕСТВУЮЩИЙ СОКЕТ !!!
-            // const existingSock = getBaileysSock(organizationPhoneId);
-            // if (existingSock && existingSock.user) {
-            //     const currentWebSocket = existingSock.ws as unknown as WebSocket; // Или другой вариант приведения
-            //     const connectionStatus = currentWebSocket.readyState === WebSocket.OPEN ? 'connected' : 'connecting';
-            //     logger.info(`[connectOrganizationPhone] Сокет для ${phone.phoneJid} уже активен (статус: ${currentWebSocket.readyState}).`);
-            //     return res.status(200).json({ status: connectionStatus, message: 'WhatsApp session already active or connecting.' });
-            // }
+            // WABA номера не подключаются через Baileys (иначе будет conflict/replaced и таймауты на pre-keys)
+            if (phone.connectionType === 'waba') {
+                logger.warn(`[connectOrganizationPhone] Запрос подключения Baileys отклонён: organizationPhoneId=${organizationPhoneId} имеет connectionType='waba'.`);
+                return res.status(400).json({
+                    error: 'This phone is configured for WABA and cannot be connected via Baileys.',
+                    connectionType: phone.connectionType,
+                });
+            }
+            // Защита от дублей: если сокет уже активен/подключается — не поднимаем вторую сессию (иначе conflict/replaced)
+            const existingSock = (0, baileys_1.getBaileysSock)(organizationPhoneId);
+            if (existingSock) {
+                const currentWebSocket = existingSock.ws;
+                const isOpen = currentWebSocket.readyState === ws_1.default.OPEN;
+                const isConnecting = currentWebSocket.readyState === ws_1.default.CONNECTING;
+                if (isOpen || isConnecting) {
+                    const connectionStatus = isOpen ? 'connected' : 'connecting';
+                    logger.info(`[connectOrganizationPhone] Сокет для ${phone.phoneJid} уже активен (readyState: ${currentWebSocket.readyState}).`);
+                    return res.status(200).json({ status: connectionStatus, message: 'WhatsApp session already active or connecting.' });
+                }
+            }
             // Запускаем Baileys сессию. QR-код будет сохранен в БД через обработчик 'connection.update'.
             yield (0, baileys_1.startBaileys)(organizationId, organizationPhoneId, phone.phoneJid);
             logger.info(`[connectOrganizationPhone] Инициирован запуск Baileys для ${phone.phoneJid}.`);

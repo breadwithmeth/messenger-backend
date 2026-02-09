@@ -19,6 +19,8 @@ async function initializeConnectedSessions() {
   try {
     const connectedPhones = await prisma.organizationPhone.findMany({
       where: {
+        // Запускаем Baileys только для номеров, подключенных через Web (не WABA)
+        connectionType: 'baileys',
         // КРИТИЧЕСКИ ВАЖНОЕ УСЛОВИЕ:
         // Убедитесь, что здесь перечислены ВСЕ статусы, при которых вы хотите инициализировать сессию.
         // 'connected': если сессия была активна и должна быть восстановлена.
@@ -42,10 +44,15 @@ async function initializeConnectedSessions() {
     }
 
     for (const phone of connectedPhones) {
-      logger.info(`[ServerInit] Обрабатываем OrganizationPhone. ID: ${phone.id}, JID: ${phone.phoneJid}, Текущий статус: ${phone.status}, Org ID: ${phone.organizationId}`);
-      // Убедитесь, что phone.organizationId, phone.phoneJid, phone.id передаются правильно
-      await startWaSession(phone.organizationId, phone.phoneJid, phone.id);
-      logger.info(`[ServerInit] startWaSession вызвана для ${phone.phoneJid}.`);
+      logger.info(`[ServerInit] Обрабатываем OrganizationPhone. ID: ${phone.id}, JID: ${phone.phoneJid}, Тип: ${phone.connectionType}, Текущий статус: ${phone.status}, Org ID: ${phone.organizationId}`);
+      try {
+        // Убедитесь, что phone.organizationId, phone.phoneJid, phone.id передаются правильно
+        await startWaSession(phone.organizationId, phone.phoneJid, phone.id);
+        logger.info(`[ServerInit] startWaSession вызвана для ${phone.phoneJid}.`);
+      } catch (e: any) {
+        logger.error({ err: e }, `[ServerInit] Ошибка инициализации сессии для phoneId=${phone.id}, jid=${phone.phoneJid}`);
+        // продолжаем инициализацию остальных сессий
+      }
     }
     logger.info(`[ServerInit] Инициализация всех найденных сессий завершена.`);
   } catch (error: any) {
@@ -80,4 +87,16 @@ process.on('SIGTERM', async () => {
   await stopAllTelegramBots();
   logger.info('[ServerShutdown] Telegram боты остановлены');
   process.exit(0);
+});
+
+// Логи для неожиданных ошибок (например, таймауты внутри Baileys на init query).
+// В окружениях с strict unhandled-rejections это часто выглядит как падение процесса.
+process.on('unhandledRejection', (reason) => {
+  logger.error({ reason }, '[Process] unhandledRejection');
+});
+
+process.on('uncaughtException', (err) => {
+  logger.fatal({ err }, '[Process] uncaughtException');
+  // Лучше завершить процесс и дать оркестратору/pm2/docker перезапустить.
+  process.exit(1);
 });

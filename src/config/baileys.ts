@@ -31,6 +31,30 @@ import { notifyNewChat, notifyNewMessage, notifyChatsUpdated } from '../services
 
 const logger = pino({ level: 'info' });
 
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+// Таймауты по умолчанию можно переопределить через env,
+// чтобы избежать падений на медленных/нестабильных сетях (Timed Out в Baileys query).
+const BAILEYS_CONNECT_TIMEOUT_MS = envInt('BAILEYS_CONNECT_TIMEOUT_MS', 60_000);
+const BAILEYS_DEFAULT_QUERY_TIMEOUT_MS = envInt('BAILEYS_DEFAULT_QUERY_TIMEOUT_MS', 60_000);
+const BAILEYS_KEEP_ALIVE_INTERVAL_MS = envInt('BAILEYS_KEEP_ALIVE_INTERVAL_MS', 25_000);
+
+function safeAsyncListener<T extends any[]>(
+  eventName: string,
+  handler: (...args: T) => Promise<void> | void
+) {
+  return (...args: T) => {
+    Promise.resolve(handler(...args)).catch((err) => {
+      logger.error({ err }, `[Baileys] Unhandled error in listener: ${eventName}`);
+    });
+  };
+}
+
 // Глобальная Map для хранения активных экземпляров WASocket по organizationPhoneId
 const socks = new Map<number, WASocket>(); 
 
@@ -628,6 +652,9 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
     auth: state, // Используем состояние из useDBAuthState
     browser: ['Ubuntu', 'Chrome', '22.04.4'], // Устанавливаем информацию о браузере
     logger: logger, // Используем ваш pino logger
+    connectTimeoutMs: BAILEYS_CONNECT_TIMEOUT_MS,
+    defaultQueryTimeoutMs: BAILEYS_DEFAULT_QUERY_TIMEOUT_MS,
+    keepAliveIntervalMs: BAILEYS_KEEP_ALIVE_INTERVAL_MS,
     // ИСПРАВЛЕНИЕ: Отключаем автоматическую синхронизацию app state для предотвращения ошибок дешифрования
     syncFullHistory: false, // Отключаем полную синхронизацию истории
     shouldSyncHistoryMessage: () => false, // Отключаем синхронизацию сообщений
@@ -668,7 +695,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
   socks.set(organizationPhoneId, currentSock);
 
   // Обработчик событий обновления соединения
-  currentSock.ev.on('connection.update', async (update: Partial<ConnectionState>) => { 
+  currentSock.ev.on('connection.update', safeAsyncListener('connection.update(main)', async (update: Partial<ConnectionState>) => { 
     const { connection, lastDisconnect, qr } = update;
 
     // logger.info(`[ConnectionUpdate] Status for ${phoneJid}: connection=${connection}, QR_present=${!!qr}`);
@@ -712,7 +739,9 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
         await new Promise(resolve => setTimeout(resolve, 3000));
         // logger.info(`[Connection] Попытка переподключения для ${phoneJid}...`);
         // Рекурсивно вызываем startBaileys для создания новой сессии
-        startBaileys(organizationId, organizationPhoneId, phoneJid);
+        void startBaileys(organizationId, organizationPhoneId, phoneJid).catch((err) => {
+          logger.error({ err }, `[Connection] Ошибка при переподключении Baileys для ${phoneJid}`);
+        });
       } else {
           // logger.error(`[Connection] Подключение для ${phoneJid} не будет переподключено (Logged out). Очистка данных сессии...`);
           // --- ДОБАВЛЕНО: Детальный лог ошибки ---
@@ -769,13 +798,13 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
         });
       }
     }
-  });
+  }));
 
   // Обработчик обновления учетных данных
   currentSock.ev.on('creds.update', saveCreds); // Используем saveCreds для сохранения
 
   // ИСПРАВЛЕНИЕ: Добавляем обработчик ошибок синхронизации app state и сессий
-  currentSock.ev.on('connection.update', async (update) => {
+  currentSock.ev.on('connection.update', safeAsyncListener('connection.update(recovery)', async (update) => {
     // Перехватываем ошибки синхронизации app state
     if (update.lastDisconnect?.error) {
       const error = update.lastDisconnect.error as any;
@@ -812,7 +841,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
         }
       }
     }
-  });
+  }));
 
   // Совместимость с v7: обработчик обновлений LID маппинга (в 6.7.x событие не генерируется)
   try {
@@ -826,7 +855,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
   }
 
   // Обработчик получения новых сообщений
-  currentSock.ev.on('messages.upsert', async ({ messages, type }) => { 
+  currentSock.ev.on('messages.upsert', safeAsyncListener('messages.upsert', async ({ messages, type }) => { 
     if (type === 'notify') {
       for (const msg of messages) {
         try {
@@ -1174,7 +1203,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
         }
       }
     }
-  });
+  }));
 
   return currentSock; // Возвращаем созданный сокет
 }
