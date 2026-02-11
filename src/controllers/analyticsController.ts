@@ -393,3 +393,301 @@ export const getChatAnalytics = async (req: Request, res: Response) => {
     res.status(500).json({ error: 'Ошибка получения аналитики по чатам', details: error.message });
   }
 };
+
+/**
+ * Аналитика по операторам (summary) для организации.
+ * GET /api/analytics/operators?from=2026-02-01&to=2026-02-11&channel=whatsapp|telegram&organizationPhoneId=123&operatorId=45&idleMinutes=120
+ */
+export const getOperatorAnalytics = async (req: Request, res: Response) => {
+  const organizationId = res.locals.organizationId as number | undefined;
+  if (!organizationId) {
+    return res.status(401).json({ error: 'Несанкционированный доступ' });
+  }
+
+  const now = new Date();
+  const from = parseDateParam(req.query.from) ?? new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const to = parseDateParam(req.query.to) ?? now;
+
+  if (from > to) {
+    return res.status(400).json({ error: 'Некорректный диапазон дат: from > to' });
+  }
+
+  const channel = typeof req.query.channel === 'string' ? req.query.channel : null;
+  const organizationPhoneId = parseIntParam(req.query.organizationPhoneId);
+  const operatorId = parseIntParam(req.query.operatorId);
+
+  const idleMinutesRaw = parseIntParam(req.query.idleMinutes);
+  const idleMinutes = clampInt(idleMinutesRaw ?? 120, 5, 24 * 60);
+  const idleSeconds = idleMinutes * 60;
+  const windowStart = new Date(from.getTime() - idleSeconds * 1000);
+
+  try {
+    const usersPromise = prisma.user.findMany({
+      where: {
+        organizationId,
+        ...(operatorId !== null ? { id: operatorId } : {}),
+      },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+      },
+      orderBy: { id: 'asc' },
+    });
+
+    const chatWhere: any = {
+      organizationId,
+    };
+    if (channel) chatWhere.channel = channel;
+    if (organizationPhoneId) chatWhere.organizationPhoneId = organizationPhoneId;
+
+    // Исходящие сообщения по операторам (берём только те, где senderUserId проставлен)
+    const outboundByOperatorPromise = prisma.message.groupBy({
+      by: ['senderUserId'],
+      where: {
+        organizationId,
+        timestamp: { gte: from, lte: to },
+        senderUserId: { not: null },
+        fromMe: true,
+        chat: chatWhere,
+      },
+      _count: { _all: true },
+    });
+
+    // touchedChats: сколько уникальных чатов, где оператор отправлял сообщение в период
+    const touchedChatsSql = Prisma.sql`
+      SELECT
+        m."senderUserId" AS user_id,
+        COUNT(DISTINCT m."chatId")::int AS touched_chats
+      FROM "Message" m
+      JOIN "Chat" c ON c."id" = m."chatId"
+      WHERE m."organizationId" = ${organizationId}
+        AND m."timestamp" >= ${from}
+        AND m."timestamp" <= ${to}
+        AND m."senderUserId" IS NOT NULL
+        AND c."organizationId" = ${organizationId}
+        ${channel ? Prisma.sql`AND c."channel" = ${channel}` : Prisma.empty}
+        ${organizationPhoneId ? Prisma.sql`AND c."organizationPhoneId" = ${organizationPhoneId}` : Prisma.empty}
+        ${operatorId !== null ? Prisma.sql`AND m."senderUserId" = ${operatorId}` : Prisma.empty}
+      GROUP BY m."senderUserId";
+    `;
+
+    const touchedChatsPromise = prisma.$queryRaw<any[]>(touchedChatsSql);
+
+    // assignedActiveChats: сколько уникальных активных чатов в периоде, назначенных на оператора
+    const assignedActiveChatsSql = Prisma.sql`
+      SELECT
+        c."assignedUserId" AS user_id,
+        COUNT(DISTINCT m."chatId")::int AS active_assigned_chats
+      FROM "Message" m
+      JOIN "Chat" c ON c."id" = m."chatId"
+      WHERE m."organizationId" = ${organizationId}
+        AND m."timestamp" >= ${from}
+        AND m."timestamp" <= ${to}
+        AND c."organizationId" = ${organizationId}
+        AND c."assignedUserId" IS NOT NULL
+        ${channel ? Prisma.sql`AND c."channel" = ${channel}` : Prisma.empty}
+        ${organizationPhoneId ? Prisma.sql`AND c."organizationPhoneId" = ${organizationPhoneId}` : Prisma.empty}
+        ${operatorId !== null ? Prisma.sql`AND c."assignedUserId" = ${operatorId}` : Prisma.empty}
+      GROUP BY c."assignedUserId";
+    `;
+
+    const assignedActiveChatsPromise = prisma.$queryRaw<any[]>(assignedActiveChatsSql);
+
+    // SLA по «тикетам» (сессиям): считаем первую реакцию и атрибутируем её оператору, который ответил первым
+    const ticketsByOperatorSql = Prisma.sql`
+      WITH msgs AS (
+        SELECT m."chatId" AS chat_id,
+               m."timestamp" AS ts,
+               m."fromMe" AS from_me,
+               m."senderUserId" AS sender_user_id
+        FROM "Message" m
+        JOIN "Chat" c ON c."id" = m."chatId"
+        WHERE m."organizationId" = ${organizationId}
+          AND m."timestamp" >= ${windowStart}
+          AND m."timestamp" <= ${to}
+          AND c."organizationId" = ${organizationId}
+          ${channel ? Prisma.sql`AND c."channel" = ${channel}` : Prisma.empty}
+          ${organizationPhoneId ? Prisma.sql`AND c."organizationPhoneId" = ${organizationPhoneId}` : Prisma.empty}
+      ),
+      ordered AS (
+        SELECT *,
+               LAG(ts) OVER (PARTITION BY chat_id ORDER BY ts) AS prev_ts
+        FROM msgs
+      ),
+      marked AS (
+        SELECT *,
+               CASE
+                 WHEN prev_ts IS NULL THEN 1
+                 WHEN EXTRACT(EPOCH FROM (ts - prev_ts)) > ${idleSeconds} THEN 1
+                 ELSE 0
+               END AS is_new
+        FROM ordered
+      ),
+      sess AS (
+        SELECT *,
+               SUM(is_new) OVER (PARTITION BY chat_id ORDER BY ts) AS session_no
+        FROM marked
+      ),
+      bounds AS (
+        SELECT chat_id,
+               session_no,
+               MIN(ts) AS started_at,
+               MAX(ts) AS last_at,
+               MIN(ts) FILTER (WHERE from_me = false) AS first_inbound_at
+        FROM sess
+        GROUP BY chat_id, session_no
+      ),
+      replies AS (
+        SELECT b.chat_id,
+               b.session_no,
+               r.first_reply_at,
+               r.first_reply_user_id
+        FROM bounds b
+        LEFT JOIN LATERAL (
+          SELECT s2.ts AS first_reply_at,
+                 s2.sender_user_id AS first_reply_user_id
+          FROM sess s2
+          WHERE s2.chat_id = b.chat_id
+            AND s2.session_no = b.session_no
+            AND s2.sender_user_id IS NOT NULL
+            AND b.first_inbound_at IS NOT NULL
+            AND s2.ts >= b.first_inbound_at
+            AND s2.ts <= ${to}
+          ORDER BY s2.ts ASC
+          LIMIT 1
+        ) r ON TRUE
+      ),
+      joined AS (
+        SELECT b.chat_id,
+               b.session_no,
+               b.started_at,
+               b.last_at,
+               b.first_inbound_at,
+               rp.first_reply_at,
+               rp.first_reply_user_id
+        FROM bounds b
+        JOIN replies rp ON rp.chat_id = b.chat_id AND rp.session_no = b.session_no
+      )
+      SELECT
+        first_reply_user_id AS user_id,
+        COUNT(*) FILTER (
+          WHERE started_at >= ${from} AND started_at <= ${to}
+            AND first_inbound_at IS NOT NULL
+            AND first_reply_at IS NOT NULL
+            AND first_reply_user_id IS NOT NULL
+        )::int AS tickets_answered,
+        AVG(EXTRACT(EPOCH FROM (first_reply_at - first_inbound_at))) FILTER (
+          WHERE started_at >= ${from} AND started_at <= ${to}
+            AND first_inbound_at IS NOT NULL
+            AND first_reply_at IS NOT NULL
+            AND first_reply_user_id IS NOT NULL
+        ) AS avg_first_response_seconds,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (first_reply_at - first_inbound_at))) FILTER (
+          WHERE started_at >= ${from} AND started_at <= ${to}
+            AND first_inbound_at IS NOT NULL
+            AND first_reply_at IS NOT NULL
+            AND first_reply_user_id IS NOT NULL
+        ) AS p50_first_response_seconds
+      FROM joined
+      ${operatorId !== null ? Prisma.sql`WHERE first_reply_user_id = ${operatorId}` : Prisma.empty}
+      GROUP BY first_reply_user_id;
+    `;
+
+    const ticketsByOperatorPromise = prisma.$queryRaw<any[]>(ticketsByOperatorSql);
+
+    const [users, outboundByOperatorRows, touchedChatsRows, assignedActiveChatsRows, ticketsByOperatorRows] =
+      await Promise.all([
+        usersPromise,
+        outboundByOperatorPromise,
+        touchedChatsPromise,
+        assignedActiveChatsPromise,
+        ticketsByOperatorPromise,
+      ]);
+
+    const outboundByUserId = new Map<number, number>();
+    for (const row of outboundByOperatorRows) {
+      const userId = row.senderUserId as number | null;
+      if (userId === null) continue;
+      outboundByUserId.set(userId, Number((row as any)._count?._all ?? 0));
+    }
+
+    const touchedChatsByUserId = new Map<number, number>();
+    for (const row of touchedChatsRows ?? []) {
+      if (row.user_id === null || row.user_id === undefined) continue;
+      touchedChatsByUserId.set(Number(row.user_id), Number(row.touched_chats ?? 0));
+    }
+
+    const assignedActiveChatsByUserId = new Map<number, number>();
+    for (const row of assignedActiveChatsRows ?? []) {
+      if (row.user_id === null || row.user_id === undefined) continue;
+      assignedActiveChatsByUserId.set(Number(row.user_id), Number(row.active_assigned_chats ?? 0));
+    }
+
+    const ticketsByUserId = new Map<
+      number,
+      { ticketsAnswered: number; avgFirstResponseSeconds: number | null; p50FirstResponseSeconds: number | null }
+    >();
+    for (const row of ticketsByOperatorRows ?? []) {
+      if (row.user_id === null || row.user_id === undefined) continue;
+      ticketsByUserId.set(Number(row.user_id), {
+        ticketsAnswered: Number(row.tickets_answered ?? 0),
+        avgFirstResponseSeconds:
+          row.avg_first_response_seconds === null || row.avg_first_response_seconds === undefined
+            ? null
+            : Number(row.avg_first_response_seconds),
+        p50FirstResponseSeconds:
+          row.p50_first_response_seconds === null || row.p50_first_response_seconds === undefined
+            ? null
+            : Number(row.p50_first_response_seconds),
+      });
+    }
+
+    const operators = (users ?? []).map((u) => {
+      const ticketStats = ticketsByUserId.get(u.id) ?? {
+        ticketsAnswered: 0,
+        avgFirstResponseSeconds: null,
+        p50FirstResponseSeconds: null,
+      };
+
+      return {
+        id: u.id,
+        email: u.email,
+        name: u.name ?? null,
+        role: u.role,
+        messages: {
+          outbound: outboundByUserId.get(u.id) ?? 0,
+        },
+        chats: {
+          touched: touchedChatsByUserId.get(u.id) ?? 0,
+          assignedActive: assignedActiveChatsByUserId.get(u.id) ?? 0,
+        },
+        tickets: {
+          idleMinutes,
+          answered: ticketStats.ticketsAnswered,
+          firstResponseSeconds: {
+            avg: ticketStats.avgFirstResponseSeconds,
+            p50: ticketStats.p50FirstResponseSeconds,
+          },
+        },
+      };
+    });
+
+    res.json({
+      range: {
+        from: from.toISOString(),
+        to: to.toISOString(),
+      },
+      filters: {
+        channel: channel ?? null,
+        organizationPhoneId: organizationPhoneId ?? null,
+        operatorId: operatorId ?? null,
+      },
+      operators,
+    });
+  } catch (error: any) {
+    logger.error({ err: error }, '[getOperatorAnalytics] Ошибка получения аналитики по операторам');
+    res.status(500).json({ error: 'Ошибка получения аналитики по операторам', details: error.message });
+  }
+};

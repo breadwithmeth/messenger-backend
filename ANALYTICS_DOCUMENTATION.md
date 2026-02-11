@@ -236,6 +236,82 @@ SLA по чатам (классический view):
 
 ---
 
+## 2) Аналитика по операторам (summary)
+
+**Endpoint**
+
+`GET /api/analytics/operators`
+
+**Назначение**
+
+Возвращает метрики по операторам за период (сообщения, активные/затронутые чаты, SLA первого ответа по «тикетам»).
+
+### Query параметры
+
+Все параметры опциональные.
+
+- `from` — начало периода (ISO-строка даты)
+- `to` — конец периода (ISO-строка даты)
+- `channel` — `whatsapp` или `telegram`
+- `organizationPhoneId` — фильтр по WhatsApp-аккаунту организации (число)
+- `operatorId` — вернуть данные только по одному оператору (число)
+- `idleMinutes` — порог для «тикетизации» (как в `/api/analytics/chats`), по умолчанию `120`
+
+### Формат ответа
+
+```json
+{
+  "range": {
+    "from": "2026-02-01T00:00:00.000Z",
+    "to": "2026-02-11T10:00:00.000Z"
+  },
+  "filters": {
+    "channel": "whatsapp",
+    "organizationPhoneId": 123,
+    "operatorId": null
+  },
+  "operators": [
+    {
+      "id": 45,
+      "email": "operator@company.com",
+      "name": "Иван",
+      "role": "operator",
+      "messages": {
+        "outbound": 190
+      },
+      "chats": {
+        "touched": 60,
+        "assignedActive": 40
+      },
+      "tickets": {
+        "idleMinutes": 120,
+        "answered": 35,
+        "firstResponseSeconds": {
+          "avg": 110.2,
+          "p50": 75
+        }
+      }
+    }
+  ]
+}
+```
+
+**Пояснения к метрикам**
+
+- `messages.outbound` — количество исходящих сообщений, где `senderUserId = operator.id`.
+- `chats.touched` — количество уникальных чатов, где оператор отправлял сообщения в период.
+- `chats.assignedActive` — количество уникальных чатов, назначенных на оператора (`Chat.assignedUserId`) и имевших сообщения в период.
+- `tickets.answered` — количество «тикетов»-сессий, где оператор был первым ответившим после первого входящего (в пределах сессии).
+- `tickets.firstResponseSeconds` — SLA первого ответа в секундах по таким тикетам.
+
+### Примеры запросов
+
+- `GET /api/analytics/operators`
+- `GET /api/analytics/operators?from=2026-02-01&to=2026-02-11&channel=whatsapp`
+- `GET /api/analytics/operators?operatorId=45&from=2026-02-01&to=2026-02-11`
+
+---
+
 ## Roadmap (если потребуется)
 
 Если нужно отображать «тикеты» как список элементов (для UI), можно добавить отдельный endpoint с пагинацией:
