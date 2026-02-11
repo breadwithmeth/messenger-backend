@@ -19,6 +19,11 @@ function parseIntParam(raw: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function clampInt(n: number, min: number, max: number): number {
+  if (!Number.isFinite(n)) return min;
+  return Math.min(max, Math.max(min, Math.trunc(n)));
+}
+
 /**
  * Аналитика по чатам (summary) для организации.
  * GET /api/analytics/chats?from=2026-02-01&to=2026-02-11&channel=whatsapp|telegram&organizationPhoneId=123&assignedUserId=45
@@ -40,6 +45,10 @@ export const getChatAnalytics = async (req: Request, res: Response) => {
   const channel = typeof req.query.channel === 'string' ? req.query.channel : null;
   const organizationPhoneId = parseIntParam(req.query.organizationPhoneId);
   const assignedUserId = parseIntParam(req.query.assignedUserId);
+  const idleMinutesRaw = parseIntParam(req.query.idleMinutes);
+  const idleMinutes = clampInt(idleMinutesRaw ?? 120, 5, 24 * 60);
+  const idleSeconds = idleMinutes * 60;
+  const windowStart = new Date(from.getTime() - idleSeconds * 1000);
 
   try {
     // Базовые where для Chat
@@ -180,6 +189,110 @@ export const getChatAnalytics = async (req: Request, res: Response) => {
     const responseTimePromise = prisma.$queryRaw<any[]>(responseTimeSql);
     const resolutionTimePromise = prisma.$queryRaw<any[]>(resolutionTimeSql);
 
+    // 4) Тикетизация: один chat => несколько "тикетов", если пауза между любыми сообщениями > idleMinutes.
+    // Считаем тикет-сессию по Message timeline в рамках chatId.
+    const ticketsSql = Prisma.sql`
+      WITH msgs AS (
+        SELECT m."chatId" AS chat_id,
+               m."timestamp" AS ts,
+               m."fromMe" AS from_me,
+               m."senderUserId" AS sender_user_id
+        FROM "Message" m
+        JOIN "Chat" c ON c."id" = m."chatId"
+        WHERE m."organizationId" = ${organizationId}
+          AND m."timestamp" >= ${windowStart}
+          AND m."timestamp" <= ${to}
+          AND c."organizationId" = ${organizationId}
+          ${Prisma.join(extraChatFilters, ' ')}
+      ),
+      ordered AS (
+        SELECT *,
+               LAG(ts) OVER (PARTITION BY chat_id ORDER BY ts) AS prev_ts
+        FROM msgs
+      ),
+      marked AS (
+        SELECT *,
+               CASE
+                 WHEN prev_ts IS NULL THEN 1
+                 WHEN EXTRACT(EPOCH FROM (ts - prev_ts)) > ${idleSeconds} THEN 1
+                 ELSE 0
+               END AS is_new
+        FROM ordered
+      ),
+      sess AS (
+        SELECT *,
+               SUM(is_new) OVER (PARTITION BY chat_id ORDER BY ts) AS session_no
+        FROM marked
+      ),
+      bounds AS (
+        SELECT chat_id,
+               session_no,
+               MIN(ts) AS started_at,
+               MAX(ts) AS last_at,
+               MIN(ts) FILTER (WHERE from_me = false) AS first_inbound_at
+        FROM sess
+        GROUP BY chat_id, session_no
+      ),
+      activity AS (
+        SELECT chat_id,
+               session_no,
+               BOOL_OR(ts >= ${from} AND ts <= ${to}) AS has_in_period
+        FROM sess
+        GROUP BY chat_id, session_no
+      ),
+      replies AS (
+        SELECT b.chat_id,
+               b.session_no,
+               (
+                 SELECT MIN(s2.ts)
+                 FROM sess s2
+                 WHERE s2.chat_id = b.chat_id
+                   AND s2.session_no = b.session_no
+                   AND s2.sender_user_id IS NOT NULL
+                   AND b.first_inbound_at IS NOT NULL
+                   AND s2.ts >= b.first_inbound_at
+                   AND s2.ts <= ${to}
+               ) AS first_reply_at
+        FROM bounds b
+      ),
+      joined AS (
+        SELECT b.chat_id,
+               b.session_no,
+               b.started_at,
+               b.last_at,
+               b.first_inbound_at,
+               a.has_in_period,
+               r.first_reply_at
+        FROM bounds b
+        JOIN activity a ON a.chat_id = b.chat_id AND a.session_no = b.session_no
+        JOIN replies r ON r.chat_id = b.chat_id AND r.session_no = b.session_no
+      )
+      SELECT
+        COUNT(*) FILTER (WHERE started_at >= ${from} AND started_at <= ${to}) AS tickets_started,
+        COUNT(*) FILTER (WHERE has_in_period) AS tickets_active,
+        COUNT(*) FILTER (WHERE has_in_period AND EXTRACT(EPOCH FROM (${to} - last_at)) <= ${idleSeconds}) AS tickets_open_at_end,
+        COUNT(*) FILTER (WHERE has_in_period AND EXTRACT(EPOCH FROM (${to} - last_at)) > ${idleSeconds}) AS tickets_closed_by_idle_at_end,
+        COUNT(*) FILTER (WHERE started_at >= ${from} AND started_at <= ${to} AND first_inbound_at IS NOT NULL) AS tickets_with_inbound,
+        COUNT(*) FILTER (
+          WHERE started_at >= ${from} AND started_at <= ${to}
+            AND first_inbound_at IS NOT NULL
+            AND first_reply_at IS NOT NULL
+        ) AS tickets_with_response,
+        AVG(EXTRACT(EPOCH FROM (first_reply_at - first_inbound_at))) FILTER (
+          WHERE started_at >= ${from} AND started_at <= ${to}
+            AND first_inbound_at IS NOT NULL
+            AND first_reply_at IS NOT NULL
+        ) AS avg_first_response_seconds,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (first_reply_at - first_inbound_at))) FILTER (
+          WHERE started_at >= ${from} AND started_at <= ${to}
+            AND first_inbound_at IS NOT NULL
+            AND first_reply_at IS NOT NULL
+        ) AS p50_first_response_seconds
+      FROM joined;
+    `;
+
+    const ticketsPromise = prisma.$queryRaw<any[]>(ticketsSql);
+
     const [
       chatsCreated,
       activeChatsRows,
@@ -190,6 +303,7 @@ export const getChatAnalytics = async (req: Request, res: Response) => {
       outboundMessages,
       responseTimeRows,
       resolutionTimeRows,
+      ticketsRows,
     ] = await Promise.all([
       chatsCreatedPromise,
       activeChatsPromise,
@@ -200,6 +314,7 @@ export const getChatAnalytics = async (req: Request, res: Response) => {
       outboundMessagesPromise,
       responseTimePromise,
       resolutionTimePromise,
+      ticketsPromise,
     ]);
 
     const statusStats: Record<string, number> = {};
@@ -214,6 +329,7 @@ export const getChatAnalytics = async (req: Request, res: Response) => {
 
     const responseTime = responseTimeRows?.[0] ?? {};
     const resolutionTime = resolutionTimeRows?.[0] ?? {};
+    const tickets = ticketsRows?.[0] ?? {};
 
     const activeChats = Array.isArray(activeChatsRows) ? activeChatsRows.length : 0;
 
@@ -232,6 +348,25 @@ export const getChatAnalytics = async (req: Request, res: Response) => {
         active: activeChats,
         byStatus: statusStats,
         byChannel: channelStats,
+      },
+      tickets: {
+        idleMinutes,
+        started: Number(tickets.tickets_started ?? 0),
+        active: Number(tickets.tickets_active ?? 0),
+        openAtEnd: Number(tickets.tickets_open_at_end ?? 0),
+        closedByIdleAtEnd: Number(tickets.tickets_closed_by_idle_at_end ?? 0),
+        withInbound: Number(tickets.tickets_with_inbound ?? 0),
+        withResponse: Number(tickets.tickets_with_response ?? 0),
+        firstResponseSeconds: {
+          avg:
+            tickets.avg_first_response_seconds === null || tickets.avg_first_response_seconds === undefined
+              ? null
+              : Number(tickets.avg_first_response_seconds),
+          p50:
+            tickets.p50_first_response_seconds === null || tickets.p50_first_response_seconds === undefined
+              ? null
+              : Number(tickets.p50_first_response_seconds),
+        },
       },
       messages: {
         total: totalMessages,
