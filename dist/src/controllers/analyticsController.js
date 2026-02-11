@@ -126,6 +126,7 @@ const getChatAnalytics = (req, res) => __awaiter(void 0, void 0, void 0, functio
             extraChatFilters.push(client_1.Prisma.sql `AND c."organizationPhoneId" = ${organizationPhoneId}`);
         if (assignedUserId !== null)
             extraChatFilters.push(client_1.Prisma.sql `AND c."assignedUserId" = ${assignedUserId}`);
+        const extraChatFiltersSql = extraChatFilters.length ? client_1.Prisma.join(extraChatFilters, ' ') : client_1.Prisma.empty;
         const responseTimeSql = client_1.Prisma.sql `
       WITH first_inbound AS (
         SELECT m."chatId" AS chat_id, MIN(m."timestamp") AS first_inbound
@@ -136,7 +137,7 @@ const getChatAnalytics = (req, res) => __awaiter(void 0, void 0, void 0, functio
           AND m."timestamp" >= ${from}
           AND m."timestamp" <= ${to}
           AND c."organizationId" = ${organizationId}
-          ${client_1.Prisma.join(extraChatFilters, ' ')}
+          ${extraChatFiltersSql}
         GROUP BY m."chatId"
       ),
       first_response AS (
@@ -168,7 +169,7 @@ const getChatAnalytics = (req, res) => __awaiter(void 0, void 0, void 0, functio
         WHERE m."organizationId" = ${organizationId}
           AND m."fromMe" = false
           AND c."organizationId" = ${organizationId}
-          ${client_1.Prisma.join(extraChatFilters, ' ')}
+          ${extraChatFiltersSql}
         GROUP BY m."chatId"
       )
       SELECT
@@ -198,7 +199,7 @@ const getChatAnalytics = (req, res) => __awaiter(void 0, void 0, void 0, functio
           AND m."timestamp" >= ${windowStart}
           AND m."timestamp" <= ${to}
           AND c."organizationId" = ${organizationId}
-          ${client_1.Prisma.join(extraChatFilters, ' ')}
+          ${extraChatFiltersSql}
       ),
       ordered AS (
         SELECT *,
