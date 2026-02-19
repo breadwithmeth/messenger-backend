@@ -312,6 +312,84 @@ SLA по чатам (классический view):
 
 ---
 
+## 3) Список «тикетов» по активности (ticket sessions)
+
+**Endpoint**
+
+`GET /api/analytics/tickets`
+
+**Назначение**
+
+Формирует список «тикетов»-сессий на основе активности сообщений в чатах:
+- берётся таймлайн сообщений по `chatId`
+- если gap между соседними сообщениями > `idleMinutes` — начинается новая сессия (`sessionNo`)
+- в выдачу попадают сессии, у которых были сообщения в периоде (`from..to`)
+
+### Query параметры
+
+Все параметры опциональные.
+
+- `from`, `to` — период (как в `/api/analytics/chats`)
+- `channel` — `whatsapp` или `telegram`
+- `organizationPhoneId` — фильтр по WhatsApp-аккаунту организации
+- `assignedUserId` — фильтр по назначенному оператору (`Chat.assignedUserId`)
+- `idleMinutes` — порог неактивности (по умолчанию `120`)
+- `state` — фильтр по состоянию на момент `to`: `open` или `closed`
+
+### Пагинация
+
+- `limit` — количество элементов (по умолчанию `50`, максимум `200`)
+- `offset` — смещение (по умолчанию `0`)
+
+### Формат ответа
+
+```json
+{
+  "range": {
+    "from": "2026-02-01T00:00:00.000Z",
+    "to": "2026-02-11T10:00:00.000Z"
+  },
+  "filters": {
+    "channel": "whatsapp",
+    "organizationPhoneId": 123,
+    "assignedUserId": 45,
+    "state": "open"
+  },
+  "tickets": [
+    {
+      "id": "1001:3",
+      "chatId": 1001,
+      "sessionNo": 3,
+      "startedAt": "2026-02-10T12:00:00.000Z",
+      "lastAt": "2026-02-10T12:45:00.000Z",
+      "isOpenAtEnd": true,
+      "channel": "whatsapp",
+      "organizationPhoneId": 123,
+      "assignedUserId": 45,
+      "chatStatus": "open",
+      "firstInboundAt": "2026-02-10T12:00:00.000Z",
+      "firstReplyAt": "2026-02-10T12:02:00.000Z",
+      "firstReplyUserId": 45,
+      "firstResponseSeconds": 120
+    }
+  ],
+  "pagination": {
+    "total": 250,
+    "limit": 50,
+    "offset": 0
+  }
+}
+```
+
+### Примеры запросов
+
+- `GET /api/analytics/tickets`
+- `GET /api/analytics/tickets?from=2026-02-01&to=2026-02-11&idleMinutes=120`
+- `GET /api/analytics/tickets?channel=telegram&from=2026-02-01&to=2026-02-11&limit=100&offset=0`
+- `GET /api/analytics/tickets?state=open&from=2026-02-01&to=2026-02-11`
+
+---
+
 ## Roadmap (если потребуется)
 
 Если нужно отображать «тикеты» как список элементов (для UI), можно добавить отдельный endpoint с пагинацией:

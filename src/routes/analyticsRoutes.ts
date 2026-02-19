@@ -2,7 +2,7 @@
 
 import { Router } from 'express';
 import { authMiddleware } from '../middlewares/authMiddleware';
-import { getChatAnalytics, getOperatorAnalytics } from '../controllers/analyticsController';
+import { getChatAnalytics, getOperatorAnalytics, listAnalyticsTickets } from '../controllers/analyticsController';
 
 const router = Router();
 
@@ -13,5 +13,8 @@ router.get('/chats', getChatAnalytics);
 
 // Аналитика по операторам (summary)
 router.get('/operators', getOperatorAnalytics);
+
+// Список «тикетов» (сессий) по активности сообщений
+router.get('/tickets', listAnalyticsTickets);
 
 export default router;

@@ -405,7 +405,7 @@ export const setChatPriority = async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Некорректный chatId' });
   }
 
-  if (!['low', 'normal', 'high', 'urgent'].includes(priority)) {
+  if (!['low', 'normal', 'high', 'urgent', 'medium'].includes(priority)) {
     logger.warn(`[setChatPriority] Некорректный приоритет: "${priority}"`);
     return res.status(400).json({ error: 'Некорректный приоритет. Допустимые значения: low, normal, high, urgent' });
   }

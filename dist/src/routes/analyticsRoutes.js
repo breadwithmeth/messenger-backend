@@ -10,5 +10,7 @@ router.use(authMiddleware_1.authMiddleware);
 router.get('/chats', analyticsController_1.getChatAnalytics);
 // Аналитика по операторам (summary)
 router.get('/operators', analyticsController_1.getOperatorAnalytics);
+// Список «тикетов» (сессий) по активности сообщений
+router.get('/tickets', analyticsController_1.listAnalyticsTickets);
 exports.default = router;
 //# sourceMappingURL=analyticsRoutes.js.map

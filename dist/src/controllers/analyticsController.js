@@ -13,7 +13,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getOperatorAnalytics = exports.getChatAnalytics = void 0;
+exports.listAnalyticsTickets = exports.getOperatorAnalytics = exports.getChatAnalytics = void 0;
 const authStorage_1 = require("../config/authStorage");
 const client_1 = require("@prisma/client");
 const pino_1 = __importDefault(require("pino"));
@@ -646,4 +646,213 @@ const getOperatorAnalytics = (req, res) => __awaiter(void 0, void 0, void 0, fun
     }
 });
 exports.getOperatorAnalytics = getOperatorAnalytics;
+/**
+ * Список «тикетов» (сессий) по активности сообщений.
+ * GET /api/analytics/tickets?from=...&to=...&channel=...&organizationPhoneId=...&assignedUserId=...&idleMinutes=120&limit=50&offset=0&state=open|closed
+ */
+const listAnalyticsTickets = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b, _c, _d, _e, _f;
+    const organizationId = res.locals.organizationId;
+    if (!organizationId) {
+        return res.status(401).json({ error: 'Несанкционированный доступ' });
+    }
+    const now = new Date();
+    const from = (_a = parseDateParam(req.query.from)) !== null && _a !== void 0 ? _a : new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const to = (_b = parseDateParam(req.query.to)) !== null && _b !== void 0 ? _b : now;
+    if (from > to) {
+        return res.status(400).json({ error: 'Некорректный диапазон дат: from > to' });
+    }
+    const channel = typeof req.query.channel === 'string' ? req.query.channel : null;
+    const organizationPhoneId = parseIntParam(req.query.organizationPhoneId);
+    const assignedUserId = parseIntParam(req.query.assignedUserId);
+    const idleMinutesRaw = parseIntParam(req.query.idleMinutes);
+    const idleMinutes = clampInt(idleMinutesRaw !== null && idleMinutesRaw !== void 0 ? idleMinutesRaw : 120, 5, 24 * 60);
+    const idleSeconds = idleMinutes * 60;
+    const windowStart = new Date(from.getTime() - idleSeconds * 1000);
+    const limitRaw = (_c = parseIntParam(req.query.limit)) !== null && _c !== void 0 ? _c : 50;
+    const offsetRaw = (_d = parseIntParam(req.query.offset)) !== null && _d !== void 0 ? _d : 0;
+    const limit = clampInt(limitRaw, 1, 200);
+    const offset = Math.max(0, Math.trunc(offsetRaw));
+    const state = typeof req.query.state === 'string' ? req.query.state : null;
+    const stateNormalized = state === 'open' || state === 'closed' ? state : null;
+    try {
+        const chatFilters = [];
+        if (channel)
+            chatFilters.push(client_1.Prisma.sql `AND c."channel" = ${channel}`);
+        if (organizationPhoneId)
+            chatFilters.push(client_1.Prisma.sql `AND c."organizationPhoneId" = ${organizationPhoneId}`);
+        if (assignedUserId !== null)
+            chatFilters.push(client_1.Prisma.sql `AND c."assignedUserId" = ${assignedUserId}`);
+        const chatFiltersSql = chatFilters.length ? client_1.Prisma.join(chatFilters, ' ') : client_1.Prisma.empty;
+        const stateFilterSql = stateNormalized === 'open'
+            ? client_1.Prisma.sql `AND EXTRACT(EPOCH FROM (${to} - j.last_at)) <= ${idleSeconds}`
+            : stateNormalized === 'closed'
+                ? client_1.Prisma.sql `AND EXTRACT(EPOCH FROM (${to} - j.last_at)) > ${idleSeconds}`
+                : client_1.Prisma.empty;
+        const baseCteSql = client_1.Prisma.sql `
+      WITH msgs AS (
+        SELECT m."chatId" AS chat_id,
+               m."timestamp" AS ts,
+               m."fromMe" AS from_me,
+               m."senderUserId" AS sender_user_id
+        FROM "Message" m
+        JOIN "Chat" c ON c."id" = m."chatId"
+        WHERE m."organizationId" = ${organizationId}
+          AND m."timestamp" >= ${windowStart}
+          AND m."timestamp" <= ${to}
+          AND c."organizationId" = ${organizationId}
+          ${chatFiltersSql}
+      ),
+      ordered AS (
+        SELECT *,
+               LAG(ts) OVER (PARTITION BY chat_id ORDER BY ts) AS prev_ts
+        FROM msgs
+      ),
+      marked AS (
+        SELECT *,
+               CASE
+                 WHEN prev_ts IS NULL THEN 1
+                 WHEN EXTRACT(EPOCH FROM (ts - prev_ts)) > ${idleSeconds} THEN 1
+                 ELSE 0
+               END AS is_new
+        FROM ordered
+      ),
+      sess AS (
+        SELECT *,
+               SUM(is_new) OVER (PARTITION BY chat_id ORDER BY ts) AS session_no
+        FROM marked
+      ),
+      bounds AS (
+        SELECT chat_id,
+               session_no,
+               MIN(ts) AS started_at,
+               MAX(ts) AS last_at,
+               MIN(ts) FILTER (WHERE from_me = false) AS first_inbound_at
+        FROM sess
+        GROUP BY chat_id, session_no
+      ),
+      activity AS (
+        SELECT chat_id,
+               session_no,
+               BOOL_OR(ts >= ${from} AND ts <= ${to}) AS has_in_period
+        FROM sess
+        GROUP BY chat_id, session_no
+      ),
+      replies AS (
+        SELECT b.chat_id,
+               b.session_no,
+               r.first_reply_at,
+               r.first_reply_user_id
+        FROM bounds b
+        LEFT JOIN LATERAL (
+          SELECT s2.ts AS first_reply_at,
+                 s2.sender_user_id AS first_reply_user_id
+          FROM sess s2
+          WHERE s2.chat_id = b.chat_id
+            AND s2.session_no = b.session_no
+            AND s2.sender_user_id IS NOT NULL
+            AND b.first_inbound_at IS NOT NULL
+            AND s2.ts >= b.first_inbound_at
+            AND s2.ts <= ${to}
+          ORDER BY s2.ts ASC
+          LIMIT 1
+        ) r ON TRUE
+      ),
+      joined AS (
+        SELECT b.chat_id,
+               b.session_no,
+               b.started_at,
+               b.last_at,
+               b.first_inbound_at,
+               a.has_in_period,
+               rp.first_reply_at,
+               rp.first_reply_user_id
+        FROM bounds b
+        JOIN activity a ON a.chat_id = b.chat_id AND a.session_no = b.session_no
+        JOIN replies rp ON rp.chat_id = b.chat_id AND rp.session_no = b.session_no
+      )
+    `;
+        const countSql = client_1.Prisma.sql `
+      ${baseCteSql}
+      SELECT COUNT(*)::int AS total
+      FROM joined j
+      JOIN "Chat" c ON c."id" = j.chat_id
+      WHERE j.has_in_period = true
+        ${stateFilterSql};
+    `;
+        const listSql = client_1.Prisma.sql `
+      ${baseCteSql}
+      SELECT
+        j.chat_id AS "chatId",
+        j.session_no AS "sessionNo",
+        j.started_at AS "startedAt",
+        j.last_at AS "lastAt",
+        (EXTRACT(EPOCH FROM (${to} - j.last_at)) <= ${idleSeconds}) AS "isOpenAtEnd",
+        c."channel" AS "channel",
+        c."organizationPhoneId" AS "organizationPhoneId",
+        c."assignedUserId" AS "assignedUserId",
+        c."status" AS "chatStatus",
+        j.first_inbound_at AS "firstInboundAt",
+        j.first_reply_at AS "firstReplyAt",
+        j.first_reply_user_id AS "firstReplyUserId",
+        CASE
+          WHEN j.first_inbound_at IS NULL OR j.first_reply_at IS NULL THEN NULL
+          ELSE EXTRACT(EPOCH FROM (j.first_reply_at - j.first_inbound_at))
+        END AS "firstResponseSeconds"
+      FROM joined j
+      JOIN "Chat" c ON c."id" = j.chat_id
+      WHERE j.has_in_period = true
+        ${stateFilterSql}
+      ORDER BY j.last_at DESC
+      LIMIT ${limit}
+      OFFSET ${offset};
+    `;
+        const [countRows, listRows] = yield Promise.all([
+            authStorage_1.prisma.$queryRaw(countSql),
+            authStorage_1.prisma.$queryRaw(listSql),
+        ]);
+        const total = Number((_f = (_e = countRows === null || countRows === void 0 ? void 0 : countRows[0]) === null || _e === void 0 ? void 0 : _e.total) !== null && _f !== void 0 ? _f : 0);
+        res.json({
+            range: {
+                from: from.toISOString(),
+                to: to.toISOString(),
+            },
+            filters: {
+                channel: channel !== null && channel !== void 0 ? channel : null,
+                organizationPhoneId: organizationPhoneId !== null && organizationPhoneId !== void 0 ? organizationPhoneId : null,
+                assignedUserId: assignedUserId !== null && assignedUserId !== void 0 ? assignedUserId : null,
+                state: stateNormalized,
+            },
+            tickets: (listRows !== null && listRows !== void 0 ? listRows : []).map((r) => {
+                var _a, _b;
+                return ({
+                    id: `${r.chatId}:${r.sessionNo}`,
+                    chatId: Number(r.chatId),
+                    sessionNo: Number(r.sessionNo),
+                    startedAt: r.startedAt ? new Date(r.startedAt).toISOString() : null,
+                    lastAt: r.lastAt ? new Date(r.lastAt).toISOString() : null,
+                    isOpenAtEnd: Boolean(r.isOpenAtEnd),
+                    channel: (_a = r.channel) !== null && _a !== void 0 ? _a : null,
+                    organizationPhoneId: r.organizationPhoneId === null || r.organizationPhoneId === undefined ? null : Number(r.organizationPhoneId),
+                    assignedUserId: r.assignedUserId === null || r.assignedUserId === undefined ? null : Number(r.assignedUserId),
+                    chatStatus: (_b = r.chatStatus) !== null && _b !== void 0 ? _b : null,
+                    firstInboundAt: r.firstInboundAt ? new Date(r.firstInboundAt).toISOString() : null,
+                    firstReplyAt: r.firstReplyAt ? new Date(r.firstReplyAt).toISOString() : null,
+                    firstReplyUserId: r.firstReplyUserId === null || r.firstReplyUserId === undefined ? null : Number(r.firstReplyUserId),
+                    firstResponseSeconds: r.firstResponseSeconds === null || r.firstResponseSeconds === undefined ? null : Number(r.firstResponseSeconds),
+                });
+            }),
+            pagination: {
+                total,
+                limit,
+                offset,
+            },
+        });
+    }
+    catch (error) {
+        logger.error({ err: error }, '[listAnalyticsTickets] Ошибка получения списка тикетов аналитики');
+        res.status(500).json({ error: 'Ошибка получения списка тикетов аналитики', details: error.message });
+    }
+});
+exports.listAnalyticsTickets = listAnalyticsTickets;
 //# sourceMappingURL=analyticsController.js.map
