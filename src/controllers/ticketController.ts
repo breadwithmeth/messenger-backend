@@ -332,6 +332,102 @@ export async function changeTicketStatus(req: Request, res: Response) {
 }
 
 /**
+ * Закрыть тикет сотрудником (shortcut endpoint)
+ */
+export async function closeTicket(req: Request, res: Response) {
+  try {
+    const organizationId = res.locals.organizationId;
+    const userId = res.locals.userId;
+    const { ticketNumber } = req.params;
+    const { reason } = (req.body ?? {}) as { reason?: unknown };
+
+    if (!organizationId) {
+      return res.status(400).json({ error: 'organizationId обязателен' });
+    }
+
+    const parsedTicketNumber = parseInt(ticketNumber, 10);
+    if (isNaN(parsedTicketNumber)) {
+      return res.status(400).json({ error: 'Некорректный номер тикета' });
+    }
+
+    if (reason !== undefined && reason !== null && typeof reason !== 'string') {
+      return res.status(400).json({ error: 'reason должен быть строкой' });
+    }
+
+    const normalizedReason = typeof reason === 'string' ? reason.trim() : undefined;
+
+    const parsedUserId = Number(userId);
+    const historyUserId = Number.isInteger(parsedUserId)
+      ? (
+          await prisma.user.findFirst({
+            where: {
+              id: parsedUserId,
+              organizationId,
+            },
+            select: { id: true },
+          })
+        )?.id ?? null
+      : null;
+
+    const ticket = await prisma.chat.findFirst({
+      where: {
+        organizationId,
+        ticketNumber: parsedTicketNumber,
+      },
+    });
+
+    if (!ticket) {
+      return res.status(404).json({ error: 'Тикет не найден' });
+    }
+
+    const now = new Date();
+    const oldStatus = ticket.status;
+
+    if (oldStatus === 'closed') {
+      return res.json({
+        success: true,
+        ticket,
+        history: null,
+        message: 'Тикет уже закрыт',
+      });
+    }
+
+    const [updatedTicket, history] = await prisma.$transaction([
+      prisma.chat.update({
+        where: { id: ticket.id },
+        data: {
+          status: 'closed',
+          closedAt: now,
+          ...(normalizedReason ? { closeReason: normalizedReason } : {}),
+        },
+      }),
+      prisma.ticketHistory.create({
+        data: {
+          chatId: ticket.id,
+          userId: historyUserId,
+          changeType: 'status_changed',
+          oldValue: oldStatus,
+          newValue: 'closed',
+          description: `Тикет закрыт сотрудником${normalizedReason ? `: ${normalizedReason}` : ''}`,
+        },
+      }),
+    ]);
+
+    res.json({
+      success: true,
+      ticket: updatedTicket,
+      history,
+    });
+  } catch (error: any) {
+    logger.error({ error: error.message, stack: error.stack, code: error.code }, '[closeTicket] Ошибка при закрытии тикета');
+    res.status(500).json({
+      error: 'Ошибка при закрытии тикета',
+      ...(process.env.NODE_ENV !== 'production' ? { details: error.message } : {}),
+    });
+  }
+}
+
+/**
  * Изменить приоритет тикета
  */
 export async function changeTicketPriority(req: Request, res: Response) {
@@ -700,7 +796,17 @@ export async function getTicketMessages(req: Request, res: Response) {
         ticketNumber: ticketNumber,
         organizationId: organizationId,
       },
-      select: { id: true },
+      select: {
+        id: true,
+        assignedUserId: true,
+        assignedUser: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
     });
 
     if (!chat) {
@@ -728,8 +834,11 @@ export async function getTicketMessages(req: Request, res: Response) {
       },
     });
 
+    const hasResponsible = Boolean(chat.assignedUserId);
+    const responsibleUser = hasResponsible ? chat.assignedUser : null;
+
     logger.info(`[getTicketMessages] Успешно получено ${messages.length} сообщений для тикета ${ticketNumber} (чат ${chat.id}) организации ${organizationId}.`);
-    res.status(200).json({ messages });
+    res.status(200).json({ messages: messages.map((m) => ({ ...m, hasResponsible, responsibleUser })) });
   } catch (error: any) {
     logger.error(`[getTicketMessages] Ошибка при получении сообщений для тикета ${req.params.ticketNumber} организации ${res.locals.organizationId}:`, error);
     res.status(500).json({

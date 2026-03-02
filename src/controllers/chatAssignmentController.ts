@@ -2,6 +2,7 @@
 
 import { Request, Response } from 'express';
 import { prisma } from '../config/authStorage';
+import { notifyNewMessage } from '../services/socketService';
 import pino from 'pino';
 
 const logger = pino({ level: 'info' });
@@ -11,7 +12,14 @@ const logger = pino({ level: 'info' });
  */
 export const assignChatToOperator = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId;
-  const { chatId, operatorId, priority = 'medium' } = req.body;
+  const currentUserId = res.locals.userId;
+  const { chatId, operatorId: operatorIdRaw, priority = 'medium' } = req.body;
+
+  // Если operatorId не передан или равен 0, используем текущего авторизованного пользователя
+  const resolvedOperatorId =
+    operatorIdRaw === undefined || operatorIdRaw === null || operatorIdRaw === 0 || operatorIdRaw === '0'
+      ? currentUserId
+      : operatorIdRaw;
 
   if (!organizationId) {
     logger.warn('[assignChatToOperator] organizationId не определен в res.locals.');
@@ -23,9 +31,16 @@ export const assignChatToOperator = async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Некорректный chatId' });
   }
 
-  if (!operatorId) {
-    logger.warn('[assignChatToOperator] operatorId не указан');
+  if (!resolvedOperatorId) {
+    logger.warn('[assignChatToOperator] operatorId не указан и не удалось определить из сессии');
     return res.status(400).json({ error: 'operatorId обязателен' });
+  }
+
+  const operatorId = typeof resolvedOperatorId === 'string' ? parseInt(resolvedOperatorId, 10) : resolvedOperatorId;
+
+  if (!Number.isInteger(operatorId)) {
+    logger.warn(`[assignChatToOperator] Некорректный operatorId: "${resolvedOperatorId}"`);
+    return res.status(400).json({ error: 'Некорректный operatorId' });
   }
 
   try {
@@ -43,6 +58,8 @@ export const assignChatToOperator = async (req: Request, res: Response) => {
       logger.warn(`[assignChatToOperator] Чат с ID ${chatIdNum} не найден для организации ${organizationId}`);
       return res.status(404).json({ error: 'Чат не найден' });
     }
+
+    const wasUnassigned = !chat.assignedUserId;
 
     // Проверяем, что оператор принадлежит организации
     const operator = await prisma.user.findFirst({
@@ -75,6 +92,41 @@ export const assignChatToOperator = async (req: Request, res: Response) => {
         },
       },
     });
+
+    if (wasUnassigned && updatedChat.assignedUser) {
+      // Патчим последнее входящее, если оно пришло без ответственного до взятия чата
+      const recentThreshold = new Date(Date.now() - 15 * 60 * 1000);
+      const lastIncoming = await prisma.message.findFirst({
+        where: {
+          chatId: chatIdNum,
+          fromMe: false,
+          timestamp: { gte: recentThreshold },
+        },
+        orderBy: { timestamp: 'desc' },
+      });
+
+      if (lastIncoming) {
+        try {
+          notifyNewMessage(organizationId, {
+            id: lastIncoming.id,
+            chatId: lastIncoming.chatId,
+            content: lastIncoming.content,
+            type: lastIncoming.type,
+            mediaUrl: lastIncoming.mediaUrl,
+            filename: lastIncoming.filename,
+            fromMe: lastIncoming.fromMe,
+            timestamp: lastIncoming.timestamp,
+            status: lastIncoming.status,
+            senderJid: lastIncoming.senderJid,
+            channel: lastIncoming.channel,
+            hasResponsible: true,
+            responsibleUser: updatedChat.assignedUser,
+          });
+        } catch (notifyErr: any) {
+          logger.error('[assignChatToOperator] Не удалось обновить ответственного для последнего сообщения:', notifyErr.message);
+        }
+      }
+    }
 
     logger.info(`✅ Чат ${chatId} назначен оператору ${operatorId} (${operator.name})`);
     res.status(200).json({

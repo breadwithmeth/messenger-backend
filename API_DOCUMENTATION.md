@@ -183,9 +183,54 @@ Authorization: Bearer YOUR_JWT_TOKEN
   - POST /:organizationPhoneId/connect — инициировать подключение (Baileys, QR сохраняется в БД)
   - DELETE /:organizationPhoneId/disconnect — выход из сессии
 
+Подробная документация: см. ORGANIZATION_PHONES_API.md
+
 9) WhatsApp сессии (/api/wa)
 
 - POST /api/wa/start — запуск новой WA-сессии (см. waSessionController)
+
+10) Комментарии к контактам (/api/clients/:id/comments) — JWT
+
+- GET /api/clients/:id/comments
+  - Описание: вернуть список комментариев к контакту (клиенту) организации.
+  - Ответ: { comments: [{ id, content, createdAt, user: { id, name, email } }] }
+  - Коды ошибок: 401 (нет org), 404 (контакт не найден), 500.
+
+- POST /api/clients/:id/comments
+  - Описание: добавить комментарий к контакту. Автор — текущий пользователь.
+  - Body: { content: string } — обязателен, непустая строка.
+  - Ответ 201: { id, content, createdAt, user: { id, name, email } }
+  - Коды ошибок: 400 (пустой content или неверный id), 401 (нет user/org), 404 (контакт не найден), 500.
+
+11) Комментарии к чатам (/api/chats/:chatId/comments) — JWT
+
+- GET /api/chats/:chatId/comments
+  - Описание: получить комментарии чата организации.
+  - Query: limit (опц., по умолчанию 50), offset (опц.).
+  - Ответ: { comments: [{ id, content, createdAt, user: { id, name, email } }], pagination }
+  - Коды ошибок: 401 (нет org), 404 (чат не найден), 500.
+
+- POST /api/chats/:chatId/comments
+  - Описание: добавить комментарий к чату. Автор — текущий пользователь.
+  - Body: { content: string } — обязателен, непустая строка.
+  - Ответ 201: { id, content, createdAt, user: { id, name, email } }
+  - Коды ошибок: 400 (пустой content или неверный chatId), 401 (нет user/org), 404 (чат не найден), 500.
+
+12) Workforce presence (internal)
+
+- PATCH /api/workforce/internal/employees/:id/presence
+  - Авторизация: Bearer service token (Keycloak client_credentials) с ролью employee-service-access.
+  - Body: { status: string }
+  - Ответ 200: presence объект от naliv-emp.
+  - Коды ошибок: 400 (нет status или некорректный), 401 (нет/невалидный токен или нет роли), 404/409/503 проксируются как 502/503 в зависимости от naliv-emp.
+
+13) Workforce presence heartbeat (JWT)
+
+- POST /api/workforce/presence/heartbeat
+  - Авторизация: Bearer user JWT (тот же, что в приложении).
+  - Эффект: ставит сотрудника ONLINE в naliv-emp и планирует OFFLINE через PRESENCE_INACTIVITY_MS (по умолчанию 300000 мс), если не придёт следующий heartbeat.
+  - Ответ 200: { success: true, status: 'online', employeeId, ttlMs }
+  - Коды ошибок: 400 (нет ключевых данных), 401 (нет/невалидный JWT), 404/409/503 мапятся из naliv-emp.
 
 ---
 

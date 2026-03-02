@@ -8,7 +8,9 @@ import {
   getClientsStats,
   importClients,
   exportClients,
-  updateClientFinancials
+  updateClientFinancials,
+  addClientComment,
+  getClientComments
 } from '../controllers/clientController';
 import * as tagController from '../controllers/clientTagController';
 import { authMiddleware } from '../middlewares/authMiddleware';
@@ -81,6 +83,21 @@ router.put('/tags/:id', tagController.updateTag);
  * @access  Private
  */
 router.delete('/tags/:id', tagController.deleteTag);
+
+/**
+ * @route   GET /api/clients/:id/comments
+ * @desc    Получить комментарии по контакту
+ * @access  Private
+ */
+router.get('/:id/comments', getClientComments);
+
+/**
+ * @route   POST /api/clients/:id/comments
+ * @desc    Добавить комментарий к контакту
+ * @body    { content: string }
+ * @access  Private
+ */
+router.post('/:id/comments', addClientComment);
 
 /**
  * @route   GET /api/clients/:id

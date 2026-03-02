@@ -340,194 +340,208 @@ export async function ensureChat(
   organizationPhoneId: number,
   receivingPhoneJid: string,
   remoteJid: string,
-  name?: string
+  name?: string,
+  options?: { reopenClosedTicket?: boolean }
 ): Promise<number> {
+  try {
+    const shouldReopenClosedTicket = options?.reopenClosedTicket ?? true;
+    const normalizedRemoteJid = jidNormalizedUser(remoteJid);
+
+    let myJidNormalized: string | undefined;
+    const candidates: Array<string | undefined> = [
+      receivingPhoneJid,
+      socks.get(organizationPhoneId)?.user?.id,
+    ];
+
     try {
-        const normalizedRemoteJid = jidNormalizedUser(remoteJid);
+      const orgPhone = await prisma.organizationPhone.findUnique({
+        where: { id: organizationPhoneId },
+        select: { phoneJid: true },
+      });
+      if (orgPhone?.phoneJid) {
+        candidates.push(orgPhone.phoneJid);
+      }
+    } catch (e) {
+      logger.warn(`[ensureChat] Не удалось получить OrganizationPhone(${organizationPhoneId}) для нормализации JID: ${String(e)}`);
+    }
 
-        // 1) Вычисляем канонический myJid (receivingPhoneJid) с учетом всех доступных источников
-        let myJidNormalized: string | undefined;
-        const candidates: Array<string | undefined> = [
-          receivingPhoneJid,
-          // JID текущего активного сокета для этого organizationPhoneId, если есть
-          socks.get(organizationPhoneId)?.user?.id,
-        ];
-        // Пробуем добрать JID из OrganizationPhone
+    for (const candidate of candidates) {
+      if (candidate && typeof candidate === 'string' && candidate.trim()) {
+        const normalized = jidNormalizedUser(candidate);
+        if (normalized) {
+          myJidNormalized = normalized;
+          break;
+        }
+      }
+    }
+
+    if (!myJidNormalized) {
+      logger.warn(`[ensureChat] receivingPhoneJid не удалось нормализовать. Поступившее значение: "${receivingPhoneJid}". Будет использовано пустое значение, что может привести к дублям.`);
+      myJidNormalized = '' as any;
+    }
+
+    let chat = myJidNormalized
+      ? await prisma.chat.findFirst({
+          where: {
+            organizationId,
+            channel: 'whatsapp',
+            receivingPhoneJid: myJidNormalized,
+            remoteJid: normalizedRemoteJid,
+          },
+        })
+      : null;
+
+    if (!chat) {
+      const emptyChat = await prisma.chat.findFirst({
+        where: {
+          organizationId,
+          remoteJid: normalizedRemoteJid,
+          receivingPhoneJid: '',
+        },
+      });
+
+      if (emptyChat && myJidNormalized) {
+        chat = await prisma.chat.update({
+          where: { id: emptyChat.id },
+          data: {
+            receivingPhoneJid: myJidNormalized,
+            organizationPhoneId,
+            lastMessageAt: new Date(),
+          },
+        });
+      }
+    }
+
+    if (!chat) {
+      try {
+        const lastTicket = await prisma.chat.findFirst({
+          where: {
+            organizationId,
+            ticketNumber: { not: null },
+          },
+          orderBy: { ticketNumber: 'desc' },
+          select: { ticketNumber: true },
+        });
+
+        const nextTicketNumber = (lastTicket?.ticketNumber || 0) + 1;
+
+        chat = await prisma.chat.create({
+          data: {
+            organizationId,
+            receivingPhoneJid: myJidNormalized,
+            remoteJid: normalizedRemoteJid,
+            organizationPhoneId,
+            name: name || normalizedRemoteJid.split('@')[0],
+            isGroup: isJidGroup(normalizedRemoteJid),
+            lastMessageAt: new Date(),
+            ticketNumber: nextTicketNumber,
+            status: 'new',
+            priority: 'normal',
+          },
+        });
+
+        await prisma.ticketHistory.create({
+          data: {
+            chatId: chat.id,
+            changeType: 'ticket_created',
+            newValue: String(nextTicketNumber),
+            description: `Создан тикет #${nextTicketNumber}`,
+          },
+        });
+
         try {
-          const orgPhone = await prisma.organizationPhone.findUnique({
-            where: { id: organizationPhoneId },
-            select: { phoneJid: true },
+          notifyNewChat(organizationId, {
+            id: chat.id,
+            remoteJid: chat.remoteJid,
+            name: chat.name,
+            channel: 'whatsapp',
+            ticketNumber: chat.ticketNumber,
+            status: chat.status,
+            priority: chat.priority,
+            lastMessageAt: chat.lastMessageAt,
+            unreadCount: 0,
           });
-          if (orgPhone?.phoneJid) {
-            candidates.push(orgPhone.phoneJid);
-          }
-        } catch (e) {
-          logger.warn(`[ensureChat] Не удалось получить OrganizationPhone(${organizationPhoneId}) для нормализации JID: ${String(e)}`);
+        } catch (socketError) {
+          logger.error('[Socket.IO] Ошибка отправки уведомления о новом чате:', socketError);
         }
-
-        for (const c of candidates) {
-          if (c && typeof c === 'string' && c.trim()) {
-            const norm = jidNormalizedUser(c);
-            if (norm) { myJidNormalized = norm; break; }
-          }
-        }
-
-        if (!myJidNormalized) {
-          // В крайнем случае используем исходное значение, даже если оно пустое — но лучше залогируем
-          logger.warn(`[ensureChat] receivingPhoneJid не удалось нормализовать. Поступившее значение: "${receivingPhoneJid}". Будет использовано пустое значение, что может привести к дублям.`);
-          myJidNormalized = '' as any; // осознанно допускаем пустую строку, ниже попытаемся слить её при первой возможности
-        }
-
-        // 2) Пытаемся найти чат по уникальному ключу (если JID известен)
-        let chat = myJidNormalized
-          ? await prisma.chat.findFirst({
-              where: {
-                organizationId,
-                channel: 'whatsapp',
-                receivingPhoneJid: myJidNormalized,
-                remoteJid: normalizedRemoteJid,
-              },
-            })
-          : null;
-
-        // 3) Если не нашли и ранее мог быть создан чат с пустым receivingPhoneJid — попробуем его найти и обновить
-        if (!chat) {
-          const emptyChat = await prisma.chat.findFirst({
+      } catch (e: any) {
+        if (e?.code === 'P2002') {
+          const existing = await prisma.chat.findFirst({
             where: {
               organizationId,
+              channel: 'whatsapp',
+              receivingPhoneJid: myJidNormalized,
               remoteJid: normalizedRemoteJid,
-              receivingPhoneJid: '',
             },
           });
-
-          if (emptyChat && myJidNormalized) {
-            chat = await prisma.chat.update({
-              where: { id: emptyChat.id },
-              data: {
-                receivingPhoneJid: myJidNormalized,
-                organizationPhoneId,
-                lastMessageAt: new Date(),
-              },
-            });
-            // logger.info(`🔄 Обновлён чат #${chat.id}: установлен receivingPhoneJid=${myJidNormalized} вместо пустого (remoteJid=${normalizedRemoteJid}).`);
-          }
-        }
-
-        // 4) Если по-прежнему не нашли — создаём новый
-        if (!chat) {
-          try {
-            // Генерируем следующий номер тикета для организации
-            const lastTicket = await prisma.chat.findFirst({
-              where: { 
-                organizationId,
-                ticketNumber: { not: null }
-              },
-              orderBy: { ticketNumber: 'desc' },
-              select: { ticketNumber: true },
-            });
-            
-            const nextTicketNumber = (lastTicket?.ticketNumber || 0) + 1;
-            
-            chat = await prisma.chat.create({
-              data: {
-                organizationId,
-                receivingPhoneJid: myJidNormalized,
-                remoteJid: normalizedRemoteJid,
-                organizationPhoneId: organizationPhoneId,
-                name: name || normalizedRemoteJid.split('@')[0],
-                isGroup: isJidGroup(normalizedRemoteJid),
-                lastMessageAt: new Date(),
-                // Тикет-система: автоматически создаем тикет для нового чата
-                ticketNumber: nextTicketNumber,
-                status: 'new',
-                priority: 'medium',
-              },
-            });
-            // logger.info(`✅ Создан новый чат для JID: ${normalizedRemoteJid} (Ваш номер: ${myJidNormalized || '(пусто)'}, Организация: ${organizationId}, Phone ID: ${organizationPhoneId}, ID чата: ${chat.id}, Тикет #${nextTicketNumber})`);
-            
-            // Отправляем Socket.IO уведомление о новом чате
-            try {
-              notifyNewChat(organizationId, {
-                id: chat.id,
-                remoteJid: chat.remoteJid,
-                name: chat.name,
-                channel: 'whatsapp',
-                ticketNumber: chat.ticketNumber,
-                status: chat.status,
-                priority: chat.priority,
-                lastMessageAt: chat.lastMessageAt,
-                unreadCount: 0,
-              });
-            } catch (socketError) {
-              logger.error('[Socket.IO] Ошибка отправки уведомления о новом чате:', socketError);
-            }
-          } catch (e: any) {
-            // Возможна гонка и уникальный конфликт — пробуем перечитать
-            if (e?.code === 'P2002') {
-              const existing = await prisma.chat.findFirst({
-                where: {
-                  organizationId,
-                  channel: 'whatsapp',
-                  receivingPhoneJid: myJidNormalized,
-                  remoteJid: normalizedRemoteJid,
-                },
-              });
-              if (existing) {
-                chat = existing;
-                // logger.info(`♻️ Найден уже существующий чат после конфликта уникальности: #${chat.id}`);
-              } else {
-                throw e;
-              }
-            } else {
-              throw e;
-            }
+          if (existing) {
+            chat = existing;
+          } else {
+            throw e;
           }
         } else {
-          // 5) Обновим lastMessageAt и при необходимости имя/organizationPhoneId
-          const updateData: any = { lastMessageAt: new Date(), organizationPhoneId };
-          if (name && typeof name === 'string' && name.trim() && name !== chat.name) {
-            updateData.name = name.trim();
-          }
-          
-          // Если чат был закрыт - создаем новый тикет и меняем статус на 'new'
-          if (chat.status === 'closed') {
-            // Генерируем следующий номер тикета для организации
-            const lastTicket = await prisma.chat.findFirst({
-              where: { 
-                organizationId,
-                ticketNumber: { not: null }
-              },
-              orderBy: { ticketNumber: 'desc' },
-              select: { ticketNumber: true },
-            });
-            
-            const nextTicketNumber = (lastTicket?.ticketNumber || 0) + 1;
-            
-            updateData.ticketNumber = nextTicketNumber;
-            updateData.status = 'new';
-            updateData.priority = 'medium';
-            updateData.assignedUserId = null; // Сбрасываем назначение
-            updateData.closedAt = null;
-            
-            // logger.info(`🔄 Чат #${chat.id} был закрыт - создан новый тикет #${nextTicketNumber} (статус изменен: closed → new)`);
-          }
-          
-          await prisma.chat.update({
-            where: { id: chat.id },
-            data: updateData,
-          });
+          throw e;
         }
-        return chat.id;
-    } catch (error: any) {
-        logger.error(`❌ Ошибка в ensureChat для JID ${remoteJid} (Ваш номер: ${receivingPhoneJid}, Phone ID: ${organizationPhoneId}):`, error);
-        if (error.stack) {
-            logger.error('Stack trace:', error.stack);
-        }
-        if (error.code && error.meta) {
-            logger.error(`Prisma Error Code: ${error.code}, Meta:`, JSON.stringify(error.meta, null, 2));
-        }
-        throw error;
+      }
+    } else {
+      const updateData: any = { lastMessageAt: new Date(), organizationPhoneId };
+      if (name && typeof name === 'string' && name.trim() && name !== chat.name) {
+        updateData.name = name.trim();
+      }
+
+      if (shouldReopenClosedTicket && (chat.status === 'closed' || chat.status === 'resolved')) {
+        const lastTicket = await prisma.chat.findFirst({
+          where: {
+            organizationId,
+            ticketNumber: { not: null },
+          },
+          orderBy: { ticketNumber: 'desc' },
+          select: { ticketNumber: true },
+        });
+
+        const nextTicketNumber = (lastTicket?.ticketNumber || 0) + 1;
+        const previousTicketNumber = chat.ticketNumber;
+
+        updateData.ticketNumber = nextTicketNumber;
+        updateData.status = 'new';
+        updateData.priority = 'normal';
+        updateData.assignedUserId = null;
+        updateData.closedAt = null;
+        updateData.resolvedAt = null;
+
+        await prisma.chat.update({
+          where: { id: chat.id },
+          data: updateData,
+        });
+
+        await prisma.ticketHistory.create({
+          data: {
+            chatId: chat.id,
+            changeType: 'ticket_reopened',
+            oldValue: previousTicketNumber ? String(previousTicketNumber) : null,
+            newValue: String(nextTicketNumber),
+            description: `Чат переоткрыт: новый тикет #${nextTicketNumber}${previousTicketNumber ? ` (был #${previousTicketNumber})` : ''}`,
+          },
+        });
+      } else {
+        await prisma.chat.update({
+          where: { id: chat.id },
+          data: updateData,
+        });
+      }
     }
+
+    return chat.id;
+  } catch (error: any) {
+    logger.error(`❌ Ошибка в ensureChat для JID ${remoteJid} (Ваш номер: ${receivingPhoneJid}, Phone ID: ${organizationPhoneId}):`, error);
+    if (error.stack) {
+      logger.error('Stack trace:', error.stack);
+    }
+    if (error.code && error.meta) {
+      logger.error(`Prisma Error Code: ${error.code}, Meta:`, JSON.stringify(error.meta, null, 2));
+    }
+    throw error;
+  }
 }
 
 /**
@@ -1065,7 +1079,20 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
             // Сохраняем сообщение в БД
             const myJid = jidNormalizedUser(currentSock?.user?.id || phoneJid) || '';
             const contactName = msg.pushName || undefined;
-            const chatId = await ensureChat(organizationId, organizationPhoneId, myJid, remoteJid, contactName);
+            const chatId = await ensureChat(
+              organizationId,
+              organizationPhoneId,
+              myJid,
+              remoteJid,
+              contactName,
+              { reopenClosedTicket: !msg.key.fromMe }
+            );
+
+            const chatAssignment = await prisma.chat.findUnique({
+              where: { id: chatId },
+              select: { assignedUserId: true },
+            });
+            const hasResponsible = Boolean(chatAssignment?.assignedUserId);
             
             // --- АВТОМАТИЧЕСКОЕ СОЗДАНИЕ КЛИЕНТА (ВРЕМЕННО ОТКЛЮЧЕНО) ---
             // Создаем или обновляем клиента только для входящих сообщений (не от нас)
@@ -1148,6 +1175,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
                 timestamp: savedMessage.timestamp,
                 status: savedMessage.status,
                 senderJid: savedMessage.senderJid,
+                hasResponsible,
               });
             } catch (socketError) {
               logger.error('[Socket.IO] Ошибка отправки уведомления о новом сообщении:', socketError);
@@ -1347,7 +1375,14 @@ export async function sendMessage(
 
   // Получаем chatId для сохранения сообщения
   const myJid = jidNormalizedUser(sock.user?.id || senderJid) || '';
-  const chatId = await ensureChat(organizationId, organizationPhoneId, myJid, remoteJid);
+  const chatId = await ensureChat(
+    organizationId,
+    organizationPhoneId,
+    myJid,
+    remoteJid,
+    undefined,
+    { reopenClosedTicket: false }
+  );
 
       // --- НАЧАЛО: УЛУЧШЕННАЯ ПРОВЕРКА И ЛОГИРОВАНИЕ userId ---
       logger.info(`[sendMessage] Проверка userId перед сохранением. Полученное значение: ${userId}, тип: ${typeof userId}`);

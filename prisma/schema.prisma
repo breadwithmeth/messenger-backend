@@ -60,6 +60,8 @@ model Organization {
   Message        Message[]
   clients        OrganizationClient[] // Клиенты организации
   clientTags     ClientTag[]          // Теги для клиентов
+  contactComments ContactComment[]
+  chatComments   ChatComment[]
 }
 
 model User {
@@ -69,7 +71,7 @@ model User {
   email          String       @unique
   passwordHash   String
   name           String?
-  role           String       @default("operator") // or 'admin'
+  role           String       @default("employee") // employee | manager | admin
   createdAt      DateTime     @default(now())
 
   // --- НОВОЕ ПОЛЕ ---
@@ -81,6 +83,10 @@ model User {
 
   // Связь с историей изменений тикетов
   ticketHistory  TicketHistory[]
+
+  // Комментарии к чатам
+  chatComments   ChatComment[]
+  contactComments ContactComment[]
 
   chats          Chat[]       @relation("ChatUsers")
   
@@ -254,6 +260,7 @@ model Chat {
   users               User[]       @relation("ChatUsers")
   messages            Message[]
   ticketHistory       TicketHistory[] // История изменений тикета
+  chatComments        ChatComment[]
 
   @@unique([organizationId, ticketNumber]) // Уникальный номер тикета в рамках организации
   @@index([status]) // Индекс для быстрого поиска по статусу
@@ -434,6 +441,7 @@ model OrganizationClient {
   // Связи
   chats           Chat[]   @relation("ChatOrganizationClients")
   tags            ClientTag[] @relation("ClientTags")
+  comments        ContactComment[]
   
   // Индексы для оптимизации поиска
   @@index([organizationId])
@@ -445,6 +453,46 @@ model OrganizationClient {
   @@index([clientType])
   @@index([whatsappJid])
   @@index([telegramUserId])
+}
+
+// Комментарии к контактам (CRM заметки)
+model ContactComment {
+  id              Int                  @id @default(autoincrement())
+  organization    Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId  Int
+
+  client          OrganizationClient   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  clientId        Int
+
+  user            User?                @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userId          Int?
+
+  content         String
+  createdAt       DateTime             @default(now())
+
+  @@index([clientId])
+  @@index([organizationId, clientId])
+  @@index([createdAt])
+}
+
+// Комментарии к чатам
+model ChatComment {
+  id              Int              @id @default(autoincrement())
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId  Int
+
+  chat            Chat             @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  chatId          Int
+
+  user            User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userId          Int?
+
+  content         String
+  createdAt       DateTime         @default(now())
+
+  @@index([chatId])
+  @@index([organizationId, chatId])
+  @@index([createdAt])
 }
 
 // Теги клиентов

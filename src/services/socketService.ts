@@ -2,8 +2,8 @@
 
 import { Server, Socket } from 'socket.io';
 import { Server as HTTPServer } from 'http';
-import jwt from 'jsonwebtoken';
 import pino from 'pino';
+import { authenticateToken } from '../auth/tokenAuth';
 
 const logger = pino({ level: 'info' });
 
@@ -16,9 +16,9 @@ interface SocketData {
 }
 
 interface AuthPayload {
-  id: number;
+  userId: number;
   organizationId: number;
-  email: string;
+  email?: string;
 }
 
 /**
@@ -44,15 +44,14 @@ export function initializeSocketIO(httpServer: HTTPServer): Server {
         return next(new Error('Authentication error: No token provided'));
       }
 
-      // Верификация JWT токена
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key') as AuthPayload;
+      const decoded = await authenticateToken(token) as AuthPayload;
 
       // Сохраняем данные пользователя в socket
-      socket.data.userId = decoded.id;
+      socket.data.userId = decoded.userId;
       socket.data.organizationId = decoded.organizationId;
       socket.data.userEmail = decoded.email;
 
-      logger.info(`[Socket.IO] Пользователь аутентифицирован: ${decoded.email} (ID: ${decoded.id}, Org: ${decoded.organizationId})`);
+      logger.info(`[Socket.IO] Пользователь аутентифицирован: ${decoded.email || 'unknown'} (ID: ${decoded.userId}, Org: ${decoded.organizationId})`);
       next();
     } catch (error: any) {
       logger.error(`[Socket.IO] Ошибка аутентификации:`, error.message);

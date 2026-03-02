@@ -448,6 +448,111 @@ export const deleteClient = async (req: AuthRequest, res: Response) => {
 };
 
 /**
+ * Получить комментарии по контакту
+ */
+export const getClientComments = async (req: AuthRequest, res: Response) => {
+  const organizationId = req.user?.organizationId;
+  const { id } = req.params;
+
+  if (!organizationId) {
+    return res.status(401).json({ error: 'Could not determine user organization' });
+  }
+
+  const clientId = parseInt(id, 10);
+  if (Number.isNaN(clientId)) {
+    return res.status(400).json({ error: 'Invalid client id' });
+  }
+
+  try {
+    const client = await prisma.organizationClient.findFirst({
+      where: { id: clientId, organizationId }
+    });
+
+    if (!client) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    const comments = await prisma.contactComment.findMany({
+      where: {
+        clientId,
+        organizationId
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true
+          }
+        }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    return res.json({ comments });
+  } catch (error) {
+    console.error('Error fetching contact comments:', error);
+    return res.status(500).json({ error: 'Failed to fetch comments' });
+  }
+};
+
+/**
+ * Добавить комментарий к контакту
+ */
+export const addClientComment = async (req: AuthRequest, res: Response) => {
+  const organizationId = req.user?.organizationId;
+  const userId = req.user?.userId;
+  const { id } = req.params;
+  const { content } = req.body || {};
+
+  if (!organizationId || !userId) {
+    return res.status(401).json({ error: 'Could not determine user' });
+  }
+
+  const clientId = parseInt(id, 10);
+  if (Number.isNaN(clientId)) {
+    return res.status(400).json({ error: 'Invalid client id' });
+  }
+
+  if (!content || typeof content !== 'string' || !content.trim()) {
+    return res.status(400).json({ error: 'Content is required' });
+  }
+
+  try {
+    const client = await prisma.organizationClient.findFirst({
+      where: { id: clientId, organizationId }
+    });
+
+    if (!client) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    const comment = await prisma.contactComment.create({
+      data: {
+        content: content.trim(),
+        organizationId,
+        clientId,
+        userId
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true
+          }
+        }
+      }
+    });
+
+    return res.status(201).json(comment);
+  } catch (error) {
+    console.error('Error adding contact comment:', error);
+    return res.status(500).json({ error: 'Failed to add comment' });
+  }
+};
+
+/**
  * Получить статистику по клиентам
  */
 export const getClientsStats = async (req: AuthRequest, res: Response) => {

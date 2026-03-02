@@ -372,6 +372,12 @@ async function handleIncomingMessage(orgPhone: any, message: any, contact?: any)
       contactName
     );
 
+    const chatAssignment = await prisma.chat.findUnique({
+      where: { id: chatId },
+      select: { assignedUserId: true },
+    });
+    const hasResponsible = Boolean(chatAssignment?.assignedUserId);
+
     // Сохраняем сообщение в БД
     const savedMessage = await prisma.message.create({
       data: {
@@ -424,6 +430,7 @@ async function handleIncomingMessage(orgPhone: any, message: any, contact?: any)
         status: savedMessage.status,
         senderJid: savedMessage.senderJid,
         channel: 'whatsapp',
+        hasResponsible,
       });
     } catch (socketError) {
       logger.error('[Socket.IO] Ошибка отправки уведомления WABA:', socketError);
@@ -554,7 +561,8 @@ export const sendMessage = async (req: Request, res: Response) => {
       orgPhone.id,
       orgPhone.phoneJid,
       remoteJid,
-      undefined
+      undefined,
+      { reopenClosedTicket: false }
     );
 
     await prisma.message.create({
@@ -775,6 +783,17 @@ export const getChatMessages = async (req: Request, res: Response) => {
         id: parseInt(chatId),
         organizationId: res.locals.organizationId,
       },
+      select: {
+        id: true,
+        assignedUserId: true,
+        assignedUser: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
     });
 
     if (!chat) {
@@ -811,11 +830,16 @@ export const getChatMessages = async (req: Request, res: Response) => {
       where: { chatId: chat.id },
     });
 
+    const hasResponsible = Boolean(chat.assignedUserId);
+    const responsibleUser = hasResponsible ? chat.assignedUser : null;
+
     res.json({
       messages: messages.map(msg => ({
         ...msg,
         delivered: ['delivered', 'read'].includes(msg.status || ''),
         read: msg.status === 'read',
+        hasResponsible,
+        responsibleUser,
       })),
       total,
       limit: parseInt(limit as string),

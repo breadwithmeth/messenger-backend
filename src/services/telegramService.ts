@@ -325,6 +325,8 @@ async function handleIncomingMessage(
     }
 
     // Сохраняем сообщение в БД
+    const hasResponsible = Boolean(chat.assignedUserId);
+
     const savedMessage = await prisma.message.create({
       data: {
         organizationId,
@@ -373,6 +375,7 @@ async function handleIncomingMessage(
         status: savedMessage.status,
         telegramUsername: savedMessage.telegramUsername,
         channel: 'telegram',
+        hasResponsible,
       });
     } catch (socketError) {
       logger.error('[Socket.IO] Ошибка отправки уведомления Telegram:', socketError);
@@ -432,12 +435,60 @@ async function ensureTelegramChat(
           name: telegramUsername || `${telegramFirstName || ''} ${telegramLastName || ''}`.trim() || `User ${telegramUserId}`,
           ticketNumber: nextTicketNumber,
           status: 'new',
-          priority: 'medium',
+          priority: 'normal',
           lastMessageAt: new Date(),
         },
       });
 
+      await prisma.ticketHistory.create({
+        data: {
+          chatId: chat.id,
+          changeType: 'ticket_created',
+          newValue: String(nextTicketNumber),
+          description: `Создан тикет #${nextTicketNumber}`,
+        },
+      });
+
       logger.info(`[Telegram] Создан новый чат #${chat.id} для ${telegramUsername || telegramUserId}, тикет #${nextTicketNumber}`);
+    } else if (chat.status === 'closed' || chat.status === 'resolved') {
+      // Клиент снова написал после закрытия/решения — открываем новый тикет
+      const lastTicket = await prisma.chat.findFirst({
+        where: {
+          organizationId,
+          ticketNumber: { not: null },
+        },
+        orderBy: { ticketNumber: 'desc' },
+        select: { ticketNumber: true },
+      });
+
+      const nextTicketNumber = (lastTicket?.ticketNumber || 0) + 1;
+      const previousTicketNumber = chat.ticketNumber;
+
+      chat = await prisma.chat.update({
+        where: { id: chat.id },
+        data: {
+          ticketNumber: nextTicketNumber,
+          status: 'new',
+          priority: 'normal',
+          assignedUserId: null,
+          assignedAt: null,
+          closedAt: null,
+          resolvedAt: null,
+          lastMessageAt: new Date(),
+        },
+      });
+
+      await prisma.ticketHistory.create({
+        data: {
+          chatId: chat.id,
+          changeType: 'ticket_reopened',
+          oldValue: previousTicketNumber ? String(previousTicketNumber) : null,
+          newValue: String(nextTicketNumber),
+          description: `Чат переоткрыт: новый тикет #${nextTicketNumber}${previousTicketNumber ? ` (был #${previousTicketNumber})` : ''}`,
+        },
+      });
+
+      logger.info(`[Telegram] Чат #${chat.id} переоткрыт новым тикетом #${nextTicketNumber} после входящего сообщения`);
     }
 
     return chat;

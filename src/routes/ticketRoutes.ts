@@ -6,6 +6,7 @@ import {
   getTicketByNumber,
   assignTicket,
   changeTicketStatus,
+  closeTicket,
   changeTicketPriority,
   addTicketTag,
   removeTicketTag,
@@ -38,6 +39,9 @@ router.post('/:ticketNumber/assign', assignTicket);
 
 // Изменить статус тикета
 router.post('/:ticketNumber/status', changeTicketStatus);
+
+// Быстрое закрытие тикета сотрудником
+router.post('/:ticketNumber/close', closeTicket);
 
 // Изменить приоритет тикета
 router.post('/:ticketNumber/priority', changeTicketPriority);

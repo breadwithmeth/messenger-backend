@@ -28,6 +28,7 @@ import accountRoutes from './routes/accountRoutes';
 import userRoutes from './routes/userRoutes'; // <-- Добавить
 import contactRoutes from './routes/contactRoutes';
 import clientRoutes from './routes/clientRoutes'; // <-- Клиенты организации
+import workforceRoutes from './routes/workforceRoutes';
 
 
 const app = express();
@@ -84,6 +85,7 @@ app.use('/api/organization-phones', organizationPhoneRoutes);
 app.use('/api/accounts', accountRoutes);
 app.use('/api/users', userRoutes); // <-- Добавить
 app.use('/api/clients', clientRoutes); // <-- API для клиентов организации
+app.use('/api/workforce', workforceRoutes);
 app.use('/api/waba', wabaRoutes); // <-- ВАЖНО: ПЕРЕД /api, чтобы не перехватывался contactRoutes
 app.use('/api', contactRoutes);
 app.use('/api/chat-assignment', chatAssignmentRoutes); // Новые маршруты для назначения чатов

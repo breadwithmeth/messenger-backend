@@ -7,6 +7,228 @@ import { prisma } from '../config/authStorage'; // Используем един
 
 const logger = pino({ level: 'info' });
 
+type TicketHistoryPoint = {
+  oldValue: string | null;
+  newValue: string | null;
+  createdAt: Date;
+};
+
+type TicketTransition = {
+  oldNumber: number | null;
+  newNumber: number;
+  createdAt: Date;
+};
+
+function buildTicketTransitions(history: TicketHistoryPoint[] = []): TicketTransition[] {
+  return history
+    .map((item) => {
+      const newNumber = item.newValue ? Number(item.newValue) : NaN;
+      const oldNumber = item.oldValue ? Number(item.oldValue) : NaN;
+
+      if (Number.isNaN(newNumber)) {
+        return null;
+      }
+
+      return {
+        oldNumber: Number.isNaN(oldNumber) ? null : oldNumber,
+        newNumber,
+        createdAt: item.createdAt,
+      };
+    })
+    .filter((item): item is TicketTransition => item !== null)
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+}
+
+// Получить комментарии чата
+export const getChatComments = async (req: Request, res: Response) => {
+  const organizationId = res.locals.organizationId;
+  const chatId = parseInt(req.params.chatId as string, 10);
+  const { limit = '50', offset = '0' } = req.query;
+
+  if (!organizationId) {
+    return res.status(401).json({ error: 'Несанкционированный доступ' });
+  }
+
+  if (Number.isNaN(chatId)) {
+    return res.status(400).json({ error: 'Некорректный chatId' });
+  }
+
+  try {
+    const chat = await prisma.chat.findFirst({
+      where: { id: chatId, organizationId },
+      select: { id: true },
+    });
+
+    if (!chat) {
+      return res.status(404).json({ error: 'Чат не найден' });
+    }
+
+    const take = Math.min(parseInt(limit as string, 10) || 50, 200);
+    const skip = parseInt(offset as string, 10) || 0;
+
+    const [comments, total] = await Promise.all([
+      prisma.chatComment.findMany({
+        where: { chatId, organizationId },
+        include: {
+          user: {
+            select: { id: true, name: true, email: true },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        take,
+        skip,
+      }),
+      prisma.chatComment.count({ where: { chatId, organizationId } }),
+    ]);
+
+    return res.json({
+      comments,
+      pagination: {
+        total,
+        limit: take,
+        offset: skip,
+        hasMore: skip + take < total,
+      },
+    });
+  } catch (error) {
+    logger.error('[getChatComments] Ошибка получения комментариев:', error);
+    return res.status(500).json({ error: 'Failed to fetch chat comments' });
+  }
+};
+
+// Добавить комментарий к чату
+export const addChatComment = async (req: Request, res: Response) => {
+  const organizationId = res.locals.organizationId;
+  const userId = res.locals.userId;
+  const chatId = parseInt(req.params.chatId as string, 10);
+  const { content } = req.body || {};
+
+  if (!organizationId || !userId) {
+    return res.status(401).json({ error: 'Несанкционированный доступ' });
+  }
+
+  if (Number.isNaN(chatId)) {
+    return res.status(400).json({ error: 'Некорректный chatId' });
+  }
+
+  if (!content || typeof content !== 'string' || !content.trim()) {
+    return res.status(400).json({ error: 'Content is required' });
+  }
+
+  try {
+    const chat = await prisma.chat.findFirst({
+      where: { id: chatId, organizationId },
+      select: { id: true },
+    });
+
+    if (!chat) {
+      return res.status(404).json({ error: 'Чат не найден' });
+    }
+
+    const comment = await prisma.chatComment.create({
+      data: {
+        chatId,
+        organizationId,
+        userId,
+        content: content.trim(),
+      },
+      include: {
+        user: {
+          select: { id: true, name: true, email: true },
+        },
+      },
+    });
+
+    return res.status(201).json(comment);
+  } catch (error) {
+    logger.error('[addChatComment] Ошибка добавления комментария:', error);
+    return res.status(500).json({ error: 'Failed to add chat comment' });
+  }
+};
+
+function extractTicketTimeline(
+  currentTicketNumber: number | null,
+  currentStatus: string | null,
+  currentPriority: string | null,
+  history: TicketHistoryPoint[] = []
+) {
+  const timeline: Array<{ number: number; status: string | null; priority: string | null; createdAt?: Date }> = [];
+  const seen = new Set<number>();
+
+  if (typeof currentTicketNumber === 'number') {
+    timeline.push({
+      number: currentTicketNumber,
+      status: currentStatus,
+      priority: currentPriority,
+    });
+    seen.add(currentTicketNumber);
+  }
+
+  for (const item of history) {
+    const oldNumber = item.oldValue ? Number(item.oldValue) : NaN;
+    const newNumber = item.newValue ? Number(item.newValue) : NaN;
+
+    if (!Number.isNaN(newNumber) && !seen.has(newNumber)) {
+      timeline.push({
+        number: newNumber,
+        status: null,
+        priority: null,
+        createdAt: item.createdAt,
+      });
+      seen.add(newNumber);
+    }
+
+    if (!Number.isNaN(oldNumber) && !seen.has(oldNumber)) {
+      timeline.push({
+        number: oldNumber,
+        status: null,
+        priority: null,
+        createdAt: item.createdAt,
+      });
+      seen.add(oldNumber);
+    }
+  }
+
+  return timeline;
+}
+
+function resolveMessageTicket(
+  messageTimestamp: Date,
+  currentTicketNumber: number | null,
+  currentStatus: string | null,
+  currentPriority: string | null,
+  history: TicketHistoryPoint[] = []
+) {
+  const transitions = buildTicketTransitions(history);
+  let resolvedNumber: number | null = currentTicketNumber;
+
+  if (transitions.length > 0) {
+    const messageTime = messageTimestamp.getTime();
+    const firstTransition = transitions[0];
+
+    if (messageTime < firstTransition.createdAt.getTime()) {
+      resolvedNumber = firstTransition.oldNumber ?? firstTransition.newNumber;
+    } else {
+      resolvedNumber = firstTransition.newNumber;
+      for (const transition of transitions) {
+        if (messageTime >= transition.createdAt.getTime()) {
+          resolvedNumber = transition.newNumber;
+        } else {
+          break;
+        }
+      }
+    }
+  }
+
+  const isCurrentTicket = resolvedNumber !== null && currentTicketNumber !== null && resolvedNumber === currentTicketNumber;
+
+  return {
+    ticketNumber: resolvedNumber,
+    ticketStatus: isCurrentTicket ? currentStatus : null,
+    ticketPriority: isCurrentTicket ? currentPriority : null,
+  };
+}
+
 // export async function createChat(req: Request, res: Response) {
 //   try {
 //     const { organizationId, clientId, operatorId } = req.body;
@@ -213,6 +435,22 @@ export async function listChats(req: Request, res: Response) {
         lastMessageAt: true,
         ticketNumber: true,
         createdAt: true,
+        ticketHistory: {
+          where: {
+            changeType: {
+              in: ['ticket_created', 'ticket_reopened'],
+            },
+          },
+          select: {
+            oldValue: true,
+            newValue: true,
+            createdAt: true,
+          },
+          orderBy: {
+            createdAt: 'desc',
+          },
+          take: 30,
+        },
         // WhatsApp specific
         organizationPhone: {
           select: {
@@ -279,11 +517,27 @@ export async function listChats(req: Request, res: Response) {
     // Преобразуем результат (без дополнительных запросов к Baileys)
     const wantProfile = String(includeProfile).toLowerCase() === 'true';
     const chatsWithLastMessage = chats.map((chat) => {
+      const tickets = extractTicketTimeline(
+        chat.ticketNumber,
+        chat.status,
+        chat.priority,
+        chat.ticketHistory || []
+      );
+
       const base: any = {
         ...chat,
         lastMessage: chat.messages.length > 0 ? chat.messages[0] : null,
+        ticket: chat.ticketNumber
+          ? {
+              number: chat.ticketNumber,
+              status: chat.status,
+              priority: chat.priority,
+            }
+          : null,
+        tickets,
       };
       delete base.messages;
+      delete base.ticketHistory;
 
       if (wantProfile) {
         // Используем уже сохранённые данные из Chat.name
@@ -336,7 +590,42 @@ export const getChatMessages = async (req: Request, res: Response) => {
         id: chatId,
         organizationId: organizationId,
       },
-      select: { id: true },
+      select: {
+        id: true,
+        ticketNumber: true,
+        status: true,
+        priority: true,
+        assignedUserId: true,
+        assignedUser: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+        organizationClients: {
+          select: {
+            id: true,
+          },
+          take: 1,
+        },
+        ticketHistory: {
+          where: {
+            changeType: {
+              in: ['ticket_created', 'ticket_reopened'],
+            },
+          },
+          select: {
+            oldValue: true,
+            newValue: true,
+            createdAt: true,
+          },
+          orderBy: {
+            createdAt: 'desc',
+          },
+          take: 30,
+        },
+      },
     });
 
     if (!chat) {
@@ -400,16 +689,58 @@ export const getChatMessages = async (req: Request, res: Response) => {
 
     // Переворачиваем массив для отображения в хронологическом порядке (старые → новые)
     const messagesInChronologicalOrder = messages.reverse();
+    const tickets = extractTicketTimeline(
+      chat.ticketNumber,
+      chat.status,
+      chat.priority,
+      chat.ticketHistory || []
+    );
+
+    const primaryClientId = chat.organizationClients?.[0]?.id ?? null;
+
+    const hasResponsible = Boolean(chat.assignedUserId);
+    const responsibleUser = hasResponsible ? chat.assignedUser : null;
+
+    const messagesWithTicket = messagesInChronologicalOrder.map((message) => {
+      const resolvedTicket = resolveMessageTicket(
+        message.timestamp,
+        chat.ticketNumber,
+        chat.status,
+        chat.priority,
+        chat.ticketHistory || []
+      );
+
+      return {
+        ...message,
+        ticketNumber: resolvedTicket.ticketNumber,
+        ticketStatus: resolvedTicket.ticketStatus,
+        ticketPriority: resolvedTicket.ticketPriority,
+        clientId: primaryClientId,
+        hasResponsible,
+        responsibleUser,
+      };
+    });
 
     res.status(200).json({
-      messages: messagesInChronologicalOrder,
+      chat: {
+        id: chat.id,
+      },
+      ticket: chat.ticketNumber
+        ? {
+            number: chat.ticketNumber,
+            status: chat.status,
+            priority: chat.priority,
+          }
+        : null,
+      tickets,
+      messages: messagesWithTicket,
       pagination: {
         total: totalCount,
         limit: take,
         offset: skip,
         hasMore: skip + take < totalCount,
-        oldestTimestamp: messagesInChronologicalOrder.length > 0 ? messagesInChronologicalOrder[0].timestamp : null,
-        newestTimestamp: messagesInChronologicalOrder.length > 0 ? messagesInChronologicalOrder[messagesInChronologicalOrder.length - 1].timestamp : null,
+        oldestTimestamp: messagesWithTicket.length > 0 ? messagesWithTicket[0].timestamp : null,
+        newestTimestamp: messagesWithTicket.length > 0 ? messagesWithTicket[messagesWithTicket.length - 1].timestamp : null,
       },
     });
   } catch (error: any) {

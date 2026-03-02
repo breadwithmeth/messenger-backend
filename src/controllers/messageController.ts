@@ -286,12 +286,18 @@ export const sendMessageByTicket = async (req: Request, res: Response) => {
         remoteJid: true,
         receivingPhoneJid: true,
         organizationPhoneId: true,
+        assignedUserId: true,
       },
     });
 
     if (!chat) {
       logger.warn(`[sendMessageByTicket] Тикет с номером ${ticketNumber} не найден или не принадлежит организации ${organizationId}.`);
       return res.status(404).json({ error: 'Тикет не найден или не принадлежит вашей организации.' });
+    }
+
+    if (!chat.assignedUserId) {
+      logger.warn(`[sendMessageByTicket] Тикет ${ticketNumber} не назначен ответственному. Отправка запрещена.`);
+      return res.status(400).json({ error: 'Нельзя отправлять сообщения: тикет не назначен ответственному сотруднику.' });
     }
 
     if (!chat.remoteJid || !chat.receivingPhoneJid || !chat.organizationPhoneId) {
@@ -418,6 +424,14 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
           select: {
             id: true,
             botUsername: true,
+            botName: true,
+          },
+        },
+        assignedUser: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
           },
         },
       },
@@ -429,6 +443,11 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
         organizationId,
       });
       return res.status(404).json({ error: 'Чат не найден или не принадлежит вашей организации.' });
+    }
+
+    if (!chat.assignedUserId) {
+      logger.warn(`[sendMessageByChat] Чат ${chat.id} не назначен ответственному. Отправка запрещена.`);
+      return res.status(400).json({ error: 'Нельзя отправлять сообщения: чат не назначен ответственному сотруднику.' });
     }
 
     const channel = chat.channel;
@@ -543,6 +562,14 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
           success: true,
           messageId: sentMessage.message_id,
           chatId: chat.id,
+          ticketNumber: chat.ticketNumber,
+          ticket: chat.ticketNumber
+            ? {
+                number: chat.ticketNumber,
+                status: chat.status,
+                priority: chat.priority,
+              }
+            : null,
           channel: 'telegram',
           type,
         });
@@ -719,6 +746,14 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
         success: true,
         messageId: sentMessage.messages?.[0]?.id,
         chatId: chat.id,
+        ticketNumber: chat.ticketNumber,
+        ticket: chat.ticketNumber
+          ? {
+              number: chat.ticketNumber,
+              status: chat.status,
+              priority: chat.priority,
+            }
+          : null,
         channel: 'whatsapp',
         connectionType: 'waba',
         message: savedMessage,
@@ -866,6 +901,14 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
         success: true,
         messageId: sentMessage.key.id,
         chatId: chat.id,
+        ticketNumber: chat.ticketNumber,
+        ticket: chat.ticketNumber
+          ? {
+              number: chat.ticketNumber,
+              status: chat.status,
+              priority: chat.priority,
+            }
+          : null,
         channel: 'whatsapp',
         connectionType: 'baileys',
       });

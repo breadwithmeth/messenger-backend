@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import { AuthRequest } from '../middlewares/authMiddleware'; // Импортируем AuthRequest
+import { normalizeAppRole } from '../auth/roleUtils';
 
 const prisma = new PrismaClient();
 
@@ -40,13 +41,15 @@ export const createUser = async (req: AuthRequest, res: Response) => { // Исп
     const passwordHash = await bcrypt.hash(password, salt);
 
     // 3. Создаем пользователя в базе данных с ID организации создателя
+    const normalizedRole = normalizeAppRole(typeof role === 'string' ? role : undefined) || 'employee';
+
     const newUser = await prisma.user.create({
       data: {
         email,
         passwordHash,
         name,
         organizationId: organizationId, // Используем ID из токена
-        role: role || 'operator',
+        role: normalizedRole,
       },
     });
 
