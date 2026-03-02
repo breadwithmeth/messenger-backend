@@ -49,4 +49,4 @@ RUN npm i -g prisma@^6.11.1
 
 EXPOSE 3000
 
-CMD ["sh", "-c", "until prisma migrate deploy; do echo 'DB not ready, retrying...'; sleep 3; done; node dist/src/server.js"]
+CMD ["sh", "-c", "until prisma migrate deploy; do echo 'DB not ready, retrying...'; sleep 3; done; node dist/server.js"]
