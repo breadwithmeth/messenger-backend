@@ -264,8 +264,19 @@ export async function getMyActivityStats(req: AuthRequest, res: Response) {
       }),
     ]);
 
-    const presenceSorted = [...presenceHistory].sort((a: any, b: any) => new Date(a.changedAt).getTime() - new Date(b.changedAt).getTime());
-    const messagesBuckets = presenceSorted.map((p) => ({ status: p.status, changedAt: p.changedAt, messages: [] as { timestamp: Date; type: string }[] }));
+    const presenceSorted = [...presenceHistory]
+      .map((p: any) => {
+        const ts = new Date(p.changedAt);
+        return { status: p.status, changedAt: ts.toISOString() };
+      })
+      .sort((a: any, b: any) => new Date(a.changedAt).getTime() - new Date(b.changedAt).getTime());
+
+    const messagesBuckets = presenceSorted.map((p) => ({
+      status: p.status,
+      changedAt: p.changedAt,
+      timestamp: p.changedAt,
+      messages: [] as { timestamp: Date; type: string }[],
+    }));
 
     if (messagesBuckets.length > 0) {
       let msgIdx = 0;
