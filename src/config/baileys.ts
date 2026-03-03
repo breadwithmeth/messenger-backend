@@ -391,6 +391,23 @@ export async function ensureChat(
         })
       : null;
 
+    // fallback: ищем по remoteJid независимо от receivingPhoneJid, чтобы не плодить дубликаты
+    if (!chat) {
+      chat = await prisma.chat.findFirst({
+        where: {
+          organizationId,
+          channel: 'whatsapp',
+          remoteJid: normalizedRemoteJid,
+        },
+      });
+      if (chat && myJidNormalized && chat.receivingPhoneJid !== myJidNormalized) {
+        chat = await prisma.chat.update({
+          where: { id: chat.id },
+          data: { receivingPhoneJid: myJidNormalized, organizationPhoneId },
+        });
+      }
+    }
+
     if (!chat) {
       const emptyChat = await prisma.chat.findFirst({
         where: {
