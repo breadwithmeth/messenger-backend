@@ -483,11 +483,11 @@ export async function ensureChat(
         }
       } catch (e: any) {
         if (e?.code === 'P2002') {
+          // Уникальное ограничение на (organizationId, channel, remoteJid)
           const existing = await prisma.chat.findFirst({
             where: {
               organizationId,
               channel: 'whatsapp',
-              receivingPhoneJid: myJidNormalized,
               remoteJid: normalizedRemoteJid,
             },
           });
