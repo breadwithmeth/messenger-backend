@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authMiddleware } from '../middlewares/authMiddleware';
 import {
   getMyEmployee,
+  getMyActivityStats,
   listEmployees,
   listMyShifts,
   setMyPresence,
@@ -18,6 +19,7 @@ const router = Router();
 router.use(authMiddleware);
 
 router.get('/me', getMyEmployee);
+router.get('/me/activity', getMyActivityStats);
 router.post('/shifts/start', startMyShift);
 router.post('/shifts/stop', stopMyShift);
 router.get('/shifts', listMyShifts);

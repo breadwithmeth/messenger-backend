@@ -29,3 +29,8 @@ export type ShiftDto = {
   stoppedAt?: string;
   status?: string;
 };
+
+export type PresenceHistoryItem = {
+  status: PresenceStatus;
+  changedAt: string; // ISO timestamp
+};

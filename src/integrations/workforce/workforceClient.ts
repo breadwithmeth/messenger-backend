@@ -8,6 +8,7 @@ import {
   PresenceStatus,
   ShiftDto,
   SyncEmployeeRequest,
+  PresenceHistoryItem,
 } from './types';
 
 export type FetchLike = (
@@ -105,6 +106,15 @@ export class WorkforceClient {
       method: 'PATCH',
       path: `/internal/employees/${encodeURIComponent(employeeId)}/presence`,
       body: { status },
+      ctx,
+    });
+  }
+
+  getPresenceHistory(employeeId: string, limit = 50, ctx?: RequestContext): Promise<PresenceHistoryItem[]> {
+    const safeLimit = Math.max(1, Math.min(200, Math.trunc(limit)));
+    return this.request<PresenceHistoryItem[]>({
+      method: 'GET',
+      path: `/internal/employees/${encodeURIComponent(employeeId)}/presence-history?limit=${safeLimit}`,
       ctx,
     });
   }
