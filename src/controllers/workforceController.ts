@@ -265,7 +265,7 @@ export async function getMyActivityStats(req: AuthRequest, res: Response) {
     ]);
 
     const presenceSorted = [...presenceHistory].sort((a: any, b: any) => new Date(a.changedAt).getTime() - new Date(b.changedAt).getTime());
-    const messagesBuckets = presenceSorted.map((p) => ({ status: p.status, changedAt: p.changedAt, messages: [] as { id: number; timestamp: Date; direction: 'inbound' | 'outbound'; chatId: number; channel?: string | null }[] }));
+    const messagesBuckets = presenceSorted.map((p) => ({ status: p.status, changedAt: p.changedAt, messages: [] as { timestamp: Date; type: string }[] }));
 
     if (messagesBuckets.length > 0) {
       let msgIdx = 0;
@@ -280,13 +280,7 @@ export async function getMyActivityStats(req: AuthRequest, res: Response) {
             continue;
           }
           if (t >= end) break;
-          messagesBuckets[i].messages.push({
-            id: m.id,
-            timestamp: m.timestamp,
-            direction: m.fromMe ? 'outbound' : 'inbound',
-            chatId: m.chatId,
-            channel: m.channel,
-          });
+          messagesBuckets[i].messages.push({ timestamp: m.timestamp, type: m.type });
           msgIdx += 1;
         }
       }
@@ -296,23 +290,6 @@ export async function getMyActivityStats(req: AuthRequest, res: Response) {
       range: { from: from.toISOString(), to: to.toISOString() },
       employee: { id: employee.id, keycloakId: employee.keycloakId, name: employee.username ?? null, email: employee.email ?? null },
       presenceHistory: messagesBuckets,
-      messages: {
-        inbound: inboundMessages,
-        outbound: outboundMessages,
-        recent: recentMessagesAsc
-          .slice()
-          .reverse()
-          .map((m) => ({
-            id: m.id,
-            chatId: m.chatId,
-            direction: m.fromMe ? 'outbound' : 'inbound',
-            content: m.content,
-            type: m.type,
-            timestamp: m.timestamp,
-            channel: m.channel,
-            senderUserId: m.senderUserId,
-          })),
-      },
     });
   } catch (err) {
     const mapped = mapUpstreamToHttp(err);
