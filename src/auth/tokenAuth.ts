@@ -5,9 +5,7 @@ import { randomUUID } from 'crypto';
 import prisma from '../config/prisma';
 import { normalizeAppRole } from './roleUtils';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'secret';
-
-export type AuthSource = 'local-jwt' | 'keycloak-jwt';
+export type AuthSource = 'keycloak-jwt';
 
 export interface AuthenticatedPrincipal {
   userId: number;
@@ -20,14 +18,6 @@ export interface AuthenticatedPrincipal {
   source: AuthSource;
   claims?: Record<string, unknown>;
 }
-
-type LocalPayload = {
-  userId?: number;
-  id?: number;
-  organizationId?: number;
-  email?: string;
-  role?: string;
-};
 
 let cachedIssuer: string | null = null;
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
@@ -141,27 +131,6 @@ function getOrCreateJwks(issuer: string) {
   cachedJwks = createRemoteJWKSet(jwksUrl);
   cachedIssuer = issuer;
   return cachedJwks;
-}
-
-function verifyLocalJwt(token: string): AuthenticatedPrincipal | null {
-  try {
-    const payload = jwt.verify(token, JWT_SECRET) as LocalPayload;
-
-    const userId = toNumber(payload.userId ?? payload.id);
-    const organizationId = toNumber(payload.organizationId);
-
-    if (!userId || !organizationId) return null;
-
-    return {
-      userId,
-      organizationId,
-      email: payload.email,
-      role: normalizeAppRole(typeof payload.role === 'string' ? payload.role : undefined),
-      source: 'local-jwt',
-    };
-  } catch {
-    return null;
-  }
 }
 
 async function resolveOrganizationIdFromClaims(payload: JWTPayload): Promise<number> {
@@ -321,9 +290,6 @@ async function verifyKeycloakJwt(token: string): Promise<AuthenticatedPrincipal 
 }
 
 export async function authenticateToken(token: string): Promise<AuthenticatedPrincipal> {
-  const local = verifyLocalJwt(token);
-  if (local) return local;
-
   const keycloak = await verifyKeycloakJwt(token);
   if (keycloak) return keycloak;
 
