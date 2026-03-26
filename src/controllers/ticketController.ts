@@ -6,120 +6,351 @@ import pino from 'pino';
 
 const logger = pino({ level: 'info' });
 
+type TicketHistoryPoint = {
+  oldValue: string | null;
+  newValue: string | null;
+  createdAt: Date;
+};
+
+function extractTicketTimeline(
+  currentTicketNumber: number | null,
+  currentStatus: string | null,
+  currentPriority: string | null,
+  history: TicketHistoryPoint[] = []
+) {
+  const timeline: Array<{ number: number; status: string | null; priority: string | null; createdAt?: Date }> = [];
+  const seen = new Set<number>();
+
+  if (typeof currentTicketNumber === 'number') {
+    timeline.push({
+      number: currentTicketNumber,
+      status: currentStatus,
+      priority: currentPriority,
+    });
+    seen.add(currentTicketNumber);
+  }
+
+  for (const item of history) {
+    const oldNumber = item.oldValue ? Number(item.oldValue) : NaN;
+    const newNumber = item.newValue ? Number(item.newValue) : NaN;
+
+    if (!Number.isNaN(newNumber) && !seen.has(newNumber)) {
+      timeline.push({
+        number: newNumber,
+        status: null,
+        priority: null,
+        createdAt: item.createdAt,
+      });
+      seen.add(newNumber);
+    }
+
+    if (!Number.isNaN(oldNumber) && !seen.has(oldNumber)) {
+      timeline.push({
+        number: oldNumber,
+        status: null,
+        priority: null,
+        createdAt: item.createdAt,
+      });
+      seen.add(oldNumber);
+    }
+  }
+
+  return timeline;
+}
+
 /**
- * Получить список тикетов с фильтрацией и пагинацией
+ * Получить список тикетов с теми же фильтрами/сортировкой, что и /api/chats
  */
 export async function listTickets(req: Request, res: Response) {
   try {
     const organizationId = res.locals.organizationId;
+    const userId = res.locals.userId;
     const {
       status,
+      assigned,
+      assignedToMe,
       priority,
-      assignedUserId,
-      category,
-      page = 1,
-      limit = 20,
-      sortBy = 'updatedAt',
-      sortOrder = 'desc'
+      channel,
+      includeProfile,
+      search,
+      searchType,
+      limit = '50',
+      offset = '0',
+      sortBy = 'lastMessageAt',
+      sortOrder = 'desc',
     } = req.query;
 
     if (!organizationId) {
+      logger.warn('[listTickets] organizationId не определен в res.locals.');
       return res.status(400).json({ error: 'organizationId обязателен' });
     }
 
-    // Построение фильтров
-    const where: any = {
+    const take = Math.min(parseInt(limit as string, 10) || 50, 100);
+    let skip = parseInt(offset as string, 10) || 0;
+    if (!req.query.offset && req.query.page) {
+      const pageNum = parseInt(req.query.page as string, 10);
+      if (!Number.isNaN(pageNum) && pageNum > 1) {
+        skip = (pageNum - 1) * take;
+      }
+    }
+
+    const whereCondition: any = {
       organizationId,
-      ticketNumber: { not: null } // Только чаты с номером тикета
+      ticketNumber: { not: null },
     };
 
-    if (status) where.status = status as string;
-    if (priority) where.priority = priority as string;
-    if (assignedUserId) where.assignedUserId = parseInt(assignedUserId as string);
-    if (category) where.category = category as string;
+    if (search && typeof search === 'string' && search.trim().length > 0) {
+      const searchQuery = search.trim();
+      const searchType_ = searchType === 'message' ? 'message' : searchType === 'phone' ? 'phone' : 'all';
 
-    // Пагинация
-    const skip = (parseInt(page as string) - 1) * parseInt(limit as string);
-    const take = parseInt(limit as string);
+      whereCondition.OR = whereCondition.OR || [];
 
-    // Сортировка
-    const orderBy: any = {};
-    orderBy[sortBy as string] = sortOrder as string;
-
-    // Получить тикеты
-    const [tickets, total] = await Promise.all([
-      prisma.chat.findMany({
-        where,
-        skip,
-        take,
-        orderBy,
-        include: {
-          assignedUser: {
-            select: {
-              id: true,
-              name: true,
-              email: true
-            }
+      if (searchType_ === 'phone' || searchType_ === 'all') {
+        whereCondition.OR.push({
+          remoteJid: {
+            contains: searchQuery.replace(/\D/g, ''),
+            mode: 'insensitive',
           },
-          clients: {
-            select: {
-              phoneJid: true,
-              name: true
-            }
+        });
+        whereCondition.OR.push({ name: { contains: searchQuery, mode: 'insensitive' } });
+        whereCondition.OR.push({ telegramUsername: { contains: searchQuery, mode: 'insensitive' } });
+      }
+
+      if (searchType_ === 'message' || searchType_ === 'all') {
+        const matchingChats = await prisma.chat.findMany({
+          where: {
+            organizationId,
+            ticketNumber: { not: null },
+            messages: {
+              some: {
+                content: {
+                  contains: searchQuery,
+                  mode: 'insensitive',
+                },
+              },
+            },
           },
-          messages: {
-            take: 1,
-            orderBy: { timestamp: 'desc' },
-            select: {
-              id: true,
-              content: true,
-              timestamp: true
-            }
-          }
+          select: { id: true },
+        });
+
+        const matchingChatIds = matchingChats.map((chat) => chat.id);
+        if (matchingChatIds.length > 0) {
+          whereCondition.OR.push({ id: { in: matchingChatIds } });
         }
-      }),
-      prisma.chat.count({ where })
-    ]);
+      }
 
-    // Форматирование ответа
-    const formattedTickets = tickets.map(ticket => {
-      const assignedUser = ticket.assignedUser;
-      const client = ticket.clients && ticket.clients.length > 0 ? ticket.clients[0] : null;
-      const lastMessage = ticket.messages && ticket.messages.length > 0 ? ticket.messages[0] : null;
+      if (whereCondition.OR && whereCondition.OR.length === 0) {
+        delete whereCondition.OR;
+      }
+    }
 
-      return {
-        id: ticket.id,
-        ticketNumber: ticket.ticketNumber,
-        status: ticket.status,
-        priority: ticket.priority,
-        subject: ticket.subject,
-        category: ticket.category,
+    if (channel && typeof channel === 'string' && (channel === 'whatsapp' || channel === 'telegram')) {
+      whereCondition.channel = channel;
+    }
+
+    if (status && typeof status === 'string' && status.trim().length > 0) {
+      const statuses = status.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+      const validStatuses = ['new', 'open', 'in_progress', 'pending', 'resolved', 'closed'];
+      const filteredStatuses = statuses.filter((s) => validStatuses.includes(s));
+
+      if (filteredStatuses.length === 1) {
+        whereCondition.status = filteredStatuses[0];
+      } else if (filteredStatuses.length > 1) {
+        whereCondition.status = { in: filteredStatuses };
+      }
+    }
+
+    if (priority && typeof priority === 'string') {
+      whereCondition.priority = priority;
+    }
+
+    if (assignedToMe === 'true') {
+      if (!userId) {
+        return res.status(400).json({ error: 'userId не определен. Требуется авторизация.' });
+      }
+      whereCondition.assignedUserId = userId;
+    } else if (assigned === 'true') {
+      whereCondition.assignedUserId = { not: null };
+    } else if (assigned === 'false') {
+      whereCondition.assignedUserId = null;
+    }
+
+    const allowedSortFields = [
+      'lastMessageAt',
+      'createdAt',
+      'priority',
+      'unreadCount',
+      'ticketNumber',
+      'status',
+      'name',
+    ];
+
+    const sortField = typeof sortBy === 'string' && allowedSortFields.includes(sortBy) ? sortBy : 'lastMessageAt';
+    const sortDirection = sortOrder === 'asc' ? 'asc' : 'desc';
+
+    let orderBy: any;
+    if (req.query.sortBy === undefined) {
+      orderBy = [
+        { priority: 'desc' },
+        { unreadCount: 'desc' },
+        { lastMessageAt: 'desc' },
+      ];
+    } else {
+      orderBy = { [sortField]: sortDirection };
+    }
+
+    const totalCount = await prisma.chat.count({ where: whereCondition });
+
+    const tickets = await prisma.chat.findMany({
+      where: whereCondition,
+      take,
+      skip,
+      select: {
+        id: true,
+        name: true,
+        channel: true,
+        remoteJid: true,
+        receivingPhoneJid: true,
+        isGroup: true,
+        status: true,
+        priority: true,
+        unreadCount: true,
+        lastMessageAt: true,
+        ticketNumber: true,
+        createdAt: true,
+        updatedAt: true,
+        subject: true,
+        category: true,
+        tags: true,
+        assignedAt: true,
+        resolvedAt: true,
+        closedAt: true,
+        closeReason: true,
+        ticketHistory: {
+          where: {
+            changeType: {
+              in: ['ticket_created', 'ticket_reopened'],
+            },
+          },
+          select: {
+            oldValue: true,
+            newValue: true,
+            createdAt: true,
+          },
+          orderBy: {
+            createdAt: 'desc',
+          },
+          take: 30,
+        },
+        organizationPhone: {
+          select: {
+            id: true,
+            phoneJid: true,
+            displayName: true,
+            connectionType: true,
+          },
+        },
+        telegramBot: {
+          select: {
+            id: true,
+            botUsername: true,
+            botName: true,
+          },
+        },
+        telegramChatId: true,
+        telegramUsername: true,
+        telegramFirstName: true,
+        telegramLastName: true,
+        assignedUser: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+        organizationClients: {
+          select: {
+            id: true,
+            name: true,
+            clientType: true,
+            segment: true,
+            status: true,
+            whatsappJid: true,
+            telegramUserId: true,
+          },
+        },
+        messages: {
+          take: 1,
+          orderBy: {
+            timestamp: 'desc',
+          },
+          select: {
+            id: true,
+            content: true,
+            senderJid: true,
+            timestamp: true,
+            fromMe: true,
+            type: true,
+            isReadByOperator: true,
+            mediaUrl: true,
+            quotedMessageId: true,
+            quotedContent: true,
+          },
+        },
+        _count: {
+          select: {
+            messages: true,
+          },
+        },
+      },
+      orderBy,
+    });
+
+    const wantProfile = String(includeProfile).toLowerCase() === 'true';
+    const formattedTickets = tickets.map((ticket) => {
+      const ticketsTimeline = extractTicketTimeline(
+        ticket.ticketNumber,
+        ticket.status,
+        ticket.priority,
+        ticket.ticketHistory || []
+      );
+
+      const base: any = {
+        ...ticket,
+        lastMessage: ticket.messages.length > 0 ? ticket.messages[0] : null,
+        ticket: ticket.ticketNumber
+          ? {
+              number: ticket.ticketNumber,
+              status: ticket.status,
+              priority: ticket.priority,
+            }
+          : null,
+        tickets: ticketsTimeline,
+        hasUnreadMessages: (ticket.unreadCount || 0) > 0,
+        hasReadMessages: (ticket._count?.messages || 0) > (ticket.unreadCount || 0),
         tags: ticket.tags ? JSON.parse(ticket.tags) : [],
-        assignedUser: assignedUser ? {
-          id: assignedUser.id,
-          name: assignedUser.name
-        } : null,
-        client,
-        unreadCount: ticket.unreadCount,
-        createdAt: ticket.createdAt,
-        updatedAt: ticket.updatedAt,
-        lastMessageAt: ticket.lastMessageAt,
-        lastMessage,
-        // Добавляем недостающие поля
-        name: ticket.name,
-        remoteJid: ticket.remoteJid,
-        receivingPhoneJid: ticket.receivingPhoneJid
       };
+
+      delete base.messages;
+      delete base.ticketHistory;
+      delete base._count;
+
+      if (wantProfile) {
+        base.displayName = ticket.name || null;
+        base.profilePhotoUrl = null;
+      }
+
+      return base;
     });
 
     res.json({
       tickets: formattedTickets,
       pagination: {
-        total,
-        page: parseInt(page as string),
-        limit: parseInt(limit as string),
-        pages: Math.ceil(total / parseInt(limit as string))
-      }
+        total: totalCount,
+        limit: take,
+        offset: skip,
+        hasMore: skip + take < totalCount,
+      },
     });
   } catch (error: any) {
     logger.error({ error: error.message }, '[listTickets] Ошибка при получении списка тикетов');
@@ -779,6 +1010,7 @@ export async function getTicketMessages(req: Request, res: Response) {
   try {
     const organizationId = res.locals.organizationId;
     const ticketNumber = parseInt(req.params.ticketNumber as string, 10);
+    const { limit = '100', offset = '0', before } = req.query;
 
     if (!organizationId) {
       logger.warn('[getTicketMessages] Несанкционированный доступ: organizationId не определен в res.locals.');
@@ -790,14 +1022,19 @@ export async function getTicketMessages(req: Request, res: Response) {
       return res.status(400).json({ error: 'Некорректный ticketNumber. Ожидалось число.' });
     }
 
-    // Находим чат по ticketNumber
+    const take = Math.min(parseInt(limit as string, 10) || 100, 200);
+    const skip = parseInt(offset as string, 10) || 0;
+
     const chat = await prisma.chat.findFirst({
       where: {
-        ticketNumber: ticketNumber,
-        organizationId: organizationId,
+        ticketNumber,
+        organizationId,
       },
       select: {
         id: true,
+        ticketNumber: true,
+        status: true,
+        priority: true,
         assignedUserId: true,
         assignedUser: {
           select: {
@@ -805,6 +1042,28 @@ export async function getTicketMessages(req: Request, res: Response) {
             name: true,
             email: true,
           },
+        },
+        organizationClients: {
+          select: {
+            id: true,
+          },
+          take: 1,
+        },
+        ticketHistory: {
+          where: {
+            changeType: {
+              in: ['ticket_created', 'ticket_reopened'],
+            },
+          },
+          select: {
+            oldValue: true,
+            newValue: true,
+            createdAt: true,
+          },
+          orderBy: {
+            createdAt: 'desc',
+          },
+          take: 30,
         },
       },
     });
@@ -814,13 +1073,43 @@ export async function getTicketMessages(req: Request, res: Response) {
       return res.status(404).json({ error: 'Тикет не найден или не принадлежит вашей организации.' });
     }
 
-    // Получаем все сообщения для этого чата
+    const whereCondition: any = {
+      chatId: chat.id,
+      organizationId,
+    };
+
+    if (before && typeof before === 'string') {
+      const beforeDate = new Date(before);
+      if (!isNaN(beforeDate.getTime())) {
+        whereCondition.timestamp = { lt: beforeDate };
+      }
+    }
+
+    const totalCount = await prisma.message.count({
+      where: { chatId: chat.id, organizationId },
+    });
+
     const messages = await prisma.message.findMany({
-      where: {
-        chatId: chat.id,
-        organizationId: organizationId,
-      },
-      include: {
+      where: whereCondition,
+      take,
+      skip,
+      select: {
+        id: true,
+        whatsappMessageId: true,
+        content: true,
+        senderJid: true,
+        receivingPhoneJid: true,
+        fromMe: true,
+        type: true,
+        mediaUrl: true,
+        filename: true,
+        mimeType: true,
+        size: true,
+        timestamp: true,
+        status: true,
+        isReadByOperator: true,
+        quotedMessageId: true,
+        quotedContent: true,
         senderUser: {
           select: {
             id: true,
@@ -830,15 +1119,59 @@ export async function getTicketMessages(req: Request, res: Response) {
         },
       },
       orderBy: {
-        timestamp: 'asc',
+        timestamp: 'desc',
       },
     });
+
+    const messagesInChronologicalOrder = messages.reverse();
+
+    const tickets = extractTicketTimeline(
+      chat.ticketNumber,
+      chat.status,
+      chat.priority,
+      chat.ticketHistory || []
+    );
+
+    const primaryClientId = chat.organizationClients?.[0]?.id ?? null;
 
     const hasResponsible = Boolean(chat.assignedUserId);
     const responsibleUser = hasResponsible ? chat.assignedUser : null;
 
-    logger.info(`[getTicketMessages] Успешно получено ${messages.length} сообщений для тикета ${ticketNumber} (чат ${chat.id}) организации ${organizationId}.`);
-    res.status(200).json({ messages: messages.map((m) => ({ ...m, hasResponsible, responsibleUser })) });
+    const messagesWithTicket = messagesInChronologicalOrder.map((message) => {
+      return {
+        ...message,
+        ticketNumber: chat.ticketNumber,
+        ticketStatus: chat.status,
+        ticketPriority: chat.priority,
+        clientId: primaryClientId,
+        hasResponsible,
+        responsibleUser,
+      };
+    });
+
+    res.status(200).json({
+      chat: {
+        id: chat.id,
+        ticketNumber: chat.ticketNumber,
+      },
+      ticket: chat.ticketNumber
+        ? {
+            number: chat.ticketNumber,
+            status: chat.status,
+            priority: chat.priority,
+          }
+        : null,
+      tickets,
+      messages: messagesWithTicket,
+      pagination: {
+        total: totalCount,
+        limit: take,
+        offset: skip,
+        hasMore: skip + take < totalCount,
+        oldestTimestamp: messagesWithTicket.length > 0 ? messagesWithTicket[0].timestamp : null,
+        newestTimestamp: messagesWithTicket.length > 0 ? messagesWithTicket[messagesWithTicket.length - 1].timestamp : null,
+      },
+    });
   } catch (error: any) {
     logger.error(`[getTicketMessages] Ошибка при получении сообщений для тикета ${req.params.ticketNumber} организации ${res.locals.organizationId}:`, error);
     res.status(500).json({
