@@ -1,5 +1,6 @@
 import pino from 'pino';
 import { prisma } from '../../config/authStorage';
+import { ChatMappingRecord } from './bitrix.types';
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 
@@ -14,7 +15,27 @@ export class BitrixRepository {
   private readonly mappingCache = new Map<string, BitrixMappingRecord>();
   private readonly leadCache = new Map<number, BitrixMappingRecord>();
   private readonly contactCache = new Map<string, number>();
-  private readonly chatMappingCache = new Map<number, { externalUserId: string; bitrixChatId?: string | null; source: string }>();
+  private readonly chatMappingCache = new Map<number, ChatMappingRecord>();
+  private readonly chatByBitrixCache = new Map<string, ChatMappingRecord>();
+  private readonly chatByExternalCache = new Map<string, ChatMappingRecord>();
+
+  private getBitrixChatKey(source: string, bitrixChatId: string): string {
+    return `${source.toUpperCase()}:${bitrixChatId}`;
+  }
+
+  private getExternalUserKey(source: string, externalUserId: string): string {
+    return `${source.toUpperCase()}:${externalUserId}`;
+  }
+
+  private cacheChatMapping(data: ChatMappingRecord): void {
+    this.chatMappingCache.set(data.chatId, data);
+
+    if (data.bitrixChatId) {
+      this.chatByBitrixCache.set(this.getBitrixChatKey(data.source, data.bitrixChatId), data);
+    }
+
+    this.chatByExternalCache.set(this.getExternalUserKey(data.source, data.externalUserId), data);
+  }
 
   async getMappingByUserId(userId: string): Promise<BitrixMappingRecord | null> {
     const fromCache = this.mappingCache.get(userId);
@@ -146,26 +167,121 @@ export class BitrixRepository {
         source: params.source,
       },
     });
-    this.chatMappingCache.set(params.chatId, {
+    this.cacheChatMapping({
+      chatId: params.chatId,
       externalUserId: params.externalUserId,
       bitrixChatId: params.bitrixChatId,
       source: params.source,
     });
   }
 
-  async getChatMapping(chatId: number): Promise<{ externalUserId: string; bitrixChatId?: string | null; source: string } | null> {
+  async getChatMapping(chatId: number): Promise<ChatMappingRecord | null> {
     const cached = this.chatMappingCache.get(chatId);
     if (cached) return cached;
 
     const row = await prisma.chatMapping.findUnique({ where: { chatId } });
     if (!row) return null;
 
-    const mapped = {
+    const mapped: ChatMappingRecord = {
+      chatId: row.chatId,
       externalUserId: row.externalUserId,
       bitrixChatId: row.bitrixChatId,
       source: row.source,
     };
-    this.chatMappingCache.set(chatId, mapped);
+    this.cacheChatMapping(mapped);
     return mapped;
+  }
+
+  async getChatMappingByBitrixChatId(bitrixChatId: string, source?: string): Promise<ChatMappingRecord | null> {
+    const normalizedSource = source?.toUpperCase();
+
+    if (normalizedSource) {
+      const cached = this.chatByBitrixCache.get(this.getBitrixChatKey(normalizedSource, bitrixChatId));
+      if (cached) return cached;
+    }
+
+    const row = await prisma.chatMapping.findFirst({
+      where: {
+        bitrixChatId,
+        ...(normalizedSource ? { source: normalizedSource } : {}),
+      },
+    });
+
+    if (!row) return null;
+
+    const mapped: ChatMappingRecord = {
+      chatId: row.chatId,
+      externalUserId: row.externalUserId,
+      bitrixChatId: row.bitrixChatId,
+      source: row.source,
+    };
+
+    this.cacheChatMapping(mapped);
+    return mapped;
+  }
+
+  async getChatMappingByExternalUserId(externalUserId: string, source?: string): Promise<ChatMappingRecord | null> {
+    const normalizedSource = source?.toUpperCase();
+
+    if (normalizedSource) {
+      const cached = this.chatByExternalCache.get(this.getExternalUserKey(normalizedSource, externalUserId));
+      if (cached) return cached;
+    }
+
+    const row = await prisma.chatMapping.findFirst({
+      where: {
+        externalUserId,
+        ...(normalizedSource ? { source: normalizedSource } : {}),
+      },
+    });
+
+    if (!row) return null;
+
+    const mapped: ChatMappingRecord = {
+      chatId: row.chatId,
+      externalUserId: row.externalUserId,
+      bitrixChatId: row.bitrixChatId,
+      source: row.source,
+    };
+
+    this.cacheChatMapping(mapped);
+    return mapped;
+  }
+
+  async tryMarkIncomingEventProcessed(params: {
+    dedupKey: string;
+    source: string;
+    bitrixChatId?: string;
+    externalUserId?: string;
+    externalMessageId?: string;
+  }): Promise<boolean> {
+    try {
+      await prisma.bitrixIncomingEvent.create({
+        data: {
+          dedupKey: params.dedupKey,
+          source: params.source,
+          bitrixChatId: params.bitrixChatId,
+          externalUserId: params.externalUserId,
+          externalMessageId: params.externalMessageId,
+        },
+      });
+
+      return true;
+    } catch (error: any) {
+      if (error?.code === 'P2002') {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  async unmarkIncomingEventProcessed(dedupKey: string): Promise<void> {
+    try {
+      await prisma.bitrixIncomingEvent.delete({ where: { dedupKey } });
+    } catch (error: any) {
+      if (error?.code !== 'P2025') {
+        throw error;
+      }
+    }
   }
 }

@@ -80,6 +80,22 @@ export interface BitrixImIncomingPayload {
   };
 }
 
+export interface BitrixIncomingMessageContext {
+  text: string;
+  source: ChatSource;
+  bitrixChatId?: string;
+  externalUserId?: string;
+  externalMessageId?: string;
+  localChatIdCandidate?: number;
+}
+
+export interface ChatMappingRecord {
+  chatId: number;
+  externalUserId: string;
+  bitrixChatId?: string | null;
+  source: string;
+}
+
 export type ChatSource = 'TELEGRAM' | 'WHATSAPP';
 
 export interface SyncMessageContext {

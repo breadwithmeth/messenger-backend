@@ -578,3 +578,17 @@ model BitrixToken {
   @@index([expiresAt])
   @@map("bitrix_tokens")
 }
+
+model BitrixIncomingEvent {
+  id                Int      @id @default(autoincrement())
+  dedupKey          String   @unique
+  source            String
+  bitrixChatId      String?
+  externalUserId    String?
+  externalMessageId String?
+  createdAt         DateTime @default(now())
+
+  @@index([source, bitrixChatId])
+  @@index([source, externalUserId])
+  @@map("bitrix_incoming_event")
+}

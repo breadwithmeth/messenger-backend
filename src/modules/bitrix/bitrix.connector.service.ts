@@ -1,6 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
 import pino from 'pino';
-import { BitrixConnectorMessagePayload, ChatSource } from './bitrix.types';
+import { BitrixConnectorMessagePayload, BitrixIncomingMessageContext, ChatSource } from './bitrix.types';
 import { BitrixRepository } from './bitrix.repository';
 import { prisma } from '../../config/authStorage';
 import { createWABAService } from '../../services/wabaService';
@@ -29,7 +29,13 @@ export class BitrixConnectorService {
   private lastCallTs = 0;
   private readonly incomingSeen = new Map<string, number>();
   private readonly incomingTtlMs = 5 * 60 * 1000;
+  private readonly outgoingSuppression = new Map<string, number>();
+  private readonly outgoingSuppressionTtlMs = 2 * 60 * 1000;
   private lastMissingAuthLogTs = 0;
+
+  private logSkip(reason: string, context: Record<string, unknown>): void {
+    logger.info({ reason, ...context }, '[BitrixConnector] Message skipped');
+  }
 
   constructor() {
     const explicitRestBase = BITRIX_DOMAIN ? `https://${BITRIX_DOMAIN}/rest/` : '';
@@ -55,24 +61,38 @@ export class BitrixConnectorService {
     });
 
     if (!message) {
-      logger.warn({ messageId }, '[BitrixConnector] Message not found');
+      this.logSkip('message_not_found', { messageId });
       return;
     }
 
-    if (message.fromMe) {
-      logger.debug({ messageId }, '[BitrixConnector] Outgoing message skipped');
+    const suppressionKey = this.getOutboundSuppressionKey(message.chatId, message.content || '');
+    const suppressionTs = this.outgoingSuppression.get(suppressionKey);
+    if (suppressionTs && Date.now() - suppressionTs < this.outgoingSuppressionTtlMs) {
+      this.logSkip('suppressed_echo_message', { messageId, chatId: message.chatId });
       return;
     }
 
     const text = (message.content || '').trim();
     if (!text) {
-      logger.debug({ messageId }, '[BitrixConnector] Empty message skipped');
+      this.logSkip('empty_text', {
+        messageId,
+        chatId: message.chatId,
+        fromMe: message.fromMe,
+        type: message.type,
+        channel: message.channel,
+      });
       return;
     }
 
     const source: ChatSource = message.channel === 'telegram' ? 'TELEGRAM' : 'WHATSAPP';
-    const chatExternalId = String(message.chatId);
-    const externalUserId = message.telegramUserId || message.remoteJid || message.senderJid || `chat:${message.chatId}`;
+    const existingMapping = await this.repo.getChatMapping(message.chatId);
+    const chatExternalId = existingMapping?.bitrixChatId || String(message.chatId);
+    const externalUserId =
+      existingMapping?.externalUserId ||
+      message.telegramUserId ||
+      message.remoteJid ||
+      message.senderJid ||
+      `chat:${message.chatId}`;
     const displayName = message.telegramUsername || message.senderJid || 'User';
 
     await this.repo.upsertChatMapping({
@@ -108,6 +128,12 @@ export class BitrixConnectorService {
     try {
       const authToken = await this.getAuthToken();
       if (authToken === null && !HAS_WEBHOOK_CREDENTIALS) {
+        this.logSkip('no_auth_context', {
+          messageId,
+          chatId: message.chatId,
+          fromMe: message.fromMe,
+          channel: message.channel,
+        });
         this.logMissingAuthOnce();
         return;
       }
@@ -161,35 +187,68 @@ export class BitrixConnectorService {
   }
 
   async handleIncomingFromBitrix(payload: any): Promise<void> {
-    const text = String(payload?.data?.message?.text || '').trim();
-    const chatIdStr = payload?.data?.chat?.id;
-
-    if (!text) {
-      logger.debug('[BitrixConnector] Incoming empty text, skip');
-      return;
-    }
-    if (!chatIdStr) {
-      logger.warn('[BitrixConnector] Incoming chat id missing');
+    const parsed = this.parseIncomingPayload(payload);
+    if (!parsed) {
+      this.logSkip('incoming_payload_invalid', { hasData: Boolean(payload?.data) });
       return;
     }
 
-    const chatId = Number(chatIdStr);
-    if (!Number.isInteger(chatId)) {
-      logger.warn({ chatIdStr }, '[BitrixConnector] Invalid chat id');
-      return;
-    }
+    const { text, source, bitrixChatId, externalUserId, externalMessageId, localChatIdCandidate } = parsed;
 
-    const hash = `${chatId}:${text}`;
+    const dedupKey = externalMessageId
+      ? `msg:${externalMessageId}`
+      : `fallback:${source}:${bitrixChatId || '-'}:${externalUserId || '-'}:${text}`;
+
     const now = Date.now();
-    const prev = this.incomingSeen.get(hash);
+    const prev = this.incomingSeen.get(dedupKey);
     if (prev && now - prev < this.incomingTtlMs) {
-      logger.debug({ chatId }, '[BitrixConnector] Duplicate incoming skipped');
+      this.logSkip('incoming_duplicate', { dedupKey });
       return;
     }
-    this.incomingSeen.set(hash, now);
+
+    const marked = await this.repo.tryMarkIncomingEventProcessed({
+      dedupKey,
+      source,
+      bitrixChatId,
+      externalUserId,
+      externalMessageId,
+    });
+
+    if (!marked) {
+      this.logSkip('incoming_duplicate_persistent', { dedupKey });
+      return;
+    }
+
+    this.incomingSeen.set(dedupKey, now);
+
+    let resolvedChatId: number | null = null;
+
+    if (bitrixChatId) {
+      const byBitrixChat = await this.repo.getChatMappingByBitrixChatId(bitrixChatId, source);
+      if (byBitrixChat?.chatId) {
+        resolvedChatId = byBitrixChat.chatId;
+      }
+    }
+
+    if (!resolvedChatId && externalUserId) {
+      const byExternalUser = await this.repo.getChatMappingByExternalUserId(externalUserId, source);
+      if (byExternalUser?.chatId) {
+        resolvedChatId = byExternalUser.chatId;
+      }
+    }
+
+    if (!resolvedChatId && localChatIdCandidate) {
+      resolvedChatId = localChatIdCandidate;
+    }
+
+    if (!resolvedChatId) {
+      this.logSkip('incoming_chat_mapping_not_found', { source, bitrixChatId, externalUserId });
+      await this.repo.unmarkIncomingEventProcessed(dedupKey);
+      return;
+    }
 
     const chat = await prisma.chat.findUnique({
-      where: { id: chatId },
+      where: { id: resolvedChatId },
       include: {
         organizationPhone: true,
         telegramBot: true,
@@ -197,11 +256,78 @@ export class BitrixConnectorService {
     });
 
     if (!chat) {
-      logger.warn({ chatId }, '[BitrixConnector] Chat not found');
+      this.logSkip('incoming_chat_not_found', { chatId: resolvedChatId });
+      await this.repo.unmarkIncomingEventProcessed(dedupKey);
       return;
     }
 
-    await this.dispatchToChat(chatId, text, chat.channel, chat.organizationPhone, chat.telegramBot, chat);
+    await this.repo.upsertChatMapping({
+      chatId: chat.id,
+      externalUserId: externalUserId || `chat:${chat.id}`,
+      bitrixChatId: bitrixChatId || String(chat.id),
+      source,
+    });
+
+    this.outgoingSuppression.set(this.getOutboundSuppressionKey(chat.id, text), now);
+
+    try {
+      await this.dispatchToChat(chat.id, text, chat.channel, chat.organizationPhone, chat.telegramBot, chat);
+    } catch (error) {
+      await this.repo.unmarkIncomingEventProcessed(dedupKey);
+      throw error;
+    }
+  }
+
+  private parseIncomingPayload(payload: any): BitrixIncomingMessageContext | null {
+    const text = String(
+      payload?.data?.message?.text ||
+        payload?.data?.messages?.[0]?.message?.text ||
+        payload?.message?.text ||
+        '',
+    ).trim();
+
+    if (!text) {
+      return null;
+    }
+
+    const sourceRaw = String(
+      payload?.data?.source || payload?.data?.chat?.source || payload?.source || 'WHATSAPP',
+    ).toUpperCase();
+
+    const source: ChatSource = sourceRaw === 'TELEGRAM' ? 'TELEGRAM' : 'WHATSAPP';
+
+    const bitrixChatId =
+      payload?.data?.chat?.id ||
+      payload?.data?.messages?.[0]?.chat?.id ||
+      payload?.chat?.id ||
+      undefined;
+
+    const externalUserId =
+      payload?.data?.user?.id ||
+      payload?.data?.messages?.[0]?.user?.id ||
+      payload?.user?.id ||
+      undefined;
+
+    const externalMessageId =
+      payload?.data?.message?.id ||
+      payload?.data?.messages?.[0]?.message?.id ||
+      payload?.message?.id ||
+      undefined;
+
+    const localChatIdCandidate = Number(bitrixChatId);
+
+    return {
+      text,
+      source,
+      bitrixChatId: bitrixChatId ? String(bitrixChatId) : undefined,
+      externalUserId: externalUserId ? String(externalUserId) : undefined,
+      externalMessageId: externalMessageId ? String(externalMessageId) : undefined,
+      localChatIdCandidate: Number.isInteger(localChatIdCandidate) ? localChatIdCandidate : undefined,
+    };
+  }
+
+  private getOutboundSuppressionKey(chatId: number, text: string): string {
+    return `${chatId}:${text.trim().toLowerCase()}`;
   }
 
   private async dispatchToChat(
