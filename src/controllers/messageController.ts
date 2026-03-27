@@ -2,7 +2,7 @@
 
 import { Request, Response } from 'express';
 import { getBaileysSock, sendMessage } from '../config/baileys';
-import { jidNormalizedUser } from '@whiskeysockets/baileys';
+import { jidNormalizedUser } from '../utils/jid';
 import pino from 'pino';
 import { prisma } from '../config/authStorage'; // Для получения phoneJid
 import axios from 'axios';

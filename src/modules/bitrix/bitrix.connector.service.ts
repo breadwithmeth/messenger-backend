@@ -5,7 +5,7 @@ import { BitrixRepository } from './bitrix.repository';
 import { prisma } from '../../config/authStorage';
 import { createWABAService } from '../../services/wabaService';
 import { getBaileysSock, sendMessage as sendBaileysMessage } from '../../config/baileys';
-import { jidNormalizedUser } from '@whiskeysockets/baileys';
+import { jidNormalizedUser } from '../../utils/jid';
 import { sendTelegramMessage } from '../../services/telegramService';
 import { bitrixAuthService } from './bitrix.auth.service';
 

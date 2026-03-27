@@ -5,7 +5,7 @@ import { BitrixRepository } from './bitrix.repository';
 import { sendTelegramMessage } from '../../services/telegramService';
 import { createWABAService } from '../../services/wabaService';
 import { getBaileysSock, sendMessage as sendBaileysMessage } from '../../config/baileys';
-import { jidNormalizedUser } from '@whiskeysockets/baileys';
+import { jidNormalizedUser } from '../../utils/jid';
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 

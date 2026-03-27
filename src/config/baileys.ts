@@ -1,24 +1,15 @@
 // src/config/baileys.ts
 
-import makeWASocket, {
-  DisconnectReason,
-  fetchLatestBaileysVersion,
+import type {
   WASocket,
   AuthenticationState,
-  initAuthCreds,
   AnyMessageContent,
   WAMessage,
-  makeCacheableSignalKeyStore,
   SignalDataTypeMap,
   SignalDataSet,
   AuthenticationCreds,
-  BufferJSON,
-  jidNormalizedUser,
-  isJidGroup,
-  isJidBroadcast,
   ConnectionState,
-  downloadContentFromMessage, // <--- ДОБАВИТЬ
-  MediaType, // <--- ДОБАВИТЬ
+  MediaType,
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import { createAuthDBAdapter, prisma, StoredDataType } from './authStorage';
@@ -28,8 +19,24 @@ import { Buffer } from 'buffer';
 import * as fs from 'fs/promises'; // Для работы с файловой системой (удаление папок)
 import path from 'path'; // Для работы с путями файлов
 import { notifyNewChat, notifyNewMessage, notifyChatsUpdated } from '../services/socketService'; // Socket.IO
+import { isJidBroadcast, isJidGroup, jidNormalizedUser } from '../utils/jid';
 
 const logger = pino({ level: 'info' });
+
+type BaileysModule = typeof import('@whiskeysockets/baileys');
+let baileysModulePromise: Promise<BaileysModule> | null = null;
+
+async function loadBaileysModule(): Promise<BaileysModule> {
+  if (!baileysModulePromise) {
+    // Keep true runtime import() in CJS build to load ESM package on Node 22.
+    const importer = new Function('specifier', 'return import(specifier)') as (
+      specifier: string,
+    ) => Promise<BaileysModule>;
+    baileysModulePromise = importer('@whiskeysockets/baileys');
+  }
+
+  return baileysModulePromise;
+}
 
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -87,6 +94,7 @@ async function downloadAndSaveMedia(
   originalFilename?: string
 ): Promise<string | undefined> {
   try {
+    const { downloadContentFromMessage } = await loadBaileysModule();
     const stream = await downloadContentFromMessage(messageContent, type);
     let buffer = Buffer.from([]);
     for await (const chunk of stream) {
@@ -571,6 +579,8 @@ export async function ensureChat(
  * @returns Объект с `state` (для makeWASocket) и `saveCreds` (для обработчика 'creds.update').
  */
 export async function useDBAuthState(organizationId: number, phoneJid: string): Promise<{ state: AuthenticationState; saveCreds: () => Promise<void>; }> {
+  const { BufferJSON, initAuthCreds, makeCacheableSignalKeyStore } = await loadBaileysModule();
+
   // Извлекаем только номер из полного JID для использования в качестве ключа
   const key = phoneJid.split('@')[0].split(':')[0];
   const authDB = createAuthDBAdapter(organizationId, key);
@@ -673,6 +683,8 @@ export async function useDBAuthState(organizationId: number, phoneJid: string): 
  * @returns Экземпляр WASocket.
  */
 export async function startBaileys(organizationId: number, organizationPhoneId: number, phoneJid: string): Promise<WASocket> {
+  const { default: makeWASocket, fetchLatestBaileysVersion, DisconnectReason } = await loadBaileysModule();
+
   const { state, saveCreds } = await useDBAuthState(organizationId, phoneJid);
 
   // Получаем последнюю версию WhatsApp Web API

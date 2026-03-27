@@ -4,7 +4,7 @@ import { Request, Response } from 'express';
 import multer from 'multer';
 import { saveUploadedMedia, validateMediaFile } from '../services/mediaService';
 import { sendMessage, getBaileysSock } from '../config/baileys';
-import { jidNormalizedUser } from '@whiskeysockets/baileys';
+import { jidNormalizedUser } from '../utils/jid';
 import { prisma } from '../config/authStorage';
 import pino from 'pino';
 

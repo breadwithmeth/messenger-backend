@@ -2,7 +2,7 @@
 
 import { Request, Response } from 'express';
 import { getBaileysSock } from '../config/baileys';
-import { jidNormalizedUser } from '@whiskeysockets/baileys';
+import { jidNormalizedUser } from '../utils/jid';
 import pino from 'pino';
 
 const logger = pino({ level: 'info' });
