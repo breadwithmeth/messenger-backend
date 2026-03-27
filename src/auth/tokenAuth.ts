@@ -5,7 +5,9 @@ import { randomUUID } from 'crypto';
 import prisma from '../config/prisma';
 import { normalizeAppRole } from './roleUtils';
 
-export type AuthSource = 'keycloak-jwt';
+export type AuthSource = 'keycloak-jwt' | 'local-jwt';
+
+type AuthProvider = 'keycloak' | 'local' | 'auto';
 
 export interface AuthenticatedPrincipal {
   userId: number;
@@ -17,6 +19,12 @@ export interface AuthenticatedPrincipal {
   keycloakId?: string;
   source: AuthSource;
   claims?: Record<string, unknown>;
+}
+
+function getAuthProvider(): AuthProvider {
+  const raw = (process.env.AUTH_PROVIDER || 'keycloak').toLowerCase();
+  if (raw === 'local' || raw === 'auto' || raw === 'keycloak') return raw;
+  return 'keycloak';
 }
 
 let cachedIssuer: string | null = null;
@@ -289,9 +297,93 @@ async function verifyKeycloakJwt(token: string): Promise<AuthenticatedPrincipal 
   throw new Error(`Keycloak token verification failed. ${errors.join(' | ')}`);
 }
 
-export async function authenticateToken(token: string): Promise<AuthenticatedPrincipal> {
-  const keycloak = await verifyKeycloakJwt(token);
-  if (keycloak) return keycloak;
+async function verifyLocalJwt(token: string): Promise<AuthenticatedPrincipal | null> {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error('JWT_SECRET is not configured for local auth');
+  }
 
-  throw new Error('Invalid token');
+  let payload: jwt.JwtPayload;
+  try {
+    const verified = jwt.verify(token, secret);
+    if (typeof verified === 'string') {
+      throw new Error('Local token payload must be an object');
+    }
+    payload = verified;
+  } catch (error: any) {
+    throw new Error(`Local token verification failed: ${error?.message || 'unknown error'}`);
+  }
+
+  const userId =
+    toNumber(payload.userId) ??
+    toNumber(payload.id) ??
+    toNumber(typeof payload.sub === 'string' ? payload.sub : undefined);
+
+  if (!userId) {
+    throw new Error('Local token does not contain userId');
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      organizationId: true,
+      email: true,
+      name: true,
+      role: true,
+    },
+  });
+
+  if (!user) {
+    throw new Error('Local token user not found');
+  }
+
+  const tokenOrganizationId = toNumber(payload.organizationId);
+  if (tokenOrganizationId && tokenOrganizationId !== user.organizationId) {
+    throw new Error('Local token organizationId does not match user organization');
+  }
+
+  return {
+    userId: user.id,
+    organizationId: user.organizationId,
+    email: user.email,
+    username: user.name || undefined,
+    role: normalizeAppRole(user.role),
+    source: 'local-jwt',
+    claims: payload as unknown as Record<string, unknown>,
+  };
+}
+
+export async function authenticateToken(token: string): Promise<AuthenticatedPrincipal> {
+  const provider = getAuthProvider();
+
+  if (provider === 'keycloak') {
+    const keycloak = await verifyKeycloakJwt(token);
+    if (keycloak) return keycloak;
+    throw new Error('Invalid token for keycloak auth mode');
+  }
+
+  if (provider === 'local') {
+    const local = await verifyLocalJwt(token);
+    if (local) return local;
+    throw new Error('Invalid token for local auth mode');
+  }
+
+  const errors: string[] = [];
+
+  try {
+    const keycloak = await verifyKeycloakJwt(token);
+    if (keycloak) return keycloak;
+  } catch (error: any) {
+    errors.push(error?.message || 'keycloak verification failed');
+  }
+
+  try {
+    const local = await verifyLocalJwt(token);
+    if (local) return local;
+  } catch (error: any) {
+    errors.push(error?.message || 'local verification failed');
+  }
+
+  throw new Error(`Invalid token. ${errors.join(' | ')}`);
 }

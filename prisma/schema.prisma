@@ -526,3 +526,55 @@ model ClientTag {
   @@index([type])
 }
 
+model BitrixMapping {
+  id              Int      @id @default(autoincrement())
+  userId          String   @unique
+  bitrixContactId Int
+  bitrixLeadId    Int?
+  chatId          Int?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([bitrixContactId])
+  @@index([bitrixLeadId])
+  @@index([chatId])
+  @@map("bitrix_mapping")
+}
+
+model BitrixProcessedEvent {
+  id        Int      @id @default(autoincrement())
+  hash      String   @unique
+  leadId    Int
+  comment   String
+  createdAt DateTime @default(now())
+
+  @@index([leadId])
+  @@map("bitrix_processed_event")
+}
+
+model ChatMapping {
+  id            Int      @id @default(autoincrement())
+  chatId        Int      @unique
+  externalUserId String
+  bitrixChatId  String?
+  source        String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([externalUserId])
+  @@index([bitrixChatId])
+  @@map("chat_mapping")
+}
+
+model BitrixToken {
+  id           Int      @id @default(autoincrement())
+  accessToken  String
+  refreshToken String
+  expiresAt    DateTime
+  domain       String   @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([expiresAt])
+  @@map("bitrix_tokens")
+}

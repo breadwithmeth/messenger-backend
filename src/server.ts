@@ -5,6 +5,8 @@ import { startAllTelegramBots, stopAllTelegramBots } from './services/telegramSe
 import { initializeSocketIO } from './services/socketService'; // <-- Socket.IO
 import pino from 'pino'; // Добавьте импорт pino
 import { prisma } from './config/authStorage'; // Импортируйте prisma
+import { startBitrixWorker, stopBitrixWorker } from './modules/bitrix/bitrix.queue';
+import { startBitrixConnectorWorker, stopBitrixConnectorWorker } from './modules/bitrix/bitrix.connector.queue';
 
 const PORT = process.env.PORT || 3000;
 
@@ -72,12 +74,19 @@ server.listen(PORT, async () => {
   logger.info('[ServerInit] Запуск Telegram ботов...');
   await startAllTelegramBots();
   logger.info('[ServerInit] Telegram боты запущены');
+
+  await startBitrixWorker();
+  logger.info('[ServerInit] Bitrix worker initialized');
+  await startBitrixConnectorWorker();
+  logger.info('[ServerInit] Bitrix connector worker initialized');
 });
 
 // Graceful shutdown - останавливаем ботов при выключении сервера
 process.on('SIGINT', async () => {
   logger.info('[ServerShutdown] Получен сигнал SIGINT, останавливаем Telegram ботов...');
   await stopAllTelegramBots();
+  await stopBitrixWorker();
+  await stopBitrixConnectorWorker();
   logger.info('[ServerShutdown] Telegram боты остановлены');
   process.exit(0);
 });
@@ -85,6 +94,8 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
   logger.info('[ServerShutdown] Получен сигнал SIGTERM, останавливаем Telegram ботов...');
   await stopAllTelegramBots();
+  await stopBitrixWorker();
+  await stopBitrixConnectorWorker();
   logger.info('[ServerShutdown] Telegram боты остановлены');
   process.exit(0);
 });

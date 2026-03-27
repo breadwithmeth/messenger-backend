@@ -15,6 +15,7 @@ import telegramRoutes from './routes/telegramRoutes'; // <-- НОВОЕ
 import wabaRoutes from './routes/wabaRoutes'; // <-- WABA интеграция
 import aiRoutes from './routes/aiRoutes'; // <-- AI предложения ответов
 import analyticsRoutes from './routes/analyticsRoutes';
+import bitrixRoutes from './routes/bitrixRoutes';
 import errorHandler from './middlewares/errorHandler'; // Corrected import path
 import cors, { CorsOptions } from 'cors';
 import path from 'path'; // <--- ДОБАВИТЬ
@@ -28,6 +29,7 @@ import userRoutes from './routes/userRoutes'; // <-- Добавить
 import contactRoutes from './routes/contactRoutes';
 import clientRoutes from './routes/clientRoutes'; // <-- Клиенты организации
 import workforceRoutes from './routes/workforceRoutes';
+import authRoutes from './routes/authRoutes';
 
 
 const app = express();
@@ -84,6 +86,7 @@ app.use('/api/accounts', accountRoutes);
 app.use('/api/users', userRoutes); // <-- Добавить
 app.use('/api/clients', clientRoutes); // <-- API для клиентов организации
 app.use('/api/workforce', workforceRoutes);
+app.use('/api/auth', authRoutes);
 app.use('/api/waba', wabaRoutes); // <-- ВАЖНО: ПЕРЕД /api, чтобы не перехватывался contactRoutes
 app.use('/api', contactRoutes);
 app.use('/api/chat-assignment', chatAssignmentRoutes); // Новые маршруты для назначения чатов
@@ -96,6 +99,7 @@ app.use('/api/tickets', ticketRoutes); // Маршруты для тикет-с�
 app.use('/api/telegram', telegramRoutes); // <-- НОВОЕ: Маршруты для Telegram
 app.use('/api/ai', aiRoutes); // <-- AI предложения ответов
 app.use('/api/analytics', analyticsRoutes);
+app.use('/integrations/bitrix', bitrixRoutes);
 
 // 404 JSON для несуществующих маршрутов
 app.use((req, res) => {

@@ -147,18 +147,20 @@ export function authMiddleware(req: AuthRequest, res: Response, next: NextFuncti
       res.locals.userId = principal.userId;
       res.locals.organizationId = principal.organizationId;
 
-      const requestIdHeader = req.headers['x-request-id'];
-      const requestId = Array.isArray(requestIdHeader) ? requestIdHeader[0] : requestIdHeader;
-      void syncEmployeeFromClaims({
-        claims: {
-          keycloakId: principal.keycloakId,
-          sub: principal.keycloakId,
-          email: principal.email,
-          preferred_username: principal.username,
-        },
-        ip: req.ip,
-        requestId,
-      });
+      if (principal.source === 'keycloak-jwt') {
+        const requestIdHeader = req.headers['x-request-id'];
+        const requestId = Array.isArray(requestIdHeader) ? requestIdHeader[0] : requestIdHeader;
+        void syncEmployeeFromClaims({
+          claims: {
+            keycloakId: principal.keycloakId,
+            sub: principal.keycloakId,
+            email: principal.email,
+            preferred_username: principal.username,
+          },
+          ip: req.ip,
+          requestId,
+        });
+      }
 
       next();
     })

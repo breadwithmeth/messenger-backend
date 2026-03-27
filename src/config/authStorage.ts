@@ -4,6 +4,26 @@ import { Buffer } from 'buffer';
 
 const prisma = new PrismaClient();
 
+prisma.$use(async (params, next) => {
+  const result = await next(params);
+
+  if (params.model === 'Message' && params.action === 'create' && result?.id) {
+    void import('../modules/bitrix/bitrix.queue')
+      .then(({ enqueueBitrixSync }) => enqueueBitrixSync(String(result.id)))
+      .catch((error) => {
+        console.error('[BitrixQueue] enqueue failed:', error);
+      });
+
+    void import('../modules/bitrix/bitrix.connector.queue')
+      .then(({ enqueueBitrixConnector }) => enqueueBitrixConnector(result.id))
+      .catch((error) => {
+        console.error('[BitrixConnectorQueue] enqueue failed:', error);
+      });
+  }
+
+  return result;
+});
+
 export type StoredDataType = 'json' | 'buffer' | 'base64_json';
 
 interface AuthDBAdapter {
