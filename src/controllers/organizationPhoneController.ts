@@ -13,11 +13,31 @@ const logger = pino({ level: 'info' });
  */
 export async function createOrganizationPhone(req: Request, res: Response) {
   const organizationId = res.locals.organizationId;
-  const { phoneJid, displayName } = req.body;
+  const {
+    phoneJid,
+    displayName,
+    connectionType,
+    wabaAccessToken,
+    wabaPhoneNumberId,
+    wabaId,
+    wabaApiVersion,
+    wabaVerifyToken,
+  } = req.body;
+
+  const normalizedConnectionType = String(connectionType || 'baileys').toLowerCase();
+  const isWaba = normalizedConnectionType === 'waba';
 
   if (!organizationId || !phoneJid || !displayName) {
     logger.warn('[createOrganizationPhone] Отсутствуют необходимые параметры: organizationId, phoneJid, или displayName.');
     return res.status(400).json({ error: 'Missing organizationId, phoneJid, or displayName' });
+  }
+
+  if (normalizedConnectionType !== 'baileys' && normalizedConnectionType !== 'waba') {
+    return res.status(400).json({ error: 'connectionType must be either "baileys" or "waba"' });
+  }
+
+  if (isWaba && !wabaPhoneNumberId) {
+    return res.status(400).json({ error: 'wabaPhoneNumberId is required for WABA connectionType' });
   }
 
   try {
@@ -41,6 +61,12 @@ export async function createOrganizationPhone(req: Request, res: Response) {
         phoneJid,
         displayName,
         status: 'disconnected', // Начальный статус
+        connectionType: isWaba ? 'waba' : 'baileys',
+        wabaAccessToken: isWaba ? wabaAccessToken || null : null,
+        wabaPhoneNumberId: isWaba ? String(wabaPhoneNumberId) : null,
+        wabaId: isWaba ? wabaId || null : null,
+        wabaApiVersion: isWaba ? wabaApiVersion || 'v21.0' : null,
+        wabaVerifyToken: isWaba ? wabaVerifyToken || null : null,
       },
     });
     logger.info(`✅ Создан новый телефон организации: ID ${newPhone.id}, JID ${phoneJid}, Организация ${organizationId}.`);

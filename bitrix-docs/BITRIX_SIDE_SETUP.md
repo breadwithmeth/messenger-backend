@@ -98,6 +98,19 @@
 - запустите `./test-bitrix-smoke.sh`
 - проверьте логи backend по префиксам `BitrixConnector`, `BitrixOutgoing`, `BitrixImconnector`
 
+## 6.1. Быстрое добавление каналов через UI
+
+На странице `GET /integrations/bitrix/` доступны формы для подключения каналов:
+
+- **WhatsApp Baileys**: создаёт номер через `POST /api/organization-phones` и может сразу вызвать `POST /api/organization-phones/:id/connect` для QR.
+- **WhatsApp WABA**: создаёт номер с `connectionType=waba` через `POST /api/organization-phones`.
+- **Telegram Bot**: создаёт бота через `POST /api/telegram/organizations/:organizationId/bots`.
+
+Важно:
+
+- Для операций с `organization-phones` нужен JWT токен пользователя с ролью `manager` или `admin`.
+- Для WABA нужен минимум `wabaPhoneNumberId`; остальные поля можно дополнить позже.
+
 ## 7. Что проверить при ошибках на стороне Bitrix
 
 Если сообщения из Bitrix не уходят:
