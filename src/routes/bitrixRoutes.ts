@@ -9,8 +9,15 @@ import {
 
 const router = Router();
 
+// Bitrix may probe the base URL with both GET (for the settings page)
+// and POST (during installation handshake that sends DOMAIN/APP_SID params).
 router.get('/', (_req, res) => {
 	res.sendFile(path.resolve(process.cwd(), 'public', 'bitrix-settings.html'));
+});
+
+router.post('/', (req, res) => {
+	// Respond 200 so Bitrix sees the connector as reachable. Echo minimal context for debugging.
+	res.status(200).json({ ok: true, path: req.originalUrl });
 });
 
 router.get('/connect', connectBitrixOAuth);
