@@ -353,8 +353,9 @@ npm run lint
 ### На Coolify / Nixpacks
 1. Подключить Git репозиторий
 2. Настроить переменные окружения
-3. Nixpacks автоматически определит Node.js проект
-4. Deploy!
+3. Использовать `nixpacks.toml` из репозитория (корень проекта)
+4. Если Nixpacks снова падает из-за кэша/диска, переключить Build Pack на `Dockerfile`
+5. Deploy!
 
 ### На VPS (ручной деплой)
 ```bash
