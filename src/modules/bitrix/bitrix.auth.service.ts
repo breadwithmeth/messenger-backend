@@ -112,6 +112,40 @@ export class BitrixAuthService {
     this.tokenCache = null;
   }
 
+  async saveInstallToken(payload: {
+    domain?: string | null;
+    authId?: string | null;
+    refreshId?: string | null;
+    authExpires?: string | number | null;
+  }): Promise<BitrixTokenRecord> {
+    const accessToken = String(payload.authId || '').trim();
+    const refreshToken = String(payload.refreshId || '').trim();
+    const normalizedDomain = this.normalizeDomain(payload.domain) || this.getDomain();
+
+    if (!accessToken || !refreshToken) {
+      throw new Error('AUTH_ID and REFRESH_ID are required');
+    }
+
+    const expiresInSec = Number(payload.authExpires || 3600);
+    const safeExpiresInSec = Number.isFinite(expiresInSec) && expiresInSec > 0 ? expiresInSec : 3600;
+
+    const input: BitrixTokenUpsertInput = {
+      accessToken,
+      refreshToken,
+      expiresAt: new Date(Date.now() + safeExpiresInSec * 1000),
+      domain: normalizedDomain,
+    };
+
+    const saved = await this.repository.upsertByDomain(input);
+    this.tokenCache = saved;
+    logger.info(
+      { domain: saved.domain, expiresAt: saved.expiresAt.toISOString() },
+      '[BitrixAuthService] Token saved from install payload',
+    );
+
+    return saved;
+  }
+
   private async doRefresh(refreshToken?: string): Promise<BitrixTokenRecord> {
     const existing = await this.getCachedOrStoredToken();
     const tokenToUse = refreshToken || existing?.refreshToken;
@@ -166,6 +200,16 @@ export class BitrixAuthService {
     this.tokenCache = saved;
 
     return saved;
+  }
+
+  private normalizeDomain(domain?: string | null): string {
+    const raw = String(domain || '').trim();
+    if (!raw) {
+      return '';
+    }
+
+    const withoutProtocol = raw.replace(/^https?:\/\//i, '');
+    return withoutProtocol.split('/')[0].toLowerCase();
   }
 
   private async fetchToken(body: Record<string, string>): Promise<BitrixOauthTokenResponse> {
