@@ -145,9 +145,60 @@ export class BitrixConnectorService {
       const { data } = await this.client.post('imconnector.send.messages', payload);
       logger.info({ messageId, durationMs: Date.now() - started, data }, '[BitrixConnector] Sent to Bitrix');
     } catch (error: any) {
+      if (this.shouldRetryWithRefresh(error)) {
+        logger.warn(
+          { messageId, status: error?.response?.status, response: error?.response?.data },
+          '[BitrixConnector] Access token rejected, refreshing and retrying once',
+        );
+
+        try {
+          const refreshedToken = await bitrixAuthService.refreshAccessToken();
+          payload.auth = refreshedToken.accessToken;
+
+          const { data } = await this.client.post('imconnector.send.messages', payload);
+          logger.info(
+            { messageId, durationMs: Date.now() - started, data },
+            '[BitrixConnector] Sent to Bitrix after token refresh',
+          );
+          return;
+        } catch (refreshRetryError: any) {
+          logger.error(
+            {
+              messageId,
+              status: refreshRetryError?.response?.status,
+              response: refreshRetryError?.response?.data,
+              message: refreshRetryError?.message,
+            },
+            '[BitrixConnector] Send failed after token refresh',
+          );
+          throw refreshRetryError;
+        }
+      }
+
       logger.error({ messageId, status: error?.response?.status, response: error?.response?.data }, '[BitrixConnector] Send failed');
       throw error;
     }
+  }
+
+  private shouldRetryWithRefresh(error: any): boolean {
+    if (HAS_WEBHOOK_CREDENTIALS || BITRIX_APP_TOKEN) {
+      return false;
+    }
+
+    const status = Number(error?.response?.status || 0);
+    const apiError = String(error?.response?.data?.error || '').toLowerCase();
+    const apiDescription = String(error?.response?.data?.error_description || '').toLowerCase();
+
+    if (status === 401) {
+      return true;
+    }
+
+    return (
+      apiError.includes('invalid_token') ||
+      apiError.includes('expired_token') ||
+      apiDescription.includes('invalid token') ||
+      apiDescription.includes('expired token')
+    );
   }
 
   private async getAuthToken(): Promise<string | null> {
