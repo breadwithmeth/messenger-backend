@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bitrix Control Deck</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg-a: #f9f6ef;
+        --bg-b: #e6f7f6;
+        --card: #fffdf9;
+        --ink: #16202e;
+        --ink-soft: #5a6778;
+        --line: #d2d7df;
+        --accent: #05668d;
+        --accent-2: #00a896;
+        --ok: #146c43;
+        --warn: #9a6a00;
+        --danger: #9f1239;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: 'Space Grotesk', 'Segoe UI', sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(900px 500px at 8% -5%, #ffecc8 0%, transparent 55%),
+          radial-gradient(700px 420px at 100% 10%, #c8f3ef 0%, transparent 50%),
+          linear-gradient(160deg, var(--bg-a) 0%, var(--bg-b) 100%);
+      }
+
+      .wrap {
+        max-width: 1060px;
+        margin: 0 auto;
+        padding: 26px 18px 44px;
+      }
+
+      .hero {
+        position: relative;
+        overflow: hidden;
+        border-radius: 24px;
+        color: #eff9ff;
+        background: linear-gradient(120deg, #0b132b 0%, #1c2541 55%, #05668d 100%);
+        padding: 22px 20px;
+        box-shadow: 0 20px 42px rgba(11, 19, 43, 0.28);
+        animation: reveal 460ms ease-out;
+      }
+
+      .hero::after {
+        content: '';
+        position: absolute;
+        width: 340px;
+        height: 340px;
+        border-radius: 50%;
+        right: -70px;
+        top: -120px;
+        background: radial-gradient(circle, rgba(255, 255, 255, 0.24) 0%, transparent 65%);
+        pointer-events: none;
+      }
+
+      .hero h1 {
+        margin: 0;
+        letter-spacing: -0.02em;
+        font-size: clamp(1.45rem, 2.4vw, 2rem);
+      }
+
+      .hero p {
+        margin: 10px 0 0;
+        color: #d4ebf7;
+        max-width: 760px;
+      }
+
+      .badge-row {
+        margin-top: 14px;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .badge {
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        border-radius: 999px;
+        padding: 5px 10px;
+        font-size: 0.82rem;
+        background: rgba(255, 255, 255, 0.09);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 14px;
+        margin-top: 16px;
+      }
+
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 14px;
+        box-shadow: 0 6px 18px rgba(22, 32, 46, 0.08);
+        animation: reveal 460ms ease-out;
+      }
+
+      .card h2 {
+        margin: 0 0 10px;
+        font-size: 1.04rem;
+      }
+
+      .mono {
+        font-family: 'IBM Plex Mono', monospace;
+        background: #eff2f5;
+        border: 1px solid #d9dee5;
+        border-radius: 8px;
+        padding: 1px 6px;
+      }
+
+      .muted {
+        color: var(--ink-soft);
+      }
+
+      .stack {
+        display: grid;
+        gap: 9px;
+      }
+
+      .kv {
+        display: grid;
+        grid-template-columns: 120px 1fr;
+        gap: 8px;
+        align-items: center;
+        font-size: 0.92rem;
+      }
+
+      .kv .k {
+        color: var(--ink-soft);
+      }
+
+      .kv .v {
+        font-family: 'IBM Plex Mono', monospace;
+        background: #f6f8fa;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 6px 8px;
+        overflow-wrap: anywhere;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .btn {
+        border: 0;
+        border-radius: 10px;
+        padding: 10px 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 120ms ease, box-shadow 120ms ease;
+      }
+
+      .btn:hover {
+        transform: translateY(-1px);
+      }
+
+      .btn:active {
+        transform: translateY(0);
+      }
+
+      .btn-primary {
+        color: #ffffff;
+        background: linear-gradient(130deg, var(--accent) 0%, var(--accent-2) 100%);
+        box-shadow: 0 10px 18px rgba(5, 102, 141, 0.22);
+      }
+
+      .btn-secondary {
+        color: #0f172a;
+        background: #d8f3ec;
+      }
+
+      .btn-ghost {
+        color: #0f172a;
+        background: #eceff3;
+      }
+
+      .status {
+        margin-top: 10px;
+        border-radius: 10px;
+        padding: 10px;
+        border: 1px solid #d7dee8;
+        background: #f8fafc;
+        color: var(--ink-soft);
+      }
+
+      .status.ok {
+        border-color: #bde7d2;
+        background: #eefcf5;
+        color: var(--ok);
+      }
+
+      .status.warn {
+        border-color: #f6dd9b;
+        background: #fff9e8;
+        color: var(--warn);
+      }
+
+      .status.err {
+        border-color: #f1b4c3;
+        background: #fff3f6;
+        color: var(--danger);
+      }
+
+      .result {
+        margin-top: 8px;
+        border-radius: 10px;
+        border: 1px dashed #c9d3df;
+        background: #f8fbff;
+        padding: 11px;
+        font-size: 0.83rem;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-family: 'IBM Plex Mono', monospace;
+      }
+
+      @media (min-width: 920px) {
+        .grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      @keyframes reveal {
+        from {
+          opacity: 0;
+          transform: translateY(7px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <section class="hero">
+        <h1>Bitrix Control Deck</h1>
+        <p>
+          Эта страница открывается в Bitrix и сразу показывает install-context: параметры
+          подключения, placement и текущую доступность backend endpoints.
+        </p>
+        <div class="badge-row" id="heroBadges"></div>
+      </section>
+
+      <section class="grid">
+        <article class="card">
+          <h2>Install Context</h2>
+          <div class="stack" id="contextList"></div>
+        </article>
+
+        <article class="card">
+          <h2>Routing</h2>
+          <div class="stack">
+            <div class="kv"><div class="k">Install URL</div><div class="v" id="installUrl"></div></div>
+            <div class="kv"><div class="k">OAuth Start</div><div class="v" id="connectUrl"></div></div>
+            <div class="kv"><div class="k">Imconnector</div><div class="v" id="imconnectorUrl"></div></div>
+            <div class="kv"><div class="k">Outgoing</div><div class="v" id="outgoingUrl"></div></div>
+          </div>
+        </article>
+
+        <article class="card">
+          <h2>Actions</h2>
+          <div class="actions">
+            <button class="btn btn-primary" id="openOauth">Открыть OAuth Connect</button>
+            <button class="btn btn-secondary" id="checkHealth">Проверить /health</button>
+            <button class="btn btn-ghost" id="sendProbe">Отправить Install Probe</button>
+          </div>
+          <div class="status" id="statusBox">Ожидание действий.</div>
+          <div class="result" id="probeResult">Ответ от backend появится здесь.</div>
+        </article>
+
+        <article class="card">
+          <h2>Bitrix Notes</h2>
+          <p class="muted">
+            При установке Bitrix может передавать параметры как query-string или form payload.
+            Backend уже обрабатывает оба варианта и сохраняет токены при наличии
+            <span class="mono">AUTH_ID</span> + <span class="mono">REFRESH_ID</span>.
+          </p>
+          <p class="muted">
+            Для детального сценария настройки см. <span class="mono">bitrix-docs/BITRIX_SIDE_SETUP.md</span>.
+          </p>
+        </article>
+      </section>
+    </main>
+
+    <script>
+      const params = new URLSearchParams(window.location.search);
+
+      const rawContext = {
+        DOMAIN: params.get('DOMAIN'),
+        PROTOCOL: params.get('PROTOCOL'),
+        LANG: params.get('LANG'),
+        APP_SID: params.get('APP_SID'),
+        AUTH_ID: params.get('AUTH_ID'),
+        AUTH_EXPIRES: params.get('AUTH_EXPIRES'),
+        REFRESH_ID: params.get('REFRESH_ID'),
+        member_id: params.get('member_id'),
+        status: params.get('status'),
+        PLACEMENT: params.get('PLACEMENT'),
+        PLACEMENT_OPTIONS: params.get('PLACEMENT_OPTIONS'),
+      };
+
+      const installUrl = `${window.location.origin}/integrations/bitrix/`;
+      const connectUrl = `${window.location.origin}/integrations/bitrix/connect`;
+      const imconnectorUrl = `${window.location.origin}/integrations/bitrix/imconnector`;
+      const outgoingUrl = `${window.location.origin}/integrations/bitrix/outgoing`;
+
+      document.getElementById('installUrl').textContent = installUrl;
+      document.getElementById('connectUrl').textContent = connectUrl;
+      document.getElementById('imconnectorUrl').textContent = imconnectorUrl;
+      document.getElementById('outgoingUrl').textContent = outgoingUrl;
+
+      function normalizeValue(value, key) {
+        if (!value) {
+          return '-';
+        }
+        if (key === 'AUTH_ID' || key === 'REFRESH_ID') {
+          return `${value.slice(0, 10)}...${value.slice(-6)}`;
+        }
+        return value;
+      }
+
+      function renderContext() {
+        const list = document.getElementById('contextList');
+        Object.entries(rawContext).forEach(([key, value]) => {
+          const row = document.createElement('div');
+          row.className = 'kv';
+          row.innerHTML = `<div class="k">${key}</div><div class="v">${normalizeValue(value, key)}</div>`;
+          list.appendChild(row);
+        });
+      }
+
+      function renderBadges() {
+        const wrap = document.getElementById('heroBadges');
+        const items = [];
+        items.push(rawContext.DOMAIN ? `Domain: ${rawContext.DOMAIN}` : 'Domain: n/a');
+        items.push(rawContext.PLACEMENT ? `Placement: ${rawContext.PLACEMENT}` : 'Placement: n/a');
+        items.push(rawContext.AUTH_ID && rawContext.REFRESH_ID ? 'Token payload: present' : 'Token payload: missing');
+        items.forEach((text) => {
+          const badge = document.createElement('span');
+          badge.className = 'badge';
+          badge.textContent = text;
+          wrap.appendChild(badge);
+        });
+      }
+
+      function setStatus(kind, text) {
+        const box = document.getElementById('statusBox');
+        box.className = `status ${kind}`;
+        box.textContent = text;
+      }
+
+      function stringifyBody(value) {
+        try {
+          return JSON.stringify(value, null, 2);
+        } catch {
+          return String(value);
+        }
+      }
+
+      async function checkHealth() {
+        setStatus('warn', 'Проверка /health...');
+        try {
+          const resp = await fetch('/health');
+          const body = await resp.json();
+          if (resp.ok) {
+            setStatus('ok', `Backend OK: ${body.ts || 'timestamp n/a'}`);
+            return;
+          }
+          setStatus('err', `Health check failed: HTTP ${resp.status}`);
+        } catch (error) {
+          setStatus('err', 'Health check error. Проверьте backend/прокси.');
+        }
+      }
+
+      async function sendInstallProbe() {
+        setStatus('warn', 'Отправка POST /integrations/bitrix/...');
+
+        const payload = new URLSearchParams();
+        Object.entries(rawContext).forEach(([key, value]) => {
+          if (value) {
+            payload.set(key, value);
+          }
+        });
+
+        try {
+          const resp = await fetch('/integrations/bitrix/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: payload.toString(),
+          });
+
+          const text = await resp.text();
+          let body = text;
+          try {
+            body = JSON.parse(text);
+          } catch {
+            // Keep raw text when response is not JSON.
+          }
+
+          document.getElementById('probeResult').textContent = `HTTP ${resp.status}\n${stringifyBody(body)}`;
+
+          if (resp.ok) {
+            setStatus('ok', 'Install probe успешно обработан backend.');
+          } else {
+            setStatus('err', `Install probe failed: HTTP ${resp.status}`);
+          }
+        } catch (error) {
+          setStatus('err', 'Ошибка сети при отправке install probe.');
+        }
+      }
+
+      document.getElementById('openOauth').addEventListener('click', () => {
+        window.open('/integrations/bitrix/connect', '_blank');
+      });
+      document.getElementById('checkHealth').addEventListener('click', checkHealth);
+      document.getElementById('sendProbe').addEventListener('click', sendInstallProbe);
+
+      renderContext();
+      renderBadges();
+      if (!rawContext.DOMAIN) {
+        setStatus('warn', 'DOMAIN не найден в URL. Откройте страницу из Bitrix для полного контекста.');
+      }
+    </script>
+  </body>
+</html>

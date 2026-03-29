@@ -7,4 +7,6 @@ dist
 
 /src/generated/prisma
 
-/public
+/public/*
+!/public/bitrix-settings.html
+/public/media/

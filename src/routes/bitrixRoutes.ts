@@ -43,6 +43,32 @@ function getInstallProbeMeta(req: Request) {
 	};
 }
 
+function buildInstallRedirectQuery(req: Request): string {
+	const params = new URLSearchParams();
+	const keys = [
+		'DOMAIN',
+		'PROTOCOL',
+		'LANG',
+		'APP_SID',
+		'AUTH_ID',
+		'AUTH_EXPIRES',
+		'REFRESH_ID',
+		'member_id',
+		'status',
+		'PLACEMENT',
+		'PLACEMENT_OPTIONS',
+	];
+
+	for (const key of keys) {
+		const value = readRequestField(req, key);
+		if (value) {
+			params.set(key, value);
+		}
+	}
+
+	return params.toString();
+}
+
 // Bitrix may probe the base URL with both GET (for the settings page)
 // and POST (during installation handshake that sends DOMAIN/APP_SID params).
 router.get('/', (req, res) => {
@@ -68,6 +94,14 @@ router.post('/', async (req, res) => {
 				'[BitrixRoutes] Failed to persist install token',
 			);
 		}
+	}
+
+	// In Bitrix iframe/browser POST during install, redirect to GET so UI is visible.
+	if (req.accepts('html')) {
+		const query = buildInstallRedirectQuery(req);
+		const target = query ? `/integrations/bitrix/?${query}` : '/integrations/bitrix/';
+		res.redirect(302, target);
+		return;
 	}
 
 	// Respond 200 so Bitrix sees the connector as reachable.
