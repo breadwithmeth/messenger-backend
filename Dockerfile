@@ -40,6 +40,7 @@ RUN apk add --no-cache openssl libc6-compat
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/prisma ./prisma
+COPY public ./public
 
 # Static dir for uploads
 RUN mkdir -p public/media

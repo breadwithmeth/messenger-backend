@@ -1,4 +1,5 @@
 import express, { Request, Router } from 'express';
+import fs from 'fs';
 import path from 'path';
 import pino from 'pino';
 import { handleBitrixOutgoing } from '../modules/bitrix/bitrix.outgoing.controller';
@@ -73,7 +74,20 @@ function buildInstallRedirectQuery(req: Request): string {
 // and POST (during installation handshake that sends DOMAIN/APP_SID params).
 router.get('/', (req, res) => {
 	logger.info(getInstallProbeMeta(req), '[BitrixRoutes] Install/settings GET probe received');
-	res.sendFile(path.resolve(process.cwd(), 'public', 'bitrix-settings.html'));
+	const settingsPath = path.resolve(process.cwd(), 'public', 'bitrix-settings.html');
+
+	if (fs.existsSync(settingsPath)) {
+		res.sendFile(settingsPath);
+		return;
+	}
+
+	logger.error({ settingsPath }, '[BitrixRoutes] bitrix-settings.html is missing, returning fallback page');
+	res
+		.status(200)
+		.type('html')
+		.send(
+			'<!doctype html><html><head><meta charset="utf-8"><title>Bitrix Setup</title></head><body><h1>Bitrix setup page is missing in container</h1><p>Expected file: /app/public/bitrix-settings.html</p><p>Rebuild image after copying public assets.</p></body></html>',
+		);
 });
 
 router.post('/', async (req, res) => {
