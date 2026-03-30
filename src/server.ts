@@ -1,4 +1,7 @@
 import http from 'http';
+import https from 'https';
+import fs from 'fs';
+import path from 'path';
 import app from './app';
 import { startWaSession } from './services/waService'; // Импортируйте startWaSession
 import { startAllTelegramBots, stopAllTelegramBots } from './services/telegramService'; // <-- НОВОЕ
@@ -9,9 +12,47 @@ import { startBitrixWorker, stopBitrixWorker } from './modules/bitrix/bitrix.que
 import { startBitrixConnectorWorker, stopBitrixConnectorWorker } from './modules/bitrix/bitrix.connector.queue';
 
 const PORT = process.env.PORT || 3000;
-
-const server = http.createServer(app);
 const logger = pino({ level: 'info' }); // Инициализируйте logger
+
+function createServer() {
+  const httpsEnabled = String(process.env.HTTPS_ENABLED || '').toLowerCase() === 'true';
+  if (!httpsEnabled) {
+    return {
+      server: http.createServer(app),
+      protocol: 'http' as const,
+    };
+  }
+
+  const certPath = process.env.SSL_CERT_PATH || path.resolve(process.cwd(), 'certs', 'localhost-cert.pem');
+  const keyPath = process.env.SSL_KEY_PATH || path.resolve(process.cwd(), 'certs', 'localhost-key.pem');
+
+  if (!fs.existsSync(certPath) || !fs.existsSync(keyPath)) {
+    logger.warn(
+      { certPath, keyPath },
+      '[ServerInit] HTTPS_ENABLED=true but SSL files not found. Falling back to HTTP.',
+    );
+    return {
+      server: http.createServer(app),
+      protocol: 'http' as const,
+    };
+  }
+
+  const server = https.createServer(
+    {
+      cert: fs.readFileSync(certPath),
+      key: fs.readFileSync(keyPath),
+    },
+    app,
+  );
+
+  logger.info({ certPath, keyPath }, '[ServerInit] HTTPS enabled');
+  return {
+    server,
+    protocol: 'https' as const,
+  };
+}
+
+const { server, protocol } = createServer();
 
 // Инициализируем Socket.IO
 initializeSocketIO(server);
@@ -64,8 +105,10 @@ async function initializeConnectedSessions() {
 
 server.listen(PORT, async () => {
   console.log(`Server is running on port ${PORT}`);
-  logger.info(`[ServerInit] HTTP сервер запущен на порту ${PORT}`);
-  logger.info(`[ServerInit] Socket.IO доступен на ws://localhost:${PORT}`);
+  logger.info(`[ServerInit] ${protocol.toUpperCase()} сервер запущен на порту ${PORT}`);
+  logger.info(
+    `[ServerInit] Socket.IO доступен на ${protocol === 'https' ? 'wss' : 'ws'}://localhost:${PORT}`,
+  );
   
   // Вызываем функцию инициализации WhatsApp сессий после старта сервера
   await initializeConnectedSessions();

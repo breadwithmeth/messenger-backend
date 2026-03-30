@@ -350,13 +350,6 @@
           <h2>WhatsApp (Неофициально / Baileys)</h2>
           <div class="stack">
             <div class="field">
-              <label for="waOrgId">organizationId</label>
-              <input id="waOrgId" placeholder="1" />
-            </div>
-            <div class="actions">
-              <button class="btn btn-ghost" id="waCreateOrg">Создать тестовую организацию</button>
-            </div>
-            <div class="field">
               <label for="waPhoneJid">phoneJid</label>
               <input id="waPhoneJid" placeholder="79001112233@s.whatsapp.net" />
             </div>
@@ -426,12 +419,11 @@
 
       async function createUnofficialWhatsapp(connectAfterCreate) {
         const resultEl = document.getElementById('waResult');
-        const organizationId = Number((document.getElementById('waOrgId').value || '').trim());
         const phoneJid = (document.getElementById('waPhoneJid').value || '').trim();
         const displayName = (document.getElementById('waDisplayName').value || '').trim();
 
-        if (!organizationId || !phoneJid || !displayName) {
-          resultEl.textContent = 'Нужно заполнить organizationId, phoneJid и displayName';
+        if (!phoneJid || !displayName) {
+          resultEl.textContent = 'Нужно заполнить phoneJid и displayName';
           return;
         }
 
@@ -440,7 +432,6 @@
             method: 'POST',
             headers: getJsonHeaders(),
             body: JSON.stringify({
-              organizationId,
               phoneJid,
               displayName,
               connectionType: 'baileys',
@@ -462,7 +453,7 @@
           const connectResp = await fetch(`/api/organization-phones/${createBody.id}/connect`, {
             method: 'POST',
             headers: getJsonHeaders(),
-            body: JSON.stringify({ organizationId }),
+            body: JSON.stringify({}),
           });
           const connectBody = await responseToBody(connectResp);
           resultEl.textContent =
@@ -519,15 +510,9 @@
 
       async function loadPhones() {
         const resultEl = document.getElementById('waResult');
-        const organizationId = Number((document.getElementById('waOrgId').value || '').trim());
-
-        if (!organizationId) {
-          renderPhones([]);
-          return;
-        }
 
         try {
-          const resp = await fetch(`/api/organization-phones/all?organizationId=${organizationId}`);
+          const resp = await fetch('/api/organization-phones/all');
           const body = await responseToBody(resp);
 
           if (!resp.ok) {
@@ -543,41 +528,9 @@
         }
       }
 
-      async function createTestOrganization() {
-        const resultEl = document.getElementById('waResult');
-        const orgInput = document.getElementById('waOrgId');
-
-        try {
-          const resp = await fetch('/integrations/bitrix/dev/organizations', {
-            method: 'POST',
-            headers: getJsonHeaders(),
-            body: JSON.stringify({
-              name: `Bitrix Test Org ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`,
-            }),
-          });
-
-          const body = await responseToBody(resp);
-          if (!resp.ok) {
-            resultEl.textContent = `Create Org HTTP ${resp.status}\n${stringifyBody(body)}`;
-            return;
-          }
-
-          orgInput.value = String(body.organization.id);
-          resultEl.textContent =
-            `Create Org HTTP ${resp.status}\n${stringifyBody(body)}\n\n` +
-            `organizationId автоматически подставлен: ${body.organization.id}`;
-          await loadPhones();
-        } catch (error) {
-          resultEl.textContent = `Create Org network error\n${String(error)}`;
-        }
-      }
-
-      document.getElementById('waCreateOrg').addEventListener('click', createTestOrganization);
       document.getElementById('waRefresh').addEventListener('click', loadPhones);
       document.getElementById('waCreate').addEventListener('click', () => createUnofficialWhatsapp(false));
       document.getElementById('waCreateConnect').addEventListener('click', () => createUnofficialWhatsapp(true));
-
-      document.getElementById('waOrgId').addEventListener('change', loadPhones);
       loadPhones();
       setInterval(loadPhones, 8000);
     </script>

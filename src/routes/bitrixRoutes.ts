@@ -2,7 +2,6 @@ import express, { Request, Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import pino from 'pino';
-import { prisma } from '../config/authStorage';
 import { handleBitrixOutgoing } from '../modules/bitrix/bitrix.outgoing.controller';
 import { handleBitrixImconnector } from '../modules/bitrix/bitrix.webhook.controller';
 import { bitrixAuthService } from '../modules/bitrix/bitrix.auth.service';
@@ -134,24 +133,6 @@ router.post('/', async (req, res) => {
 
 router.get('/connect', connectBitrixOAuth);
 router.get('/oauth/callback', handleBitrixOAuthCallback);
-
-// Dev helper for quick test setup from Bitrix settings page.
-router.post('/dev/organizations', async (req, res) => {
-	try {
-		const rawName = String(req.body?.name || '').trim();
-		const name = rawName || `Bitrix Test Org ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`;
-
-		const organization = await prisma.organization.create({
-			data: { name },
-			select: { id: true, name: true, createdAt: true },
-		});
-
-		res.status(201).json({ ok: true, organization });
-	} catch (error: any) {
-		logger.error({ message: error?.message }, '[BitrixRoutes] Failed to create test organization');
-		res.status(500).json({ ok: false, error: 'Failed to create test organization' });
-	}
-});
 
 // Bitrix → Chat outgoing webhook
 router.post('/outgoing', handleBitrixOutgoing);

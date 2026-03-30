@@ -25,13 +25,40 @@ function resolveOrganizationId(req: Request, res: Response): number | null {
   return null;
 }
 
+async function resolveOrganizationIdOrDefault(req: Request, res: Response): Promise<number> {
+  const explicitId = resolveOrganizationId(req, res);
+  if (explicitId) {
+    const organization = await prisma.organization.findUnique({ where: { id: explicitId }, select: { id: true } });
+    if (!organization) {
+      throw new Error(`organizationId=${explicitId} does not exist`);
+    }
+    return explicitId;
+  }
+
+  const existing = await prisma.organization.findFirst({
+    orderBy: { id: 'asc' },
+    select: { id: true },
+  });
+
+  if (existing?.id) {
+    return existing.id;
+  }
+
+  const created = await prisma.organization.create({
+    data: { name: 'Default Organization' },
+    select: { id: true },
+  });
+
+  return created.id;
+}
+
 /**
  * Создает новую запись о WhatsApp-номере для организации.
  * @param req Запрос Express. Ожидает organizationId (из res.locals), phoneJid, displayName в теле.
  * @param res Ответ Express.
  */
 export async function createOrganizationPhone(req: Request, res: Response) {
-  const organizationId = resolveOrganizationId(req, res);
+  let organizationId: number;
   const {
     phoneJid,
     displayName,
@@ -46,24 +73,9 @@ export async function createOrganizationPhone(req: Request, res: Response) {
   const normalizedConnectionType = String(connectionType || 'baileys').toLowerCase();
   const isWaba = normalizedConnectionType === 'waba';
 
-  if (!organizationId || !phoneJid || !displayName) {
-    logger.warn('[createOrganizationPhone] Отсутствуют необходимые параметры: organizationId, phoneJid, или displayName.');
-    return res.status(400).json({ error: 'Missing organizationId, phoneJid, or displayName' });
-  }
-
-  const organization = await prisma.organization.findUnique({
-    where: { id: organizationId },
-    select: { id: true, name: true },
-  });
-
-  if (!organization) {
-    logger.warn(
-      `[createOrganizationPhone] Организация не найдена: organizationId=${organizationId}.`,
-    );
-    return res.status(404).json({
-      error: 'Organization not found',
-      details: `organizationId=${organizationId} does not exist`,
-    });
+  if (!phoneJid || !displayName) {
+    logger.warn('[createOrganizationPhone] Отсутствуют необходимые параметры: phoneJid или displayName.');
+    return res.status(400).json({ error: 'Missing phoneJid or displayName' });
   }
 
   if (normalizedConnectionType !== 'baileys' && normalizedConnectionType !== 'waba') {
@@ -75,14 +87,15 @@ export async function createOrganizationPhone(req: Request, res: Response) {
   }
 
   try {
-    // Проверяем, не существует ли уже такой JID для данной организации
-    const existingPhone = await prisma.organizationPhone.findUnique({
-    where: {
-        phoneJid: phoneJid,
-            organizationId: organizationId,
+    organizationId = await resolveOrganizationIdOrDefault(req, res);
 
-        },
-    },)
+    // Проверяем, не существует ли уже такой JID для данной организации
+    const existingPhone = await prisma.organizationPhone.findFirst({
+      where: {
+        phoneJid,
+        organizationId,
+      },
+    });
 
     if (existingPhone) {
         logger.warn(`[createOrganizationPhone] Попытка добавить существующий номер ${phoneJid} для организации ${organizationId}.`);
@@ -128,14 +141,11 @@ export async function createOrganizationPhone(req: Request, res: Response) {
  * @param res Ответ Express.
  */
 export async function listOrganizationPhones(req: Request, res: Response) {
-  const organizationId = resolveOrganizationId(req, res);
-
-    if (!organizationId) {
-        logger.warn('[listOrganizationPhones] organizationId не определен в res.locals.');
-        return res.status(400).json({ error: 'organizationId is required.' });
-    }
+  let organizationId: number;
 
     try {
+        organizationId = await resolveOrganizationIdOrDefault(req, res);
+
         const phones = await prisma.organizationPhone.findMany({
             where: { organizationId: organizationId },
             // Выбираем только необходимые поля, чтобы не передавать лишние данные
@@ -165,22 +175,21 @@ export async function listOrganizationPhones(req: Request, res: Response) {
  * @param res Ответ Express.
  */
 export async function connectOrganizationPhone(req: Request, res: Response) {
-  const organizationId = resolveOrganizationId(req, res);
   const organizationPhoneId = parseInt(req.params.organizationPhoneId as string, 10);
 
-  if (!organizationId || isNaN(organizationPhoneId)) {
-    logger.warn('[connectOrganizationPhone] Отсутствуют или некорректны organizationId или organizationPhoneId.');
-    return res.status(400).json({ error: 'Missing organizationId or invalid organizationPhoneId' });
+  if (isNaN(organizationPhoneId)) {
+    logger.warn('[connectOrganizationPhone] Некорректный organizationPhoneId.');
+    return res.status(400).json({ error: 'Invalid organizationPhoneId' });
   }
 
   try {
     const phone = await prisma.organizationPhone.findUnique({
-      where: { id: organizationPhoneId, organizationId: organizationId },
+      where: { id: organizationPhoneId },
     });
 
     if (!phone) {
-      logger.warn(`[connectOrganizationPhone] Телефон с ID ${organizationPhoneId} не найден или не принадлежит организации ${organizationId}.`);
-      return res.status(404).json({ error: 'Organization phone not found or does not belong to your organization.' });
+      logger.warn(`[connectOrganizationPhone] Телефон с ID ${organizationPhoneId} не найден.`);
+      return res.status(404).json({ error: 'Organization phone not found.' });
     }
     if (!phone.phoneJid) {
         logger.warn(`[connectOrganizationPhone] JID телефона не установлен для organizationPhoneId: ${organizationPhoneId}.`);
@@ -210,7 +219,7 @@ export async function connectOrganizationPhone(req: Request, res: Response) {
     }
 
     // Запускаем Baileys сессию. QR-код будет сохранен в БД через обработчик 'connection.update'.
-    await startBaileys(organizationId, organizationPhoneId, phone.phoneJid);
+    await startBaileys(phone.organizationId, organizationPhoneId, phone.phoneJid);
     logger.info(`[connectOrganizationPhone] Инициирован запуск Baileys для ${phone.phoneJid}.`);
     res.status(202).json({ message: 'WhatsApp session connection initiated. Check the /api/organization-phones endpoint for QR code or status updates.' });
   } catch (error: any) {
@@ -226,22 +235,21 @@ export async function connectOrganizationPhone(req: Request, res: Response) {
  * @param res Ответ Express.
  */
 export async function disconnectOrganizationPhone(req: Request, res: Response) {
-  const organizationId = resolveOrganizationId(req, res);
-    const organizationPhoneId = parseInt(req.params.organizationPhoneId as string, 10);
+  const organizationPhoneId = parseInt(req.params.organizationPhoneId as string, 10);
 
-    if (!organizationId || isNaN(organizationPhoneId)) {
-        logger.warn('[disconnectOrganizationPhone] Отсутствуют или некорректны organizationId или organizationPhoneId.');
-        return res.status(400).json({ error: 'Missing organizationId or invalid organizationPhoneId' });
+  if (isNaN(organizationPhoneId)) {
+    logger.warn('[disconnectOrganizationPhone] Некорректный organizationPhoneId.');
+    return res.status(400).json({ error: 'Invalid organizationPhoneId' });
     }
 
     try {
         const phone = await prisma.organizationPhone.findUnique({
-            where: { id: organizationPhoneId, organizationId: organizationId },
+      where: { id: organizationPhoneId },
         });
 
         if (!phone) {
-            logger.warn(`[disconnectOrganizationPhone] Телефон с ID ${organizationPhoneId} не найден или не принадлежит организации ${organizationId}.`);
-            return res.status(404).json({ error: 'Organization phone not found or does not belong to your organization.' });
+      logger.warn(`[disconnectOrganizationPhone] Телефон с ID ${organizationPhoneId} не найден.`);
+      return res.status(404).json({ error: 'Organization phone not found.' });
         }
 
         const sock = getBaileysSock(organizationPhoneId);
