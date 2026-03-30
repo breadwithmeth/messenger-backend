@@ -90,6 +90,12 @@
         margin-top: 14px;
       }
 
+      .grid-main {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 12px;
+      }
+
       .card {
         background: var(--surface);
         border: 1px solid var(--line);
@@ -257,9 +263,63 @@
         font-size: 0.86rem;
       }
 
+      .list-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .table-wrap {
+        overflow-x: auto;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.88rem;
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid #e4ebf4;
+        padding: 8px 6px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        color: var(--text-secondary);
+        font-weight: 600;
+        font-size: 0.8rem;
+      }
+
+      .qr-box {
+        width: 116px;
+        height: 116px;
+        border: 1px solid #d7e0ec;
+        border-radius: 8px;
+        background: #ffffff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .qr-box img {
+        width: 108px;
+        height: 108px;
+        object-fit: contain;
+      }
+
       @media (min-width: 920px) {
         .grid {
           grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .grid-main {
+          grid-template-columns: 420px 1fr;
+          align-items: start;
         }
       }
 
@@ -280,51 +340,12 @@
       <section class="hero">
         <h1>Bitrix Enterprise Workspace</h1>
         <p>
-          Единая корпоративная панель для установки интеграции, OAuth-подключения и управления
-          WhatsApp (Baileys) из интерфейса приложения.
+          Управление неофициальным WhatsApp (Baileys): создание номера, запуск подключения и
+          просмотр текущих статусов/QR-кодов.
         </p>
-        <div class="badge-row" id="heroBadges"></div>
       </section>
 
-      <section class="grid">
-        <article class="card">
-          <h2>Install Context</h2>
-          <div class="stack" id="contextList"></div>
-        </article>
-
-        <article class="card">
-          <h2>Routing</h2>
-          <div class="stack">
-            <div class="kv"><div class="k">Install URL</div><div class="v" id="installUrl"></div></div>
-            <div class="kv"><div class="k">OAuth Start</div><div class="v" id="connectUrl"></div></div>
-            <div class="kv"><div class="k">Imconnector</div><div class="v" id="imconnectorUrl"></div></div>
-            <div class="kv"><div class="k">Outgoing</div><div class="v" id="outgoingUrl"></div></div>
-          </div>
-        </article>
-
-        <article class="card">
-          <h2>Actions</h2>
-          <div class="actions">
-            <button class="btn btn-primary" id="openOauth">Открыть OAuth Connect</button>
-            <button class="btn btn-secondary" id="checkHealth">Проверить /health</button>
-            <button class="btn btn-ghost" id="sendProbe">Отправить Install Probe</button>
-          </div>
-          <div class="status" id="statusBox">Ожидание действий.</div>
-          <div class="result" id="probeResult">Ответ от backend появится здесь.</div>
-        </article>
-
-        <article class="card">
-          <h2>Bitrix Notes</h2>
-          <p class="muted">
-            При установке Bitrix может передавать параметры как query-string или form payload.
-            Backend уже обрабатывает оба варианта и сохраняет токены при наличии
-            <span class="mono">AUTH_ID</span> + <span class="mono">REFRESH_ID</span>.
-          </p>
-          <p class="muted">
-            Для детального сценария настройки см. <span class="mono">bitrix-docs/BITRIX_SIDE_SETUP.md</span>.
-          </p>
-        </article>
-
+      <section class="grid-main">
         <article class="card">
           <h2>WhatsApp (Неофициально / Baileys)</h2>
           <div class="stack">
@@ -347,80 +368,41 @@
               <button class="btn btn-primary" id="waCreate">Создать номер</button>
               <button class="btn btn-secondary" id="waCreateConnect">Создать + подключить QR</button>
             </div>
-            <div class="hint">API без auth: <span class="mono">POST /api/organization-phones</span> и <span class="mono">POST /api/organization-phones/:id/connect</span></div>
+            <div class="hint">API: <span class="mono">POST /api/organization-phones</span>, <span class="mono">POST /api/organization-phones/:id/connect</span></div>
             <div class="result" id="waResult">Ожидание действий...</div>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="list-head">
+            <h2>Список номеров и QR</h2>
+            <div class="actions">
+              <button class="btn btn-ghost" id="waRefresh">Обновить список</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Номер</th>
+                  <th>Имя</th>
+                  <th>Статус</th>
+                  <th>QR</th>
+                </tr>
+              </thead>
+              <tbody id="waPhonesBody">
+                <tr>
+                  <td colspan="5" class="muted">Список пуст. Укажите organizationId и нажмите "Обновить список".</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </article>
       </section>
     </main>
 
     <script>
-      const params = new URLSearchParams(window.location.search);
-
-      const rawContext = {
-        DOMAIN: params.get('DOMAIN'),
-        PROTOCOL: params.get('PROTOCOL'),
-        LANG: params.get('LANG'),
-        APP_SID: params.get('APP_SID'),
-        AUTH_ID: params.get('AUTH_ID'),
-        AUTH_EXPIRES: params.get('AUTH_EXPIRES'),
-        REFRESH_ID: params.get('REFRESH_ID'),
-        member_id: params.get('member_id'),
-        status: params.get('status'),
-        PLACEMENT: params.get('PLACEMENT'),
-        PLACEMENT_OPTIONS: params.get('PLACEMENT_OPTIONS'),
-      };
-
-      const installUrl = `${window.location.origin}/integrations/bitrix/`;
-      const connectUrl = `${window.location.origin}/integrations/bitrix/connect`;
-      const imconnectorUrl = `${window.location.origin}/integrations/bitrix/imconnector`;
-      const outgoingUrl = `${window.location.origin}/integrations/bitrix/outgoing`;
-
-      document.getElementById('installUrl').textContent = installUrl;
-      document.getElementById('connectUrl').textContent = connectUrl;
-      document.getElementById('imconnectorUrl').textContent = imconnectorUrl;
-      document.getElementById('outgoingUrl').textContent = outgoingUrl;
-
-      function normalizeValue(value, key) {
-        if (!value) {
-          return '-';
-        }
-        if (key === 'AUTH_ID' || key === 'REFRESH_ID') {
-          return `${value.slice(0, 10)}...${value.slice(-6)}`;
-        }
-        return value;
-      }
-
-      function renderContext() {
-        const list = document.getElementById('contextList');
-        Object.entries(rawContext).forEach(([key, value]) => {
-          const row = document.createElement('div');
-          row.className = 'kv';
-          row.innerHTML = `<div class="k">${key}</div><div class="v">${normalizeValue(value, key)}</div>`;
-          list.appendChild(row);
-        });
-      }
-
-      function renderBadges() {
-        const wrap = document.getElementById('heroBadges');
-        const items = [];
-        items.push(rawContext.DOMAIN ? `Domain: ${rawContext.DOMAIN}` : 'Domain: n/a');
-        items.push(rawContext.PLACEMENT ? `Placement: ${rawContext.PLACEMENT}` : 'Placement: n/a');
-        items.push(rawContext.AUTH_ID && rawContext.REFRESH_ID ? 'Token payload: present' : 'Token payload: missing');
-        items.forEach((text) => {
-          const badge = document.createElement('span');
-          badge.className = 'badge';
-          badge.textContent = text;
-          wrap.appendChild(badge);
-        });
-      }
-
-      function setStatus(kind, text) {
-        const box = document.getElementById('statusBox');
-        box.className = `status ${kind}`;
-        box.textContent = text;
-      }
-
       function stringifyBody(value) {
         try {
           return JSON.stringify(value, null, 2);
@@ -439,58 +421,6 @@
           return JSON.parse(text);
         } catch {
           return text;
-        }
-      }
-
-      async function checkHealth() {
-        setStatus('warn', 'Проверка /health...');
-        try {
-          const resp = await fetch('/health');
-          const body = await resp.json();
-          if (resp.ok) {
-            setStatus('ok', `Backend OK: ${body.ts || 'timestamp n/a'}`);
-            return;
-          }
-          setStatus('err', `Health check failed: HTTP ${resp.status}`);
-        } catch (error) {
-          setStatus('err', 'Health check error. Проверьте backend/прокси.');
-        }
-      }
-
-      async function sendInstallProbe() {
-        setStatus('warn', 'Отправка POST /integrations/bitrix/...');
-
-        const payload = new URLSearchParams();
-        Object.entries(rawContext).forEach(([key, value]) => {
-          if (value) {
-            payload.set(key, value);
-          }
-        });
-
-        try {
-          const resp = await fetch('/integrations/bitrix/', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: payload.toString(),
-          });
-
-          const text = await resp.text();
-          let body = text;
-          try {
-            body = JSON.parse(text);
-          } catch {
-            // Keep raw text when response is not JSON.
-          }
-
-          document.getElementById('probeResult').textContent = `HTTP ${resp.status}\n${stringifyBody(body)}`;
-
-          if (resp.ok) {
-            setStatus('ok', 'Install probe успешно обработан backend.');
-          } else {
-            setStatus('err', `Install probe failed: HTTP ${resp.status}`);
-          }
-        } catch (error) {
-          setStatus('err', 'Ошибка сети при отправке install probe.');
         }
       }
 
@@ -525,6 +455,7 @@
 
           if (!connectAfterCreate) {
             resultEl.textContent = `Create HTTP ${createResp.status}\n${stringifyBody(createBody)}`;
+            await loadPhones();
             return;
           }
 
@@ -537,8 +468,78 @@
           resultEl.textContent =
             `Create HTTP ${createResp.status}\n${stringifyBody(createBody)}\n\n` +
             `Connect HTTP ${connectResp.status}\n${stringifyBody(connectBody)}`;
+          await loadPhones();
         } catch (error) {
           resultEl.textContent = `Network error\n${String(error)}`;
+        }
+      }
+
+      function resolveQrImage(qrValue) {
+        if (!qrValue) {
+          return '';
+        }
+
+        if (String(qrValue).startsWith('data:image')) {
+          return String(qrValue);
+        }
+
+        return `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(qrValue)}`;
+      }
+
+      function renderPhones(items) {
+        const body = document.getElementById('waPhonesBody');
+        body.innerHTML = '';
+
+        if (!Array.isArray(items) || items.length === 0) {
+          body.innerHTML = '<tr><td colspan="5" class="muted">Номера не найдены.</td></tr>';
+          return;
+        }
+
+        for (const item of items) {
+          const tr = document.createElement('tr');
+          const qrImg = resolveQrImage(item.qrCode);
+
+          tr.innerHTML = `
+            <td>${item.id ?? '-'}</td>
+            <td>${item.phoneJid ?? '-'}</td>
+            <td>${item.displayName ?? '-'}</td>
+            <td>${item.status ?? '-'}</td>
+            <td>
+              ${
+                qrImg
+                  ? `<div class="qr-box"><img src="${qrImg}" alt="QR ${item.id}" /></div>`
+                  : '<span class="muted">нет QR</span>'
+              }
+            </td>
+          `;
+
+          body.appendChild(tr);
+        }
+      }
+
+      async function loadPhones() {
+        const resultEl = document.getElementById('waResult');
+        const organizationId = Number((document.getElementById('waOrgId').value || '').trim());
+
+        if (!organizationId) {
+          renderPhones([]);
+          return;
+        }
+
+        try {
+          const resp = await fetch(`/api/organization-phones/all?organizationId=${organizationId}`);
+          const body = await responseToBody(resp);
+
+          if (!resp.ok) {
+            resultEl.textContent = `List HTTP ${resp.status}\n${stringifyBody(body)}`;
+            renderPhones([]);
+            return;
+          }
+
+          renderPhones(body);
+        } catch (error) {
+          resultEl.textContent = `List network error\n${String(error)}`;
+          renderPhones([]);
         }
       }
 
@@ -565,25 +566,20 @@
           resultEl.textContent =
             `Create Org HTTP ${resp.status}\n${stringifyBody(body)}\n\n` +
             `organizationId автоматически подставлен: ${body.organization.id}`;
+          await loadPhones();
         } catch (error) {
           resultEl.textContent = `Create Org network error\n${String(error)}`;
         }
       }
 
-      document.getElementById('openOauth').addEventListener('click', () => {
-        window.open('/integrations/bitrix/connect', '_blank');
-      });
-      document.getElementById('checkHealth').addEventListener('click', checkHealth);
-      document.getElementById('sendProbe').addEventListener('click', sendInstallProbe);
       document.getElementById('waCreateOrg').addEventListener('click', createTestOrganization);
+      document.getElementById('waRefresh').addEventListener('click', loadPhones);
       document.getElementById('waCreate').addEventListener('click', () => createUnofficialWhatsapp(false));
       document.getElementById('waCreateConnect').addEventListener('click', () => createUnofficialWhatsapp(true));
 
-      renderContext();
-      renderBadges();
-      if (!rawContext.DOMAIN) {
-        setStatus('warn', 'DOMAIN не найден в URL. Откройте страницу из Bitrix для полного контекста.');
-      }
+      document.getElementById('waOrgId').addEventListener('change', loadPhones);
+      loadPhones();
+      setInterval(loadPhones, 8000);
     </script>
   </body>
 </html>
