@@ -329,8 +329,8 @@
           <h2>WhatsApp (Неофициально / Baileys)</h2>
           <div class="stack">
             <div class="field">
-              <label for="waJwt">JWT token (role: manager/admin)</label>
-              <input id="waJwt" placeholder="Вставьте JWT без префикса Bearer" />
+              <label for="waOrgId">organizationId</label>
+              <input id="waOrgId" placeholder="1" />
             </div>
             <div class="field">
               <label for="waPhoneJid">phoneJid</label>
@@ -344,7 +344,7 @@
               <button class="btn btn-primary" id="waCreate">Создать номер</button>
               <button class="btn btn-secondary" id="waCreateConnect">Создать + подключить QR</button>
             </div>
-            <div class="hint">API: <span class="mono">POST /api/organization-phones</span> и <span class="mono">POST /api/organization-phones/:id/connect</span></div>
+            <div class="hint">API без auth: <span class="mono">POST /api/organization-phones</span> и <span class="mono">POST /api/organization-phones/:id/connect</span></div>
             <div class="result" id="waResult">Ожидание действий...</div>
           </div>
         </article>
@@ -426,13 +426,8 @@
         }
       }
 
-      function getAuthHeaders() {
-        const token = (document.getElementById('waJwt').value || '').trim();
-        const headers = { 'Content-Type': 'application/json' };
-        if (token) {
-          headers.Authorization = `Bearer ${token}`;
-        }
-        return headers;
+      function getJsonHeaders() {
+        return { 'Content-Type': 'application/json' };
       }
 
       async function responseToBody(resp) {
@@ -498,19 +493,21 @@
 
       async function createUnofficialWhatsapp(connectAfterCreate) {
         const resultEl = document.getElementById('waResult');
+        const organizationId = Number((document.getElementById('waOrgId').value || '').trim());
         const phoneJid = (document.getElementById('waPhoneJid').value || '').trim();
         const displayName = (document.getElementById('waDisplayName').value || '').trim();
 
-        if (!phoneJid || !displayName) {
-          resultEl.textContent = 'Нужно заполнить phoneJid и displayName';
+        if (!organizationId || !phoneJid || !displayName) {
+          resultEl.textContent = 'Нужно заполнить organizationId, phoneJid и displayName';
           return;
         }
 
         try {
           const createResp = await fetch('/api/organization-phones', {
             method: 'POST',
-            headers: getAuthHeaders(),
+            headers: getJsonHeaders(),
             body: JSON.stringify({
+              organizationId,
               phoneJid,
               displayName,
               connectionType: 'baileys',
@@ -530,7 +527,8 @@
 
           const connectResp = await fetch(`/api/organization-phones/${createBody.id}/connect`, {
             method: 'POST',
-            headers: getAuthHeaders(),
+            headers: getJsonHeaders(),
+            body: JSON.stringify({ organizationId }),
           });
           const connectBody = await responseToBody(connectResp);
           resultEl.textContent =

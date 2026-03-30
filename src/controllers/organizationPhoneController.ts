@@ -6,13 +6,32 @@ import pino from 'pino';
 import WebSocket from 'ws'; 
 const logger = pino({ level: 'info' });
 
+function resolveOrganizationId(req: Request, res: Response): number | null {
+  const localId = Number(res.locals.organizationId);
+  if (Number.isInteger(localId) && localId > 0) {
+    return localId;
+  }
+
+  const bodyId = Number(req.body?.organizationId);
+  if (Number.isInteger(bodyId) && bodyId > 0) {
+    return bodyId;
+  }
+
+  const queryId = Number(req.query?.organizationId);
+  if (Number.isInteger(queryId) && queryId > 0) {
+    return queryId;
+  }
+
+  return null;
+}
+
 /**
  * Создает новую запись о WhatsApp-номере для организации.
  * @param req Запрос Express. Ожидает organizationId (из res.locals), phoneJid, displayName в теле.
  * @param res Ответ Express.
  */
 export async function createOrganizationPhone(req: Request, res: Response) {
-  const organizationId = res.locals.organizationId;
+  const organizationId = resolveOrganizationId(req, res);
   const {
     phoneJid,
     displayName,
@@ -84,7 +103,7 @@ export async function createOrganizationPhone(req: Request, res: Response) {
  * @param res Ответ Express.
  */
 export async function listOrganizationPhones(req: Request, res: Response) {
-    const organizationId = res.locals.organizationId;
+  const organizationId = resolveOrganizationId(req, res);
 
     if (!organizationId) {
         logger.warn('[listOrganizationPhones] organizationId не определен в res.locals.');
@@ -121,7 +140,7 @@ export async function listOrganizationPhones(req: Request, res: Response) {
  * @param res Ответ Express.
  */
 export async function connectOrganizationPhone(req: Request, res: Response) {
-  const organizationId = res.locals.organizationId;
+  const organizationId = resolveOrganizationId(req, res);
   const organizationPhoneId = parseInt(req.params.organizationPhoneId as string, 10);
 
   if (!organizationId || isNaN(organizationPhoneId)) {
@@ -182,7 +201,7 @@ export async function connectOrganizationPhone(req: Request, res: Response) {
  * @param res Ответ Express.
  */
 export async function disconnectOrganizationPhone(req: Request, res: Response) {
-    const organizationId = res.locals.organizationId;
+  const organizationId = resolveOrganizationId(req, res);
     const organizationPhoneId = parseInt(req.params.organizationPhoneId as string, 10);
 
     if (!organizationId || isNaN(organizationPhoneId)) {
