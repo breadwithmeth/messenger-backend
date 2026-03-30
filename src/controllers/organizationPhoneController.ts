@@ -51,6 +51,21 @@ export async function createOrganizationPhone(req: Request, res: Response) {
     return res.status(400).json({ error: 'Missing organizationId, phoneJid, or displayName' });
   }
 
+  const organization = await prisma.organization.findUnique({
+    where: { id: organizationId },
+    select: { id: true, name: true },
+  });
+
+  if (!organization) {
+    logger.warn(
+      `[createOrganizationPhone] Организация не найдена: organizationId=${organizationId}.`,
+    );
+    return res.status(404).json({
+      error: 'Organization not found',
+      details: `organizationId=${organizationId} does not exist`,
+    });
+  }
+
   if (normalizedConnectionType !== 'baileys' && normalizedConnectionType !== 'waba') {
     return res.status(400).json({ error: 'connectionType must be either "baileys" or "waba"' });
   }
@@ -91,6 +106,16 @@ export async function createOrganizationPhone(req: Request, res: Response) {
     logger.info(`✅ Создан новый телефон организации: ID ${newPhone.id}, JID ${phoneJid}, Организация ${organizationId}.`);
     res.status(201).json(newPhone);
   } catch (error: any) {
+    if (error?.code === 'P2003') {
+      logger.warn(
+        `[createOrganizationPhone] Foreign key violation for organizationId=${organizationId}.`,
+      );
+      return res.status(400).json({
+        error: 'Invalid organizationId',
+        details: `organizationId=${organizationId} does not exist`,
+      });
+    }
+
     logger.error(`❌ Ошибка при создании телефона организации для ${organizationId}:`, error);
     res.status(500).json({ error: 'Failed to create organization phone', details: error.message });
   }
