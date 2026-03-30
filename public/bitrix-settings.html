@@ -3,26 +3,28 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Bitrix Control Deck</title>
+    <title>Bitrix Workspace</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
     <style>
       :root {
-        --bg-a: #f9f6ef;
-        --bg-b: #e6f7f6;
-        --card: #fffdf9;
-        --ink: #16202e;
-        --ink-soft: #5a6778;
-        --line: #d2d7df;
-        --accent: #05668d;
-        --accent-2: #00a896;
-        --ok: #146c43;
-        --warn: #9a6a00;
-        --danger: #9f1239;
+        --bg: #f3f6fb;
+        --surface: #ffffff;
+        --surface-soft: #f8faff;
+        --text: #1f2a37;
+        --text-secondary: #556070;
+        --line: #dbe3ef;
+        --primary: #1677ff;
+        --primary-hover: #3c8cff;
+        --primary-soft: #eaf3ff;
+        --success: #0f8f4f;
+        --warning: #b7791f;
+        --danger: #c53030;
+        --shadow: 0 10px 30px rgba(16, 37, 65, 0.08);
       }
 
       * {
@@ -31,125 +33,110 @@
 
       body {
         margin: 0;
-        min-height: 100vh;
-        font-family: 'Space Grotesk', 'Segoe UI', sans-serif;
-        color: var(--ink);
+        font-family: 'Manrope', 'Segoe UI', sans-serif;
+        color: var(--text);
         background:
-          radial-gradient(900px 500px at 8% -5%, #ffecc8 0%, transparent 55%),
-          radial-gradient(700px 420px at 100% 10%, #c8f3ef 0%, transparent 50%),
-          linear-gradient(160deg, var(--bg-a) 0%, var(--bg-b) 100%);
+          radial-gradient(800px 340px at 85% -20%, #dbeafe 0%, transparent 62%),
+          radial-gradient(760px 280px at 8% -30%, #e2e8f0 0%, transparent 58%),
+          var(--bg);
       }
 
       .wrap {
-        max-width: 1060px;
+        max-width: 1180px;
         margin: 0 auto;
-        padding: 26px 18px 44px;
+        padding: 24px 16px 44px;
       }
 
       .hero {
-        position: relative;
-        overflow: hidden;
-        border-radius: 24px;
-        color: #eff9ff;
-        background: linear-gradient(120deg, #0b132b 0%, #1c2541 55%, #05668d 100%);
-        padding: 22px 20px;
-        box-shadow: 0 20px 42px rgba(11, 19, 43, 0.28);
-        animation: reveal 460ms ease-out;
-      }
-
-      .hero::after {
-        content: '';
-        position: absolute;
-        width: 340px;
-        height: 340px;
-        border-radius: 50%;
-        right: -70px;
-        top: -120px;
-        background: radial-gradient(circle, rgba(255, 255, 255, 0.24) 0%, transparent 65%);
-        pointer-events: none;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: linear-gradient(180deg, #ffffff 0%, #f6faff 100%);
+        box-shadow: var(--shadow);
+        padding: 18px 18px 16px;
       }
 
       .hero h1 {
         margin: 0;
-        letter-spacing: -0.02em;
-        font-size: clamp(1.45rem, 2.4vw, 2rem);
+        font-size: clamp(1.32rem, 2.1vw, 1.76rem);
+        letter-spacing: -0.01em;
       }
 
       .hero p {
-        margin: 10px 0 0;
-        color: #d4ebf7;
-        max-width: 760px;
+        margin: 8px 0 0;
+        color: var(--text-secondary);
+        max-width: 860px;
       }
 
       .badge-row {
-        margin-top: 14px;
+        margin-top: 12px;
         display: flex;
         gap: 8px;
         flex-wrap: wrap;
       }
 
       .badge {
-        border: 1px solid rgba(255, 255, 255, 0.22);
+        border: 1px solid #d7e6ff;
         border-radius: 999px;
-        padding: 5px 10px;
-        font-size: 0.82rem;
-        background: rgba(255, 255, 255, 0.09);
+        padding: 4px 10px;
+        font-size: 0.78rem;
+        color: #1d4f91;
+        background: var(--primary-soft);
       }
 
       .grid {
         display: grid;
         grid-template-columns: 1fr;
-        gap: 14px;
-        margin-top: 16px;
+        gap: 12px;
+        margin-top: 14px;
       }
 
       .card {
-        background: var(--card);
+        background: var(--surface);
         border: 1px solid var(--line);
-        border-radius: 16px;
+        border-radius: 12px;
         padding: 14px;
-        box-shadow: 0 6px 18px rgba(22, 32, 46, 0.08);
+        box-shadow: 0 3px 10px rgba(31, 54, 90, 0.05);
         animation: reveal 460ms ease-out;
       }
 
       .card h2 {
-        margin: 0 0 10px;
-        font-size: 1.04rem;
+        margin: 0 0 8px;
+        font-size: 1rem;
       }
 
       .mono {
         font-family: 'IBM Plex Mono', monospace;
-        background: #eff2f5;
-        border: 1px solid #d9dee5;
+        background: #f3f6fb;
+        border: 1px solid #dce4ef;
         border-radius: 8px;
         padding: 1px 6px;
       }
 
       .muted {
-        color: var(--ink-soft);
+        color: var(--text-secondary);
       }
 
       .stack {
         display: grid;
-        gap: 9px;
+        gap: 8px;
       }
 
       .kv {
         display: grid;
         grid-template-columns: 120px 1fr;
-        gap: 8px;
+        gap: 6px;
         align-items: center;
-        font-size: 0.92rem;
+        font-size: 0.88rem;
       }
 
       .kv .k {
-        color: var(--ink-soft);
+        color: var(--text-secondary);
       }
 
       .kv .v {
         font-family: 'IBM Plex Mono', monospace;
-        background: #f6f8fa;
-        border: 1px solid #e5e7eb;
+        background: var(--surface-soft);
+        border: 1px solid #e1e8f2;
         border-radius: 8px;
         padding: 6px 8px;
         overflow-wrap: anywhere;
@@ -158,16 +145,17 @@
       .actions {
         display: flex;
         flex-wrap: wrap;
-        gap: 10px;
+        gap: 8px;
       }
 
       .btn {
-        border: 0;
-        border-radius: 10px;
-        padding: 10px 14px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        padding: 8px 12px;
         font-weight: 600;
+        font-size: 0.9rem;
         cursor: pointer;
-        transition: transform 120ms ease, box-shadow 120ms ease;
+        transition: all 120ms ease;
       }
 
       .btn:hover {
@@ -180,58 +168,93 @@
 
       .btn-primary {
         color: #ffffff;
-        background: linear-gradient(130deg, var(--accent) 0%, var(--accent-2) 100%);
-        box-shadow: 0 10px 18px rgba(5, 102, 141, 0.22);
+        background: var(--primary);
+        box-shadow: 0 6px 14px rgba(22, 119, 255, 0.22);
+      }
+
+      .btn-primary:hover {
+        background: var(--primary-hover);
       }
 
       .btn-secondary {
-        color: #0f172a;
-        background: #d8f3ec;
+        color: #174a8d;
+        background: var(--primary-soft);
+        border-color: #d5e6ff;
       }
 
       .btn-ghost {
-        color: #0f172a;
-        background: #eceff3;
+        color: #384657;
+        background: #f3f5f8;
+        border-color: #dce3ed;
       }
 
       .status {
-        margin-top: 10px;
-        border-radius: 10px;
-        padding: 10px;
-        border: 1px solid #d7dee8;
-        background: #f8fafc;
-        color: var(--ink-soft);
+        margin-top: 8px;
+        border-radius: 8px;
+        padding: 9px 10px;
+        border: 1px solid #dbe3ef;
+        background: #f7faff;
+        color: var(--text-secondary);
       }
 
       .status.ok {
-        border-color: #bde7d2;
-        background: #eefcf5;
-        color: var(--ok);
+        border-color: #c9e8d6;
+        background: #f2fbf6;
+        color: var(--success);
       }
 
       .status.warn {
-        border-color: #f6dd9b;
-        background: #fff9e8;
-        color: var(--warn);
+        border-color: #efdba8;
+        background: #fffaf0;
+        color: var(--warning);
       }
 
       .status.err {
-        border-color: #f1b4c3;
-        background: #fff3f6;
+        border-color: #f1c0c8;
+        background: #fff4f5;
         color: var(--danger);
       }
 
       .result {
         margin-top: 8px;
-        border-radius: 10px;
-        border: 1px dashed #c9d3df;
-        background: #f8fbff;
-        padding: 11px;
-        font-size: 0.83rem;
+        border-radius: 8px;
+        border: 1px dashed #ced9e8;
+        background: #f7faff;
+        padding: 10px;
+        font-size: 0.8rem;
         line-height: 1.45;
         white-space: pre-wrap;
         word-break: break-word;
         font-family: 'IBM Plex Mono', monospace;
+      }
+
+      .field {
+        display: grid;
+        gap: 6px;
+      }
+
+      .field label {
+        color: var(--text-secondary);
+        font-size: 0.9rem;
+      }
+
+      .field input {
+        border: 1px solid #d3ddea;
+        border-radius: 8px;
+        padding: 8px 10px;
+        font: inherit;
+        background: #ffffff;
+      }
+
+      .field input:focus {
+        outline: 0;
+        border-color: #9ac3ff;
+        box-shadow: 0 0 0 3px rgba(22, 119, 255, 0.13);
+      }
+
+      .hint {
+        color: var(--text-secondary);
+        font-size: 0.86rem;
       }
 
       @media (min-width: 920px) {
@@ -255,10 +278,10 @@
   <body>
     <main class="wrap">
       <section class="hero">
-        <h1>Bitrix Control Deck</h1>
+        <h1>Bitrix Enterprise Workspace</h1>
         <p>
-          Эта страница открывается в Bitrix и сразу показывает install-context: параметры
-          подключения, placement и текущую доступность backend endpoints.
+          Единая корпоративная панель для установки интеграции, OAuth-подключения и управления
+          WhatsApp (Baileys) из интерфейса приложения.
         </p>
         <div class="badge-row" id="heroBadges"></div>
       </section>
@@ -300,6 +323,30 @@
           <p class="muted">
             Для детального сценария настройки см. <span class="mono">bitrix-docs/BITRIX_SIDE_SETUP.md</span>.
           </p>
+        </article>
+
+        <article class="card">
+          <h2>WhatsApp (Неофициально / Baileys)</h2>
+          <div class="stack">
+            <div class="field">
+              <label for="waJwt">JWT token (role: manager/admin)</label>
+              <input id="waJwt" placeholder="Вставьте JWT без префикса Bearer" />
+            </div>
+            <div class="field">
+              <label for="waPhoneJid">phoneJid</label>
+              <input id="waPhoneJid" placeholder="79001112233@s.whatsapp.net" />
+            </div>
+            <div class="field">
+              <label for="waDisplayName">displayName</label>
+              <input id="waDisplayName" placeholder="Sales WA" />
+            </div>
+            <div class="actions">
+              <button class="btn btn-primary" id="waCreate">Создать номер</button>
+              <button class="btn btn-secondary" id="waCreateConnect">Создать + подключить QR</button>
+            </div>
+            <div class="hint">API: <span class="mono">POST /api/organization-phones</span> и <span class="mono">POST /api/organization-phones/:id/connect</span></div>
+            <div class="result" id="waResult">Ожидание действий...</div>
+          </div>
         </article>
       </section>
     </main>
@@ -379,6 +426,24 @@
         }
       }
 
+      function getAuthHeaders() {
+        const token = (document.getElementById('waJwt').value || '').trim();
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) {
+          headers.Authorization = `Bearer ${token}`;
+        }
+        return headers;
+      }
+
+      async function responseToBody(resp) {
+        const text = await resp.text();
+        try {
+          return JSON.parse(text);
+        } catch {
+          return text;
+        }
+      }
+
       async function checkHealth() {
         setStatus('warn', 'Проверка /health...');
         try {
@@ -431,11 +496,58 @@
         }
       }
 
+      async function createUnofficialWhatsapp(connectAfterCreate) {
+        const resultEl = document.getElementById('waResult');
+        const phoneJid = (document.getElementById('waPhoneJid').value || '').trim();
+        const displayName = (document.getElementById('waDisplayName').value || '').trim();
+
+        if (!phoneJid || !displayName) {
+          resultEl.textContent = 'Нужно заполнить phoneJid и displayName';
+          return;
+        }
+
+        try {
+          const createResp = await fetch('/api/organization-phones', {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+              phoneJid,
+              displayName,
+              connectionType: 'baileys',
+            }),
+          });
+
+          const createBody = await responseToBody(createResp);
+          if (!createResp.ok) {
+            resultEl.textContent = `Create HTTP ${createResp.status}\n${stringifyBody(createBody)}`;
+            return;
+          }
+
+          if (!connectAfterCreate) {
+            resultEl.textContent = `Create HTTP ${createResp.status}\n${stringifyBody(createBody)}`;
+            return;
+          }
+
+          const connectResp = await fetch(`/api/organization-phones/${createBody.id}/connect`, {
+            method: 'POST',
+            headers: getAuthHeaders(),
+          });
+          const connectBody = await responseToBody(connectResp);
+          resultEl.textContent =
+            `Create HTTP ${createResp.status}\n${stringifyBody(createBody)}\n\n` +
+            `Connect HTTP ${connectResp.status}\n${stringifyBody(connectBody)}`;
+        } catch (error) {
+          resultEl.textContent = `Network error\n${String(error)}`;
+        }
+      }
+
       document.getElementById('openOauth').addEventListener('click', () => {
         window.open('/integrations/bitrix/connect', '_blank');
       });
       document.getElementById('checkHealth').addEventListener('click', checkHealth);
       document.getElementById('sendProbe').addEventListener('click', sendInstallProbe);
+      document.getElementById('waCreate').addEventListener('click', () => createUnofficialWhatsapp(false));
+      document.getElementById('waCreateConnect').addEventListener('click', () => createUnofficialWhatsapp(true));
 
       renderContext();
       renderBadges();
