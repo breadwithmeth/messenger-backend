@@ -86,6 +86,8 @@ export interface BitrixIncomingMessageContext {
   bitrixChatId?: string;
   externalUserId?: string;
   externalMessageId?: string;
+  imChatId?: number;
+  imMessageId?: number;
   localChatIdCandidate?: number;
 }
 

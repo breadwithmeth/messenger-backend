@@ -14,6 +14,7 @@ import type {
 import { Boom } from '@hapi/boom';
 import { createAuthDBAdapter, prisma, StoredDataType } from './authStorage';
 import qrcode from 'qrcode-terminal';
+import QRCode from 'qrcode';
 import pino from 'pino';
 import { Buffer } from 'buffer';
 import * as fs from 'fs/promises'; // Для работы с файловой системой (удаление папок)
@@ -751,10 +752,22 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
     // Если получен QR-код
     if (qr) {
       // logger.info(`[ConnectionUpdate] QR code received for ${phoneJid}. Length: ${qr.length}`);
+      let qrPayload = qr;
+
+      try {
+        qrPayload = await QRCode.toDataURL(qr, {
+          errorCorrectionLevel: 'M',
+          margin: 1,
+          width: 320,
+        });
+      } catch (error) {
+        logger.warn({ err: error, organizationPhoneId }, '[ConnectionUpdate] Не удалось собрать data URL для QR, сохраняем сырой QR.');
+      }
+
       // Сохраняем QR-код в БД и обновляем статус
       await prisma.organizationPhone.update({
         where: { id: organizationPhoneId },
-        data: { qrCode: qr, status: 'pending' },
+        data: { qrCode: qrPayload, status: 'pending' },
       });
 
       // Выводим QR-код в терминал

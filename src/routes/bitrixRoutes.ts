@@ -7,6 +7,12 @@ import { handleBitrixImconnector } from '../modules/bitrix/bitrix.webhook.contro
 import { bitrixAuthService } from '../modules/bitrix/bitrix.auth.service';
 import {
 	connectBitrixOAuth,
+	bindBitrixEvents,
+	getBitrixEventBindings,
+	getBitrixEventsCatalog,
+	ensureBitrixOpenlineConnectors,
+	autoEnsureBitrixOpenlineConnectors,
+	unbindBitrixEvent,
 	handleBitrixOAuthCallback,
 } from '../modules/bitrix/bitrix.auth.controller';
 
@@ -102,6 +108,22 @@ router.post('/', async (req, res) => {
 				refreshId: readRequestField(req, 'REFRESH_ID'),
 				authExpires: readRequestField(req, 'AUTH_EXPIRES'),
 			});
+
+			const autoEnsureEnabled = String(process.env.BITRIX_AUTO_ENSURE_CONNECTORS || 'true').toLowerCase() !== 'false';
+			if (autoEnsureEnabled) {
+				try {
+					const ensureResult = await autoEnsureBitrixOpenlineConnectors(req);
+					logger.info(
+						{ created: ensureResult.created, existed: ensureResult.existed, failed: ensureResult.failed },
+						'[BitrixRoutes] Auto connector ensure after install POST completed',
+					);
+				} catch (autoEnsureError: any) {
+					logger.warn(
+						{ message: autoEnsureError?.message },
+						'[BitrixRoutes] Auto connector ensure after install POST failed',
+					);
+				}
+			}
 		} catch (error: any) {
 			logger.error(
 				{ message: error?.message, domain: meta.domain },
@@ -132,7 +154,61 @@ router.post('/', async (req, res) => {
 });
 
 router.get('/connect', connectBitrixOAuth);
+router.post('/connect', async (req, res) => {
+	const meta = getInstallProbeMeta(req);
+	logger.info(meta, '[BitrixRoutes] Connect POST probe received');
+
+	if (meta.authId === 'present' && meta.refreshId === 'present') {
+		try {
+			await bitrixAuthService.saveInstallToken({
+				domain: readRequestField(req, 'DOMAIN'),
+				authId: readRequestField(req, 'AUTH_ID'),
+				refreshId: readRequestField(req, 'REFRESH_ID'),
+				authExpires: readRequestField(req, 'AUTH_EXPIRES'),
+			});
+
+			const autoEnsureEnabled = String(process.env.BITRIX_AUTO_ENSURE_CONNECTORS || 'true').toLowerCase() !== 'false';
+			if (autoEnsureEnabled) {
+				try {
+					const ensureResult = await autoEnsureBitrixOpenlineConnectors(req);
+					logger.info(
+						{ created: ensureResult.created, existed: ensureResult.existed, failed: ensureResult.failed },
+						'[BitrixRoutes] Auto connector ensure after connect POST completed',
+					);
+				} catch (autoEnsureError: any) {
+					logger.warn(
+						{ message: autoEnsureError?.message },
+						'[BitrixRoutes] Auto connector ensure after connect POST failed',
+					);
+				}
+			}
+		} catch (error: any) {
+			logger.error(
+				{ message: error?.message, domain: meta.domain },
+				'[BitrixRoutes] Failed to persist token from /connect POST',
+			);
+		}
+	}
+
+	if (req.accepts('html')) {
+		const query = buildInstallRedirectQuery(req);
+		const target = query ? `/integrations/bitrix/?${query}` : '/integrations/bitrix/';
+		res.redirect(302, target);
+		return;
+	}
+
+	res.status(200).json({
+		ok: true,
+		path: req.originalUrl,
+		message: 'Connect POST probe handled',
+	});
+});
 router.get('/oauth/callback', handleBitrixOAuthCallback);
+router.get('/events', getBitrixEventsCatalog);
+router.get('/event-bindings', getBitrixEventBindings);
+router.post('/event-bind', bindBitrixEvents);
+router.post('/event-unbind', unbindBitrixEvent);
+router.post('/connectors/ensure', ensureBitrixOpenlineConnectors);
 
 // Bitrix → Chat outgoing webhook
 router.post('/outgoing', handleBitrixOutgoing);

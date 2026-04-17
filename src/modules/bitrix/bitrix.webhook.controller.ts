@@ -7,20 +7,48 @@ const WINDOW_MS = 10_000;
 const LIMIT = 50;
 const tokenBuckets = new Map<string, number[]>();
 
+function readBitrixToken(req: Request): { value: string; source: string } {
+  const fromHeader = req.headers['x-bitrix-token'];
+  if (typeof fromHeader === 'string' && fromHeader.trim()) {
+    return { value: fromHeader.trim(), source: 'header:x-bitrix-token' };
+  }
+
+  const body = (req.body || {}) as Record<string, any>;
+  const fromAuthObject = body?.auth?.application_token;
+  if (typeof fromAuthObject === 'string' && fromAuthObject.trim()) {
+    return { value: fromAuthObject.trim(), source: 'body:auth.application_token' };
+  }
+
+  const fromAuthFlat = body?.['auth[application_token]'];
+  if (typeof fromAuthFlat === 'string' && fromAuthFlat.trim()) {
+    return { value: fromAuthFlat.trim(), source: 'body:auth[application_token]' };
+  }
+
+  const fromQuery = req.query?.application_token;
+  if (typeof fromQuery === 'string' && fromQuery.trim()) {
+    return { value: fromQuery.trim(), source: 'query:application_token' };
+  }
+
+  return { value: '', source: 'none' };
+}
+
 export async function handleBitrixImconnector(req: Request, res: Response) {
-  const token = req.headers['x-bitrix-token'];
-  const expected = process.env.BITRIX_TOKEN || '';
+  const tokenInfo = readBitrixToken(req);
+  const token = tokenInfo.value;
+  const allowedTokens = [process.env.BITRIX_TOKEN, process.env.BITRIX_APP_TOKEN]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
 
   res.status(200).json({ ok: true });
 
-  logger.info({ body: req.body }, '[BitrixImconnector] Webhook received');
+  logger.info({ body: req.body, tokenSource: tokenInfo.source }, '[BitrixImconnector] Webhook received');
 
-  if (!expected || token !== expected) {
-    logger.warn('[BitrixImconnector] Invalid token');
+  if (!allowedTokens.length || !allowedTokens.includes(token)) {
+    logger.warn({ tokenSource: tokenInfo.source, allowedTokenCount: allowedTokens.length }, '[BitrixImconnector] Invalid token');
     return;
   }
 
-  const key = String(token);
+  const key = token;
   const now = Date.now();
   const history = (tokenBuckets.get(key) || []).filter((ts) => now - ts < WINDOW_MS);
   if (history.length >= LIMIT) {

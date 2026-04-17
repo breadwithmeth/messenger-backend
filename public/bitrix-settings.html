@@ -343,6 +343,7 @@
           Управление неофициальным WhatsApp (Baileys): создание номера, запуск подключения и
           просмотр текущих статусов/QR-кодов.
         </p>
+        <div class="status" id="installFinishStatus">Статус установки Bitrix: проверка...</div>
       </section>
 
       <section class="grid-main">
@@ -386,7 +387,7 @@
               </thead>
               <tbody id="waPhonesBody">
                 <tr>
-                  <td colspan="5" class="muted">Список пуст. Укажите organizationId и нажмите "Обновить список".</td>
+                  <td colspan="5" class="muted">Список пуст. Нажмите "Обновить список".</td>
                 </tr>
               </tbody>
             </table>
@@ -395,7 +396,38 @@
       </section>
     </main>
 
+    <script src="https://api.bitrix24.com/api/v1/"></script>
     <script>
+      function setInstallFinishStatus(kind, text) {
+        const el = document.getElementById('installFinishStatus');
+        if (!el) return;
+        el.className = `status ${kind}`;
+        el.textContent = text;
+      }
+
+      function runInstallFinishIfAvailable() {
+        const isInIframe = window.self !== window.top;
+        const hasBx24 = typeof window.BX24 !== 'undefined';
+
+        if (!isInIframe || !hasBx24) {
+          setInstallFinishStatus('warn', 'Статус установки Bitrix: вне контекста Bitrix (installFinish пропущен).');
+          return;
+        }
+
+        try {
+          window.BX24.init(() => {
+            try {
+              window.BX24.installFinish();
+              setInstallFinishStatus('ok', 'Статус установки Bitrix: installFinish успешно вызван.');
+            } catch (error) {
+              setInstallFinishStatus('err', `Статус установки Bitrix: ошибка installFinish (${String(error)}).`);
+            }
+          });
+        } catch (error) {
+          setInstallFinishStatus('err', `Статус установки Bitrix: ошибка BX24.init (${String(error)}).`);
+        }
+      }
+
       function stringifyBody(value) {
         try {
           return JSON.stringify(value, null, 2);
@@ -531,6 +563,7 @@
       document.getElementById('waRefresh').addEventListener('click', loadPhones);
       document.getElementById('waCreate').addEventListener('click', () => createUnofficialWhatsapp(false));
       document.getElementById('waCreateConnect').addEventListener('click', () => createUnofficialWhatsapp(true));
+      runInstallFinishIfAvailable();
       loadPhones();
       setInterval(loadPhones, 8000);
     </script>
