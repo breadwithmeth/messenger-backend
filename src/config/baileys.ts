@@ -43,6 +43,7 @@ function envInt(name: string, fallback: number): number {
 const BAILEYS_CONNECT_TIMEOUT_MS = envInt('BAILEYS_CONNECT_TIMEOUT_MS', 60_000);
 const BAILEYS_DEFAULT_QUERY_TIMEOUT_MS = envInt('BAILEYS_DEFAULT_QUERY_TIMEOUT_MS', 60_000);
 const BAILEYS_KEEP_ALIVE_INTERVAL_MS = envInt('BAILEYS_KEEP_ALIVE_INTERVAL_MS', 25_000);
+const BAILEYS_QR_WAIT_TIMEOUT_MS = envInt('BAILEYS_QR_WAIT_TIMEOUT_MS', 20_000);
 
 function safeAsyncListener<T extends any[]>(
   eventName: string,
@@ -727,6 +728,26 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
   // !!! КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Добавляем созданный сокет в socks Map !!!
   socks.set(organizationPhoneId, currentSock);
 
+  let qrResolved = false;
+  const qrWatchdog = setTimeout(() => {
+    if (qrResolved) return;
+
+    logger.warn(`[Baileys] QR не был получен вовремя для ${phoneJid}. Переводим сессию в disconnected.`);
+
+    socks.delete(organizationPhoneId);
+
+    void prisma.organizationPhone.update({
+      where: { id: organizationPhoneId },
+      data: { status: 'disconnected', qrCode: null },
+    }).catch((err) => {
+      logger.error({ err }, `[Baileys] Не удалось обновить статус после таймаута QR для ${phoneJid}`);
+    });
+
+    void closeSession(organizationPhoneId, phoneJid, 'QR wait timeout').catch((err) => {
+      logger.error({ err }, `[Baileys] Не удалось закрыть зависшую сессию после таймаута QR для ${phoneJid}`);
+    });
+  }, BAILEYS_QR_WAIT_TIMEOUT_MS);
+
   // Обработчик событий обновления соединения
   currentSock.ev.on('connection.update', safeAsyncListener('connection.update(main)', async (update: Partial<ConnectionState>) => { 
     const { connection, lastDisconnect, qr } = update;
@@ -738,6 +759,9 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
 
     // Если получен QR-код
     if (qr) {
+      qrResolved = true;
+      clearTimeout(qrWatchdog);
+
       // logger.info(`[ConnectionUpdate] QR code received for ${phoneJid}. Length: ${qr.length}`);
       // Сохраняем QR-код в БД и обновляем статус
       await prisma.organizationPhone.update({
@@ -760,6 +784,9 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
 
     // Если соединение закрыто
     if (connection === 'close') {
+      qrResolved = true;
+      clearTimeout(qrWatchdog);
+
       const shouldReconnect =
         (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
       // logger.info(`[Connection] Соединение закрыто для ${phoneJid}. Причина: ${lastDisconnect?.error}. Переподключение: ${shouldReconnect}`);
@@ -804,6 +831,9 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
           });
       }
     } else if (connection === 'open') {
+      qrResolved = true;
+      clearTimeout(qrWatchdog);
+
       // Если соединение открыто
       // logger.info(`✅ Подключено к WhatsApp для ${phoneJid} (Организация: ${organizationId}, Phone ID: ${organizationPhoneId})`);
       
