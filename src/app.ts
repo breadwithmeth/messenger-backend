@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 dotenv.config(); // Загружаем переменные окружения из .env
 
 import express from 'express';
+import authRoutes from './routes/authRoutes';
 import organizationRoutes from './routes/organizationRoutes';
 import chatRoutes from './routes/chatRoutes';
 import messageRoutes from './routes/messageRoutes';
@@ -79,6 +80,7 @@ app.get('/health', (_req, res) => {
   res.status(200).json({ ok: true, ts: new Date().toISOString() });
 });
 
+app.use('/api/auth', authRoutes);
 app.use('/api/organizations', organizationRoutes);
 app.use('/api/chats', chatRoutes);
 app.use('/api/messages', messageRoutes);
