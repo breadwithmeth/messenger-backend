@@ -14,14 +14,6 @@ const router = Router();
 // Применяем middleware аутентификации ко всем маршрутам
 router.use(authMiddleware);
 
-// Добавляем логирование для всех запросов
-router.use((req, res, next) => {
-  console.log(`🔥 MESSAGE-READ ROUTE: ${req.method} ${req.path} - Base URL: ${req.baseUrl}`);
-  console.log(`🔥 Full URL: ${req.originalUrl}`);
-  console.log(`🔥 Params:`, req.params);
-  next();
-});
-
 // Отметка сообщений в чате как прочитанных
 router.post('/:chatId/read', markMessagesAsRead);
 

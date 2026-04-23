@@ -6,6 +6,13 @@ import pino from 'pino';
 import WebSocket from 'ws'; 
 const logger = pino({ level: 'info' });
 
+function normalizePhoneJid(phoneJid: string): string {
+  const trimmed = phoneJid.trim();
+  if (!trimmed) return trimmed;
+  if (trimmed.includes('@')) return trimmed;
+  return `${trimmed}@s.whatsapp.net`;
+}
+
 /**
  * Создает новую запись о WhatsApp-номере для организации.
  * @param req Запрос Express. Ожидает organizationId (из res.locals), phoneJid, displayName в теле.
@@ -117,6 +124,8 @@ export async function connectOrganizationPhone(req: Request, res: Response) {
         return res.status(400).json({ error: 'Phone JID is not set for this organization phone.' });
     }
 
+    const normalizedPhoneJid = normalizePhoneJid(phone.phoneJid);
+
     // WABA номера не подключаются через Baileys (иначе будет conflict/replaced и таймауты на pre-keys)
     if (phone.connectionType === 'waba') {
       logger.warn(`[connectOrganizationPhone] Запрос подключения Baileys отклонён: organizationPhoneId=${organizationPhoneId} имеет connectionType='waba'.`);
@@ -139,12 +148,41 @@ export async function connectOrganizationPhone(req: Request, res: Response) {
       }
     }
 
+    const authKey = normalizedPhoneJid.split('@')[0].split(':')[0];
+    const shouldResetStaleSession = phone.status === 'logged_out' || (phone.status === 'pending' && !phone.qrCode);
+
+    await prisma.organizationPhone.update({
+      where: { id: organizationPhoneId },
+      data: {
+        phoneJid: normalizedPhoneJid,
+        status: 'loading',
+        qrCode: null,
+      },
+    });
+
+    if (shouldResetStaleSession) {
+      const deleted = await prisma.baileysAuth.deleteMany({
+        where: {
+          organizationId,
+          phoneJid: authKey,
+        },
+      });
+
+      logger.info(`[connectOrganizationPhone] Сброшено ${deleted.count} auth-записей для ${normalizedPhoneJid} перед генерацией нового QR.`);
+    }
+
     // Запускаем Baileys сессию. QR-код будет сохранен в БД через обработчик 'connection.update'.
-    await startBaileys(organizationId, organizationPhoneId, phone.phoneJid);
-    logger.info(`[connectOrganizationPhone] Инициирован запуск Baileys для ${phone.phoneJid}.`);
+    await startBaileys(organizationId, organizationPhoneId, normalizedPhoneJid);
+    logger.info(`[connectOrganizationPhone] Инициирован запуск Baileys для ${normalizedPhoneJid}.`);
     res.status(202).json({ message: 'WhatsApp session connection initiated. Check the /api/organization-phones endpoint for QR code or status updates.' });
   } catch (error: any) {
     logger.error(`❌ Ошибка при попытке подключения телефона организации ${organizationPhoneId}:`, error);
+
+    await prisma.organizationPhone.update({
+      where: { id: organizationPhoneId },
+      data: { status: 'disconnected', qrCode: null },
+    }).catch(() => undefined);
+
     res.status(500).json({ error: 'Failed to initiate WhatsApp session', details: error.message });
   }
 }

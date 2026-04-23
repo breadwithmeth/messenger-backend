@@ -768,6 +768,11 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
       socks.delete(organizationPhoneId);
 
       if (shouldReconnect) {
+        await prisma.organizationPhone.update({
+          where: { id: organizationPhoneId },
+          data: { status: 'disconnected', qrCode: null },
+        }).catch(() => undefined);
+
         // Задержка перед попыткой переподключения
         await new Promise(resolve => setTimeout(resolve, 3000));
         // logger.info(`[Connection] Попытка переподключения для ${phoneJid}...`);

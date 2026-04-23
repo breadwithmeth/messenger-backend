@@ -16,15 +16,6 @@ const router = Router();
 // Применяем middleware аутентификации ко всем маршрутам
 router.use(authMiddleware);
 
-// Добавляем логирование для отладки
-router.use((req, res, next) => {
-  console.log(`🔥 CHAT-ASSIGNMENT ROUTE: ${req.method} ${req.path} - Base URL: ${req.baseUrl}`);
-  console.log(`🔥 Full URL: ${req.originalUrl}`);
-  console.log(`🔥 Params:`, req.params);
-  console.log(`🔥 Body:`, req.body);
-  next();
-});
-
 // Назначение чата оператору
 router.post('/assign', assignChatToOperator);
 

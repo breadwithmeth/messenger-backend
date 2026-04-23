@@ -25,10 +25,8 @@ async function initializeConnectedSessions() {
         // Убедитесь, что здесь перечислены ВСЕ статусы, при которых вы хотите инициализировать сессию.
         // 'connected': если сессия была активна и должна быть восстановлена.
         // 'disconnected': если сессия временно отключилась и нужно переподключиться (обычно без QR).
-        // 'logged_out': если сессия вышла из системы и нужен НОВЫЙ QR-код (после удаления auth файлов).
-        // null: если статус еще не был установлен (например, новая запись в БД).
         status: {
-          in: ['connected', 'disconnected', 'logged_out', 'pending']
+          in: ['connected', 'disconnected']
         },
         // Если у вас несколько организаций и вы хотите инициализировать только определенные,
         // раскомментируйте и установите organizationId, иначе оставьте закомментированным.
@@ -39,7 +37,7 @@ async function initializeConnectedSessions() {
     logger.info(`[ServerInit] Запрос к БД завершен. Найдено ${connectedPhones.length} аккаунтов для инициализации.`);
 
     if (connectedPhones.length === 0) {
-      logger.info('[ServerInit] Нет ранее подключенных WhatsApp аккаунтов со статусами "connected", "disconnected", "logged_out" или null для инициализации.');
+      logger.info('[ServerInit] Нет ранее подключенных WhatsApp аккаунтов со статусами "connected" или "disconnected" для инициализации.');
       return;
     }
 
@@ -61,7 +59,6 @@ async function initializeConnectedSessions() {
 }
 
 server.listen(PORT, async () => {
-  console.log(`Server is running on port ${PORT}`);
   logger.info(`[ServerInit] HTTP сервер запущен на порту ${PORT}`);
   logger.info(`[ServerInit] Socket.IO доступен на ws://localhost:${PORT}`);
   

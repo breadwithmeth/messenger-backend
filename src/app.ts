@@ -88,9 +88,7 @@ app.use('/api/waba', wabaRoutes); // <-- ВАЖНО: ПЕРЕД /api, чтобы
 app.use('/api', contactRoutes);
 app.use('/api/chat-assignment', chatAssignmentRoutes); // Новые маршруты для назначения чатов
 app.use('/api/message-read', messageReadRoutes); // Новые маршруты для непрочитанных сообщений
-console.log('🔄 Подключаем unread маршруты...');
 app.use('/api/unread', unreadRoutes); // Маршруты для управления непрочитанными сообщениями
-console.log('✅ Unread маршруты подключены');
 app.use('/api/media', mediaRoutes); // Маршруты для загрузки и отправки медиафайлов
 app.use('/api/tickets', ticketRoutes); // Маршруты для тикет-системы
 app.use('/api/telegram', telegramRoutes); // <-- НОВОЕ: Маршруты для Telegram

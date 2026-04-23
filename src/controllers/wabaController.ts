@@ -132,7 +132,6 @@ async function processWebhookChange(change: any) {
 
     // Обработка входящих сообщений
     if (value.messages) {
-      console.log('📩 WABA: New incoming messages received:', JSON.stringify(value.messages, null, 2));
       const contacts = value.contacts || [];
       for (const message of value.messages) {
         // Находим контакт отправителя
@@ -174,11 +173,6 @@ async function handleMessageStatus(organizationPhoneId: number, status: any) {
  */
 async function handleIncomingMessage(orgPhone: any, message: any, contact?: any) {
   try {
-    // Логируем полную структуру входящего сообщения
-    console.log('📨 WABA: Входящее сообщение (полная структура):');
-    console.log(JSON.stringify(message, null, 2));
-    console.log('---');
-    
     // Нормализуем номер в формат WhatsApp JID
     const phoneNumber = message.from;
     const remoteJid = phoneNumber.includes('@') ? phoneNumber : `${phoneNumber}@s.whatsapp.net`;
@@ -201,7 +195,6 @@ async function handleIncomingMessage(orgPhone: any, message: any, contact?: any)
     // В WABA структура реплая: message.context = { from: "...", id: "wamid..." }
     if (message.context?.id) {
       quotedMessageId = message.context.id;
-      console.log('🔄 WABA: Обнаружен реплай! Context:', JSON.stringify(message.context, null, 2));
       
       // Пытаемся найти цитируемое сообщение в БД
       const quotedDbMsg = await prisma.message.findFirst({
@@ -227,11 +220,8 @@ async function handleIncomingMessage(orgPhone: any, message: any, contact?: any)
         } else {
           quotedContent = `[${quotedDbMsg.type}]`;
         }
-        
-        console.log('✅ WABA: Найдено цитируемое сообщение:', quotedContent);
       } else {
         quotedContent = '[Сообщение не найдено]';
-        console.log('⚠️ WABA: Цитируемое сообщение не найдено в БД, ID:', quotedMessageId);
       }
       
       logger.info(`  [reply] Ответ на сообщение ID: ${quotedMessageId}, текст: "${quotedContent}"`);
@@ -338,15 +328,7 @@ async function handleIncomingMessage(orgPhone: any, message: any, contact?: any)
       const mapsUrl = `https://www.google.com/maps?q=${location.latitude},${location.longitude}`;
       
       content = `📍 ${locationText}\nКоординаты: ${location.latitude}, ${location.longitude}\nКарта: ${mapsUrl}`;
-      
-      console.log('📍 WABA: Получена геолокация:', {
-        name: location.name,
-        address: location.address,
-        latitude: location.latitude,
-        longitude: location.longitude,
-        mapsUrl
-      });
-      
+
       logger.info(`📍 WABA: Геолокация получена: ${locationText} (${location.latitude}, ${location.longitude})`);
     }
 
