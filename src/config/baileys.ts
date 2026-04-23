@@ -18,111 +18,228 @@ import {
 import { getSocketIO, notifyNewMessage } from '../services/socketService';
 import { prisma } from './authStorage';
 
-const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const logger = pino({ level: 'info' });
 
-interface MediaInfo {
-  mediaUrl?: string;
-  filename?: string;
-  size?: number;
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-interface SessionEntry {
-  sock: WASocket;
-  organizationId: number;
-  organizationPhoneId: number;
-  phoneJid: string;
+// Таймауты по умолчанию можно переопределить через env,
+// чтобы избежать падений на медленных/нестабильных сетях (Timed Out в Baileys query).
+const BAILEYS_CONNECT_TIMEOUT_MS = envInt('BAILEYS_CONNECT_TIMEOUT_MS', 60_000);
+const BAILEYS_DEFAULT_QUERY_TIMEOUT_MS = envInt('BAILEYS_DEFAULT_QUERY_TIMEOUT_MS', 60_000);
+const BAILEYS_KEEP_ALIVE_INTERVAL_MS = envInt('BAILEYS_KEEP_ALIVE_INTERVAL_MS', 25_000);
+const BAILEYS_QR_WAIT_TIMEOUT_MS = envInt('BAILEYS_QR_WAIT_TIMEOUT_MS', 20_000);
+
+function safeAsyncListener<T extends any[]>(
+  eventName: string,
+  handler: (...args: T) => Promise<void> | void
+) {
+  return (...args: T) => {
+    Promise.resolve(handler(...args)).catch((err) => {
+      logger.error({ err }, `[Baileys] Unhandled error in listener: ${eventName}`);
+    });
+  };
 }
 
-const sessions = new Map<number, SessionEntry>();
-const manualDisconnects = new Set<number>();
+// Глобальная Map для хранения активных экземпляров WASocket по organizationPhoneId
+const socks = new Map<number, WASocket>(); 
 
-const emitSocketEvent = (event: string, payload: Record<string, unknown>) => {
+// Map для отслеживания ошибок Bad MAC по organizationPhoneId
+const badMacErrorCount = new Map<number, number>();
+const MAX_BAD_MAC_ERRORS = 3; // Максимум ошибок перед сбросом сессии
+
+// Map для отслеживания ошибок Bad Decrypt по organizationPhoneId
+const badDecryptErrorCount = new Map<number, number>();
+const MAX_BAD_DECRYPT_ERRORS = 5; // Максимум ошибок перед сбросом сессии (больше чем MAC, т.к. менее критично)
+
+// Интерфейс для кастомного хранилища сигналов
+interface CustomSignalStorage {
+  get<T extends keyof SignalDataTypeMap>(type: T, ids: string[]): Promise<{ [id: string]: SignalDataTypeMap[T]; }>;
+  set(data: SignalDataSet): Promise<void>;
+  del(keys: string[]): Promise<void>;
+}
+
+// --- НОВАЯ ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ---
+/**
+ * Скачивает медиа из сообщения и сохраняет его в хранилище (R2/S3/Local).
+ * @param messageContent Содержимое сообщения (например, imageMessage).
+ * @param type Тип медиа ('image', 'video', 'audio', 'document').
+ * @param originalFilename Имя файла (для документов).
+ * @returns URL к сохраненному файлу.
+ */
+async function downloadAndSaveMedia(
+  messageContent: any,
+  type: MediaType,
+  originalFilename?: string
+): Promise<string | undefined> {
   try {
-    getSocketIO().emit(event, payload);
-  } catch {
-    // Socket.IO may not be initialized yet.
+    const stream = await downloadContentFromMessage(messageContent, type);
+    let buffer = Buffer.from([]);
+    for await (const chunk of stream) {
+      buffer = Buffer.concat([buffer, chunk]);
+    }
+
+    const extension = path.extname(originalFilename || '') || `.${messageContent.mimetype?.split('/')[1] || 'bin'}`;
+    const mimetype = messageContent.mimetype || 'application/octet-stream';
+    const filename = originalFilename || `file-${Date.now()}${extension}`;
+
+    // Используем универсальный storage service
+    const { saveMedia } = await import('../services/storageService');
+    const mediaUrl = await saveMedia(buffer, filename, mimetype);
+
+    // logger.info(`✅ Медиафайл сохранен: ${mediaUrl}`);
+    return mediaUrl;
+  } catch (error) {
+    logger.error('❌ Ошибка при скачивании или сохранении медиа:', error);
+    return undefined;
   }
-};
+}
 
-const authKey = (type: string, id: string) => `${type}:${id}`;
+/**
+ * Корректно закрывает сессию Baileys и очищает ресурсы.
+ * @param organizationPhoneId ID телефона организации
+ * @param phoneJid JID номера телефона
+ * @param reason Причина закрытия
+ */
+async function closeSession(
+  organizationPhoneId: number,
+  phoneJid: string,
+  reason: string
+): Promise<void> {
+  const key = phoneJid.split('@')[0].split(':')[0];
+  // logger.warn(`🚪 Закрытие сессии для ${phoneJid}. Причина: ${reason}`);
+  
+  try {
+    // Получаем сокет
+    const sock = socks.get(organizationPhoneId);
+    
+    if (sock) {
+      // Пытаемся корректно закрыть WebSocket соединение
+      try {
+        if ((sock.ws as any).readyState === 1) { // OPEN
+          await sock.end(new Error(reason));
+          // logger.info(`✅ WebSocket соединение закрыто для ${phoneJid}`);
+        } else {
+          // logger.info(`ℹ️ WebSocket уже закрыт (state: ${(sock.ws as any).readyState})`);
+        }
+      } catch (wsError) {
+        // logger.error(`⚠️ Ошибка при закрытии WebSocket:`, wsError);
+        // Продолжаем даже если WebSocket не закрылся корректно
+      }
+      
+      // Удаляем сокет из Map
+      socks.delete(organizationPhoneId);
+      // logger.info(`✅ Сокет удален из Map для organizationPhoneId: ${organizationPhoneId}`);
+    } else {
+      // logger.info(`ℹ️ Сокет не найден в Map для organizationPhoneId: ${organizationPhoneId}`);
+    }
+    
+    // Очищаем счетчик ошибок
+    badMacErrorCount.delete(organizationPhoneId);
+    
+  } catch (error) {
+    // logger.error(`❌ Ошибка при закрытии сессии для ${phoneJid}:`, error);
+    // Принудительно удаляем из Map даже при ошибке
+    socks.delete(organizationPhoneId);
+    badMacErrorCount.delete(organizationPhoneId);
+  }
+}
 
-async function getBaileysAuth(organizationId: number, phoneJid: string) {
-  const credsStorageKey = authKey('creds', 'creds');
-  const storedCreds = await getBaileysAuthState(organizationId, phoneJid, credsStorageKey);
-
-  const creds = storedCreds?.value
-    ? JSON.parse(Buffer.from(storedCreds.value).toString('utf-8'))
-    : initAuthCreds();
-
-  const keys = {
-    get: async (type: string, ids: string[]) => {
-      const data: Record<string, unknown> = {};
-
-      await Promise.all(
-        ids.map(async (id) => {
-          const stored = await getBaileysAuthState(
-            organizationId,
-            phoneJid,
-            authKey(type, id),
-          );
-
-          if (!stored?.value) {
-            return;
-          }
-
-          data[id] = JSON.parse(Buffer.from(stored.value).toString('utf-8'));
-        }),
+/**
+ * Обработчик ошибок Bad Decrypt из app state sync.
+ * Очищает поврежденные данные синхронизации app state.
+ * @param organizationId ID организации
+ * @param organizationPhoneId ID телефона организации
+ * @param phoneJid JID номера телефона
+ * @returns true если данные были очищены, false если достигнут лимит ошибок и сессия закрыта
+ */
+async function handleBadDecryptError(
+  organizationId: number,
+  organizationPhoneId: number,
+  phoneJid: string
+): Promise<boolean> {
+  const key = phoneJid.split('@')[0].split(':')[0];
+  
+  // Увеличиваем счетчик ошибок
+  const currentCount = badDecryptErrorCount.get(organizationPhoneId) || 0;
+  badDecryptErrorCount.set(organizationPhoneId, currentCount + 1);
+  
+  // logger.warn(`⚠️ Bad Decrypt error #${currentCount + 1} для ${phoneJid}`);
+  
+  if (currentCount + 1 >= MAX_BAD_DECRYPT_ERRORS) {
+    // logger.error(`❌ Достигнут лимит Bad Decrypt ошибок (${MAX_BAD_DECRYPT_ERRORS}) для ${phoneJid}. Полный выход из сессии.`);
+    
+    try {
+      // 1. Корректно закрываем сессию
+      await closeSession(
+        organizationPhoneId,
+        phoneJid,
+        `Bad Decrypt error limit reached (${MAX_BAD_DECRYPT_ERRORS} errors)`
       );
-
-      return data as any;
-    },
-    set: async (data: Record<string, Record<string, unknown>>) => {
-      const writes: Promise<unknown>[] = [];
-
-      for (const type of Object.keys(data)) {
-        for (const id of Object.keys(data[type])) {
-          const value = data[type][id];
-          const key = authKey(type, id);
-
-          if (value) {
-            writes.push(
-              setBaileysAuthState(
-                organizationId,
-                phoneJid,
-                key,
-                Buffer.from(JSON.stringify(value, BufferJSON.replacer), 'utf-8'),
-              ),
-            );
-          } else {
-            writes.push(removeBaileysAuthState(organizationId, phoneJid, key));
-          }
+      
+      // 2. Удаляем ВСЕ данные авторизации из БД
+      const deletedCount = await prisma.baileysAuth.deleteMany({
+        where: {
+          organizationId: organizationId,
+          phoneJid: key,
+        }
+      });
+      // logger.info(`🗑️ Удалено ${deletedCount.count} записей авторизации для ${key}`);
+      
+      // 3. Обновляем статус телефона на 'logged_out'
+      await prisma.organizationPhone.update({
+        where: { id: organizationPhoneId },
+        data: { 
+          status: 'logged_out',
+          qrCode: null,
+          lastConnectedAt: new Date(),
+        },
+      });
+      // logger.info(`📱 Статус телефона ${key} обновлен на 'logged_out'`);
+      
+      // logger.info(`✅ Сессия для ${phoneJid} полностью завершена из-за повторяющихся Bad Decrypt ошибок. Требуется повторное QR-сканирование.`);
+      return false;
+    } catch (e) {
+      logger.error(`❌ Ошибка при полном выходе из сессии:`, e);
+      // Даже при ошибке пытаемся закрыть сокет
+      await closeSession(organizationPhoneId, phoneJid, 'Error during Bad Decrypt cleanup');
+      return false;
+    }
+  }
+  
+  // Очищаем только поврежденные ключи app state (без полного выхода)
+  try {
+    const deletedCount = await prisma.baileysAuth.deleteMany({
+      where: {
+        organizationId: organizationId,
+        phoneJid: key,
+        key: {
+          startsWith: 'app-state-sync-'
         }
       }
-
-      await Promise.all(writes);
-    },
-  };
-
-  const saveCreds = async () => {
-    await setBaileysAuthState(
-      organizationId,
-      phoneJid,
-      credsStorageKey,
-      Buffer.from(JSON.stringify(creds, BufferJSON.replacer), 'utf-8'),
-    );
-  };
-
-  return {
-    state: { creds, keys } as any,
-    saveCreds,
-  };
+    });
+    
+    // logger.info(`✅ Удалено ${deletedCount.count} поврежденных ключей app state для ${key}. Соединение продолжит работу.`);
+    return true;
+  } catch (e) {
+    logger.error(`❌ Ошибка при удалении поврежденных данных app state:`, e);
+    return false;
+  }
 }
 
-async function clearBaileysCreds(organizationId: number, phoneJid: string) {
-  await removeBaileysAuthState(organizationId, phoneJid, authKey('creds', 'creds'));
-}
-
-export async function startBaileys(
+/**
+ * Обработчик ошибок Bad MAC из libsignal.
+ * Очищает поврежденные сессии Signal Protocol для указанного номера.
+ * @param organizationId ID организации
+ * @param organizationPhoneId ID телефона организации
+ * @param phoneJid JID номера телефона
+ * @returns true если сессия была очищена, false если достигнут лимит ошибок и сессия закрыта
+ */
+async function handleBadMacError(
   organizationId: number,
   organizationPhoneId: number,
   phoneJid: string,
@@ -167,99 +284,576 @@ export async function startBaileys(
       return;
     }
 
-    if (connection !== 'close') {
-      return;
+    for (const candidate of candidates) {
+      if (candidate && typeof candidate === 'string' && candidate.trim()) {
+        const normalized = jidNormalizedUser(candidate);
+        if (normalized) {
+          myJidNormalized = normalized;
+          break;
+        }
+      }
     }
 
-    const code = Number((lastDisconnect?.error as { output?: { statusCode?: number } })?.output?.statusCode);
-    const manuallyClosed = manualDisconnects.has(organizationPhoneId);
-    const shouldReconnect = !manuallyClosed && code !== DisconnectReason.loggedOut;
-
-    sessions.delete(organizationPhoneId);
-    manualDisconnects.delete(organizationPhoneId);
-
-    if (shouldReconnect) {
-      logger.warn(`[Baileys] reconnecting orgPhone=${organizationPhoneId}, reason=${code}`);
-      await startBaileys(organizationId, organizationPhoneId, phoneJid);
-      return;
+    if (!myJidNormalized) {
+      logger.warn(`[ensureChat] receivingPhoneJid не удалось нормализовать. Поступившее значение: "${receivingPhoneJid}". Будет использовано пустое значение, что может привести к дублям.`);
+      myJidNormalized = '' as any;
     }
 
-    await prisma.organizationPhone.update({
-      where: { id: organizationPhoneId },
-      data: {
-        status: code === DisconnectReason.loggedOut ? 'logged_out' : 'disconnected',
-        qrCode: null,
-      },
-    });
+    let chat = myJidNormalized
+      ? await prisma.chat.findFirst({
+          where: {
+            organizationId,
+            channel: 'whatsapp',
+            receivingPhoneJid: myJidNormalized,
+            remoteJid: normalizedRemoteJid,
+          },
+        })
+      : null;
 
-    if (code === DisconnectReason.loggedOut) {
-      await clearBaileysCreds(organizationId, phoneJid);
+    // fallback: ищем по remoteJid и organizationPhoneId независимо от receivingPhoneJid, чтобы не плодить дубликаты
+    if (!chat) {
+      chat = await prisma.chat.findFirst({
+        where: {
+          organizationId,
+          channel: 'whatsapp',
+          organizationPhoneId,
+          remoteJid: normalizedRemoteJid,
+        },
+      });
+      if (chat && myJidNormalized && chat.receivingPhoneJid !== myJidNormalized) {
+        chat = await prisma.chat.update({
+          where: { id: chat.id },
+          data: { receivingPhoneJid: myJidNormalized, organizationPhoneId },
+        });
+      }
     }
 
-    emitSocketEvent('session-disconnected', {
-      organizationPhoneId,
-      phoneJid,
-      reason: manuallyClosed ? 'manual' : code,
-    });
-  });
+    if (!chat) {
+      const emptyChat = await prisma.chat.findFirst({
+        where: {
+          organizationId,
+          remoteJid: normalizedRemoteJid,
+          receivingPhoneJid: '',
+        },
+      });
 
-  return sock;
+      if (emptyChat && myJidNormalized) {
+        chat = await prisma.chat.update({
+          where: { id: emptyChat.id },
+          data: {
+            receivingPhoneJid: myJidNormalized,
+            organizationPhoneId,
+            lastMessageAt: new Date(),
+          },
+        });
+      }
+    }
+
+    if (!chat) {
+      try {
+        const lastTicket = await prisma.chat.findFirst({
+          where: {
+            organizationId,
+            ticketNumber: { not: null },
+          },
+          orderBy: { ticketNumber: 'desc' },
+          select: { ticketNumber: true },
+        });
+
+        const nextTicketNumber = (lastTicket?.ticketNumber || 0) + 1;
+
+        chat = await prisma.chat.create({
+          data: {
+            organizationId,
+            receivingPhoneJid: myJidNormalized,
+            remoteJid: normalizedRemoteJid,
+            organizationPhoneId,
+            name: name || normalizedRemoteJid.split('@')[0],
+            isGroup: isJidGroup(normalizedRemoteJid),
+            lastMessageAt: new Date(),
+            ticketNumber: nextTicketNumber,
+            status: 'new',
+            priority: 'normal',
+          },
+        });
+
+        await prisma.ticketHistory.create({
+          data: {
+            chatId: chat.id,
+            changeType: 'ticket_created',
+            newValue: String(nextTicketNumber),
+            description: `Создан тикет #${nextTicketNumber}`,
+          },
+        });
+
+        try {
+          notifyNewChat(organizationId, {
+            id: chat.id,
+            remoteJid: chat.remoteJid,
+            name: chat.name,
+            channel: 'whatsapp',
+            ticketNumber: chat.ticketNumber,
+            status: chat.status,
+            priority: chat.priority,
+            lastMessageAt: chat.lastMessageAt,
+            unreadCount: 0,
+          });
+        } catch (socketError) {
+          logger.error('[Socket.IO] Ошибка отправки уведомления о новом чате:', socketError);
+        }
+      } catch (e: any) {
+        if (e?.code === 'P2002') {
+          // Уникальное ограничение на (organizationId, channel, organizationPhoneId, remoteJid)
+          const existing = await prisma.chat.findFirst({
+            where: {
+              organizationId,
+              channel: 'whatsapp',
+              organizationPhoneId,
+              remoteJid: normalizedRemoteJid,
+            },
+          });
+          if (existing) {
+            chat = existing;
+          } else {
+            throw e;
+          }
+        } else {
+          throw e;
+        }
+      }
+    } else {
+      const updateData: any = { lastMessageAt: new Date(), organizationPhoneId };
+      if (name && typeof name === 'string' && name.trim() && name !== chat.name) {
+        updateData.name = name.trim();
+      }
+
+      if (shouldReopenClosedTicket && (chat.status === 'closed' || chat.status === 'resolved')) {
+        const lastTicket = await prisma.chat.findFirst({
+          where: {
+            organizationId,
+            ticketNumber: { not: null },
+          },
+          orderBy: { ticketNumber: 'desc' },
+          select: { ticketNumber: true },
+        });
+
+        const nextTicketNumber = (lastTicket?.ticketNumber || 0) + 1;
+        const previousTicketNumber = chat.ticketNumber;
+
+        updateData.ticketNumber = nextTicketNumber;
+        updateData.status = 'new';
+        updateData.priority = 'normal';
+        updateData.assignedUserId = null;
+        updateData.closedAt = null;
+        updateData.resolvedAt = null;
+
+        await prisma.chat.update({
+          where: { id: chat.id },
+          data: updateData,
+        });
+
+        await prisma.ticketHistory.create({
+          data: {
+            chatId: chat.id,
+            changeType: 'ticket_reopened',
+            oldValue: previousTicketNumber ? String(previousTicketNumber) : null,
+            newValue: String(nextTicketNumber),
+            description: `Чат переоткрыт: новый тикет #${nextTicketNumber}${previousTicketNumber ? ` (был #${previousTicketNumber})` : ''}`,
+          },
+        });
+      } else {
+        await prisma.chat.update({
+          where: { id: chat.id },
+          data: updateData,
+        });
+      }
+    }
+
+    return chat.id;
+  } catch (error: any) {
+    logger.error(`❌ Ошибка в ensureChat для JID ${remoteJid} (Ваш номер: ${receivingPhoneJid}, Phone ID: ${organizationPhoneId}):`, error);
+    if (error.stack) {
+      logger.error('Stack trace:', error.stack);
+    }
+    if (error.code && error.meta) {
+      logger.error(`Prisma Error Code: ${error.code}, Meta:`, JSON.stringify(error.meta, null, 2));
+    }
+    throw error;
+  }
 }
 
-export const initBaileys = async (db: PrismaClient) => {
-  const phones = await db.organizationPhone.findMany({
-    where: { connectionType: 'baileys', status: { in: ['connected', 'loading', 'pending'] } },
-    select: { id: true, organizationId: true, phoneJid: true },
+/**
+ * Хук для управления состоянием аутентификации Baileys с использованием базы данных.
+ * Загружает, сохраняет и управляет учетными данными и ключами сигналов.
+ * @param organizationId ID организации.
+ * @param phoneJid JID номера телефона.
+ * @returns Объект с `state` (для makeWASocket) и `saveCreds` (для обработчика 'creds.update').
+ */
+export async function useDBAuthState(organizationId: number, phoneJid: string): Promise<{ state: AuthenticationState; saveCreds: () => Promise<void>; }> {
+  // Извлекаем только номер из полного JID для использования в качестве ключа
+  const key = phoneJid.split('@')[0].split(':')[0];
+  const authDB = createAuthDBAdapter(organizationId, key);
+
+  // 1. Загрузка и инициализация creds
+  let creds: AuthenticationCreds;
+  const storedCredsData = await authDB.get('creds');
+  if (storedCredsData && storedCredsData.type === 'base64_json') {
+    try {
+      const decodedCredsJsonString = Buffer.from(storedCredsData.value, 'base64').toString('utf8');
+      const parsedCreds = JSON.parse(decodedCredsJsonString, BufferJSON.reviver) as AuthenticationCreds;
+      // Проверка на полноту данных
+      if (parsedCreds.noiseKey && parsedCreds.signedIdentityKey && parsedCreds.registered !== undefined) {
+        creds = parsedCreds;
+        // logger.info(`✅ Учетные данные (creds) успешно загружены из БД для ${key}.`);
+      } else {
+        // logger.warn(`⚠️ Загруженные creds неполны для ${key}. Инициализация новых.`);
+        creds = initAuthCreds();
+      }
+    } catch (e) {
+      // logger.error(`⚠️ Ошибка парсинга creds из БД для ${key}. Инициализация новых.`, e);
+      creds = initAuthCreds();
+    }
+  } else {
+    creds = initAuthCreds();
+    // logger.info(`creds не найдены в БД для ${key}, инициализация новых.`);
+  }
+
+  // 2. Создание хранилища ключей (SignalStore)
+  const keys = {
+    async get<T extends keyof SignalDataTypeMap>(type: T, ids: string[]): Promise<{ [id: string]: SignalDataTypeMap[T] }> {
+      const data: { [id: string]: SignalDataTypeMap[T] } = {};
+      for (const id of ids.filter(Boolean)) {
+        const dbKey = `${type}-${id}`;
+        const storedData = await authDB.get(dbKey);
+        if (storedData) {
+          try {
+            if (storedData.type === 'base64_json') {
+              const decoded = Buffer.from(storedData.value, 'base64').toString('utf8');
+              data[id] = JSON.parse(decoded, BufferJSON.reviver);
+            } else if (storedData.type === 'buffer') {
+               data[id] = Buffer.from(storedData.value, 'base64') as any;
+            }
+          } catch (e) {
+            logger.warn(`Ошибка при получении/парсинге ключа ${dbKey}:`, e);
+            delete data[id]; // Удаляем невалидные данные
+          }
+        }
+      }
+      return data;
+    },
+    async set(data: SignalDataSet): Promise<void> {
+      const tasks: Promise<void>[] = [];
+      for (const key in data) {
+        const type = key as keyof SignalDataTypeMap;
+        const typeData = data[type];
+        if (typeData) {
+          for (const id in typeData) {
+            const value = (typeData as any)[id];
+            const dbKey = `${type}-${id}`;
+            if (value) {
+              let valueToStore: string;
+              let dataType: StoredDataType;
+              if (value instanceof Buffer) {
+                valueToStore = value.toString('base64');
+                dataType = 'buffer';
+              } else {
+                valueToStore = Buffer.from(JSON.stringify(value, BufferJSON.replacer), 'utf8').toString('base64');
+                dataType = 'base64_json';
+              }
+              tasks.push(authDB.set(dbKey, valueToStore, dataType));
+            } else {
+              tasks.push(authDB.delete(dbKey));
+            }
+          }
+        }
+      }
+      await Promise.all(tasks);
+    }
+  };
+
+  return {
+    state: {
+      creds,
+      keys: makeCacheableSignalKeyStore(keys, logger),
+    },
+    saveCreds: async () => {
+      // logger.info(`🔐 Сохранение обновленных creds в БД для ${key}.`);
+      const base64Creds = Buffer.from(JSON.stringify(creds, BufferJSON.replacer), 'utf8').toString('base64');
+      await authDB.set('creds', base64Creds, 'base64_json');
+    },
+  };
+}
+
+/**
+ * Запускает или перезапускает Baileys сессию для указанного телефона организации.
+ * @param organizationId ID организации.
+ * @param organizationPhoneId ID телефона организации в вашей БД.
+ * @param phoneJid JID номера телефона WhatsApp (например, '77051234567@s.whatsapp.net').
+ * @returns Экземпляр WASocket.
+ */
+export async function startBaileys(organizationId: number, organizationPhoneId: number, phoneJid: string): Promise<WASocket> {
+  const { state, saveCreds } = await useDBAuthState(organizationId, phoneJid);
+
+  // Получаем последнюю версию WhatsApp Web API
+  const { version } = await fetchLatestBaileysVersion();
+  // logger.info(`Используется WhatsApp Web API версии: ${version.join('.')}`);
+
+  // Создаем новый экземпляр Baileys WASocket
+  const currentSock = makeWASocket({ 
+    version,
+    auth: state, // Используем состояние из useDBAuthState
+    browser: ['Ubuntu', 'Chrome', '22.04.4'], // Устанавливаем информацию о браузере
+    logger: logger, // Используем ваш pino logger
+    connectTimeoutMs: BAILEYS_CONNECT_TIMEOUT_MS,
+    defaultQueryTimeoutMs: BAILEYS_DEFAULT_QUERY_TIMEOUT_MS,
+    keepAliveIntervalMs: BAILEYS_KEEP_ALIVE_INTERVAL_MS,
+    // ИСПРАВЛЕНИЕ: Отключаем автоматическую синхронизацию app state для предотвращения ошибок дешифрования
+    syncFullHistory: false, // Отключаем полную синхронизацию истории
+    shouldSyncHistoryMessage: () => false, // Отключаем синхронизацию сообщений
+    // Функция для получения сообщений из кэша или БД (для Baileys)
+    getMessage: async (key) => {
+        logger.debug(`Попытка получить сообщение из getMessage: ${key.id} от ${key.remoteJid}`);
+        const msg = await prisma.message.findFirst({
+            where: {
+              channel: 'whatsapp',
+              whatsappMessageId: key.id || '',
+            },
+            select: {
+                content: true,
+                type: true,
+                remoteJid: true,
+                senderJid: true,
+                fromMe: true,
+                timestamp: true,
+                mediaUrl: true,
+                mimeType: true,
+                filename: true,
+                size: true
+            }
+        });
+        if (msg) {
+            if (msg.type === 'text') {
+                return { conversation: msg.content };
+            } else if (msg.type === 'image' && msg.mediaUrl) {
+                return { imageMessage: { caption: msg.content || '', mimetype: msg.mimeType || 'image/jpeg' } };
+            }
+            return { conversation: msg.content || 'Сообщение найдено в БД, но тип не поддержан для getMessage.' };
+        }
+        return { conversation: 'Сообщение не найдено в кэше или БД' };
+    }
   });
 
-  for (const phone of phones) {
-    await startBaileys(phone.organizationId, phone.id, phone.phoneJid);
-  }
-};
+  // !!! КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Добавляем созданный сокет в socks Map !!!
+  socks.set(organizationPhoneId, currentSock);
 
-export const getBaileysSock = (organizationPhoneId: number): WASocket | null => {
-  return sessions.get(organizationPhoneId)?.sock || null;
-};
+  let qrResolved = false;
+  const qrWatchdog = setTimeout(() => {
+    if (qrResolved) return;
 
-export const markManualDisconnect = (organizationPhoneId: number, _reason?: string) => {
-  manualDisconnects.add(organizationPhoneId);
-};
+    logger.warn(`[Baileys] QR не был получен вовремя для ${phoneJid}. Переводим сессию в disconnected.`);
 
-export const removeBaileysSession = async (
-  organizationPhoneId: number,
-  phoneJid: string,
-) => {
-  const current = sessions.get(organizationPhoneId);
-  if (!current) {
-    return;
-  }
+    socks.delete(organizationPhoneId);
 
-  manualDisconnects.add(organizationPhoneId);
-  await current.sock.logout();
-  sessions.delete(organizationPhoneId);
-  await clearBaileysCreds(current.organizationId, phoneJid);
-};
+    void prisma.organizationPhone.update({
+      where: { id: organizationPhoneId },
+      data: { status: 'disconnected', qrCode: null },
+    }).catch((err) => {
+      logger.error({ err }, `[Baileys] Не удалось обновить статус после таймаута QR для ${phoneJid}`);
+    });
 
-export const getBaileysSession = (organizationPhoneId: number) => {
-  return sessions.get(organizationPhoneId) || null;
-};
+    void closeSession(organizationPhoneId, phoneJid, 'QR wait timeout').catch((err) => {
+      logger.error({ err }, `[Baileys] Не удалось закрыть зависшую сессию после таймаута QR для ${phoneJid}`);
+    });
+  }, BAILEYS_QR_WAIT_TIMEOUT_MS);
 
-export const sendUnreadMessages = async (
-  organizationPhoneId: number,
-  messages: WAMessage[],
-) => {
-  const current = sessions.get(organizationPhoneId);
-  if (!current) {
-    return;
-  }
+  // Обработчик событий обновления соединения
+  currentSock.ev.on('connection.update', safeAsyncListener('connection.update(main)', async (update: Partial<ConnectionState>) => { 
+    const { connection, lastDisconnect, qr } = update;
 
-  for (const message of messages) {
-    const remoteJid = message.key.remoteJid;
-    const text = message.message?.conversation;
+    // logger.info(`[ConnectionUpdate] Status for ${phoneJid}: connection=${connection}, QR_present=${!!qr}`);
+    // if (lastDisconnect) {
+    //   logger.info(`[ConnectionUpdate] lastDisconnect for ${phoneJid}: reason=${(lastDisconnect.error as Boom)?.output?.statusCode || lastDisconnect.error?.message || 'Неизвестно'}`);
+    // }
 
-    if (!remoteJid || !text) {
-      continue;
+    // Если получен QR-код
+    if (qr) {
+      qrResolved = true;
+      clearTimeout(qrWatchdog);
+
+      // logger.info(`[ConnectionUpdate] QR code received for ${phoneJid}. Length: ${qr.length}`);
+      // Сохраняем QR-код в БД и обновляем статус
+      await prisma.organizationPhone.update({
+        where: { id: organizationPhoneId },
+        data: { qrCode: qr, status: 'pending' },
+      });
+
+      // Выводим QR-код в терминал
+      console.log(`\n======================================================`);
+      console.log(`       QR-КОД ДЛЯ НОМЕРА: ${phoneJid}           `);
+      console.log(`======================================================`);
+      qrcode.generate(qr, { small: true });
+      console.log(`======================================================`);
+      console.log(`  Отсканируйте QR-код с помощью WhatsApp на вашем телефоне.`);
+      console.log(`  (WhatsApp -> Настройки -> Связанные устройства -> Привязка устройства)`);
+      console.log(`======================================================\n`);
+    } else {
+      // logger.info(`[ConnectionUpdate] No QR code in this update for ${phoneJid}.`);
     }
+
+    // Если соединение закрыто
+    if (connection === 'close') {
+      qrResolved = true;
+      clearTimeout(qrWatchdog);
+
+      const shouldReconnect =
+        (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
+      // logger.info(`[Connection] Соединение закрыто для ${phoneJid}. Причина: ${lastDisconnect?.error}. Переподключение: ${shouldReconnect}`);
+      
+      // Удаляем сокет из Map перед попыткой переподключения или завершением
+      socks.delete(organizationPhoneId);
+
+      if (shouldReconnect) {
+        await prisma.organizationPhone.update({
+          where: { id: organizationPhoneId },
+          data: { status: 'disconnected', qrCode: null },
+        }).catch(() => undefined);
+
+        // Задержка перед попыткой переподключения
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        // logger.info(`[Connection] Попытка переподключения для ${phoneJid}...`);
+        // Рекурсивно вызываем startBaileys для создания новой сессии
+        void startBaileys(organizationId, organizationPhoneId, phoneJid).catch((err) => {
+          logger.error({ err }, `[Connection] Ошибка при переподключении Baileys для ${phoneJid}`);
+        });
+      } else {
+          // logger.error(`[Connection] Подключение для ${phoneJid} не будет переподключено (Logged out). Очистка данных сессии...`);
+          // --- ДОБАВЛЕНО: Детальный лог ошибки ---
+          // logger.error(`[Connection] Детали ошибки 'lastDisconnect' для ${phoneJid}:`, lastDisconnect);
+          
+          // --- ИСПРАВЛЕНО: Используем только номер для ключа, как в useDBAuthState ---
+          const key = phoneJid.split('@')[0].split(':')[0];
+
+          // Очищаем данные сессии из БД по правильному ключу
+          await prisma.baileysAuth.deleteMany({
+            where: {
+              organizationId: organizationId,
+              phoneJid: key, // Используем только номер
+            }
+          });
+          // logger.info(`✅ Данные сессии для ${key} удалены из БД.`);
+
+          // Обновляем статус в БД на 'logged_out' и очищаем QR-код
+          await prisma.organizationPhone.update({
+              where: { id: organizationPhoneId },
+              data: { status: 'logged_out', lastConnectedAt: new Date(), qrCode: null }, 
+          });
+      }
+    } else if (connection === 'open') {
+      qrResolved = true;
+      clearTimeout(qrWatchdog);
+
+      // Если соединение открыто
+      // logger.info(`✅ Подключено к WhatsApp для ${phoneJid} (Организация: ${organizationId}, Phone ID: ${organizationPhoneId})`);
+      
+      // Очищаем счетчики ошибок при успешном подключении
+      badMacErrorCount.delete(organizationPhoneId);
+      badDecryptErrorCount.delete(organizationPhoneId);
+      // logger.info(`🔄 Счетчики ошибок сброшены для organizationPhoneId: ${organizationPhoneId}`);
+      
+      // Обновляем статус в БД на 'connected', сохраняем фактический JID и очищаем QR-код
+      const actualPhoneJid = currentSock?.user?.id || phoneJid;
+      
+      // Проверяем, не используется ли этот phoneJid другим телефоном
+      const existingPhone = await prisma.organizationPhone.findFirst({
+        where: {
+          phoneJid: actualPhoneJid,
+          id: { not: organizationPhoneId }
+        }
+      });
+      
+      if (existingPhone) {
+        // logger.warn(`⚠️ PhoneJid ${actualPhoneJid} уже используется другим телефоном (ID: ${existingPhone.id}). Обновляем только статус.`);
+        await prisma.organizationPhone.update({
+          where: { id: organizationPhoneId },
+          data: { status: 'connected', lastConnectedAt: new Date(), qrCode: null }
+        });
+      } else {
+        await prisma.organizationPhone.update({
+          where: { id: organizationPhoneId },
+          data: { status: 'connected', phoneJid: actualPhoneJid, lastConnectedAt: new Date(), qrCode: null }
+        });
+      }
+    }
+  }));
+
+  // Обработчик обновления учетных данных
+  currentSock.ev.on('creds.update', saveCreds); // Используем saveCreds для сохранения
+
+  // ИСПРАВЛЕНИЕ: Добавляем обработчик ошибок синхронизации app state и сессий
+  currentSock.ev.on('connection.update', safeAsyncListener('connection.update(recovery)', async (update) => {
+    // Перехватываем ошибки синхронизации app state
+    if (update.lastDisconnect?.error) {
+      const error = update.lastDisconnect.error as any;
+      
+      // Проверяем на ошибки дешифрования в app state
+      if (error?.message?.includes('bad decrypt') || 
+          error?.message?.includes('error:1C800064') ||
+          error?.name === 'critical_unblock_low') {
+        // logger.warn(`⚠️ Обнаружена ошибка дешифрования app state для ${phoneJid}.`);
+        
+        // Вызываем обработчик Bad Decrypt ошибки
+        const recovered = await handleBadDecryptError(organizationId, organizationPhoneId, phoneJid);
+        
+        if (!recovered) {
+          // logger.error(`❌ Не удалось восстановить сессию после повторяющихся Bad Decrypt ошибок для ${phoneJid}. Сессия закрыта.`);
+          // Сессия уже закрыта в handleBadDecryptError, не пытаемся переподключиться
+          return;
+        }
+      }
+      
+      // НОВОЕ: Обработка ошибки Bad MAC из libsignal
+      if (error?.message?.includes('Bad MAC') || 
+          error?.message?.includes('verifyMAC') ||
+          error?.stack?.includes('libsignal')) {
+        // logger.warn(`⚠️ Обнаружена ошибка Bad MAC (libsignal) для ${phoneJid}.`);
+        
+        // Вызываем обработчик Bad MAC ошибки
+        const recovered = await handleBadMacError(organizationId, organizationPhoneId, phoneJid);
+        
+        if (!recovered) {
+          // logger.error(`❌ Не удалось восстановить сессию после повторяющихся Bad MAC ошибок для ${phoneJid}. Сессия закрыта.`);
+          // Сессия уже закрыта в handleBadMacError, не пытаемся переподключиться
+          return;
+        }
+      }
+    }
+  }));
+
+  // Совместимость с v7: обработчик обновлений LID маппинга (в 6.7.x событие не генерируется)
+  try {
+    (currentSock.ev as any).on?.('lid-mapping.update', (mapping: any) => {
+      // logger.info(`[LID] lid-mapping.update: ${JSON.stringify(mapping)}`);
+      // Здесь можно задействовать currentSock.signalRepository?.lidMapping?.storeLIDPNMappings(mapping)
+      // но API может отличаться между версиями — оставляем как информативный лог
+    });
+  } catch (e) {
+    // logger.debug('LID mapping event handler not supported in this version');
+  }
+
+  // Обработчик получения новых сообщений
+  currentSock.ev.on('messages.upsert', safeAsyncListener('messages.upsert', async ({ messages, type }) => { 
+    if (type === 'notify') {
+      for (const msg of messages) {
+        try {
+          // Пропускаем сообщения без контента или если это наше исходящее сообщение, не имеющее видимого контента
+          if (!msg.message) {
+              // logger.info(`[Message Upsert] Пропущено сообщение без контента (ID: ${msg.key.id})`);
+              continue;
+          }
+          if (msg.key.fromMe && !msg.message.conversation && !msg.message.extendedTextMessage && !msg.message.imageMessage && !msg.message.videoMessage && !msg.message.documentMessage && !msg.message.audioMessage && !msg.message.stickerMessage) {
+              // logger.info(`[Message Upsert] Пропущено исходящее системное сообщение (ID: ${msg.key.id})`);
+              continue;
+          }
 
     await current.sock.sendMessage(remoteJid, { text });
   }
