@@ -25,8 +25,10 @@ async function initializeConnectedSessions() {
         // Убедитесь, что здесь перечислены ВСЕ статусы, при которых вы хотите инициализировать сессию.
         // 'connected': если сессия была активна и должна быть восстановлена.
         // 'disconnected': если сессия временно отключилась и нужно переподключиться (обычно без QR).
+        // 'logged_out': если auth сброшен и нужно автоматически поднять новую сессию с QR.
+        // 'pending': если приложение перезапустилось во время ожидания QR.
         status: {
-          in: ['connected', 'disconnected']
+          in: ['connected', 'disconnected', 'logged_out', 'pending']
         },
         // Если у вас несколько организаций и вы хотите инициализировать только определенные,
         // раскомментируйте и установите organizationId, иначе оставьте закомментированным.
@@ -37,7 +39,7 @@ async function initializeConnectedSessions() {
     logger.info(`[ServerInit] Запрос к БД завершен. Найдено ${connectedPhones.length} аккаунтов для инициализации.`);
 
     if (connectedPhones.length === 0) {
-      logger.info('[ServerInit] Нет ранее подключенных WhatsApp аккаунтов со статусами "connected" или "disconnected" для инициализации.');
+      logger.info('[ServerInit] Нет ранее подключенных WhatsApp аккаунтов со статусами "connected", "disconnected", "logged_out" или "pending" для инициализации.');
       return;
     }
 

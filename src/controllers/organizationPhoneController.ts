@@ -1,7 +1,7 @@
 // src/controllers/organizationPhoneController.ts
 import { Request, Response } from 'express';
 import { prisma } from '../config/authStorage';
-import { startBaileys, getBaileysSock } from '../config/baileys';
+import { startBaileys, getBaileysSock, markManualDisconnect } from '../config/baileys';
 import pino from 'pino';
 import WebSocket from 'ws'; 
 const logger = pino({ level: 'info' });
@@ -219,6 +219,7 @@ export async function disconnectOrganizationPhone(req: Request, res: Response) {
 
         const sock = getBaileysSock(organizationPhoneId);
         if (sock) {
+          markManualDisconnect(organizationPhoneId, 'API disconnect endpoint');
             await sock.logout(); // Завершаем сессию WhatsApp
             // Статус будет обновлен в БД на 'logged_out' через обработчик 'connection.update' в baileys.ts
             logger.info(`[disconnectOrganizationPhone] WhatsApp сессия для ${phone.phoneJid} запросила выход.`);
