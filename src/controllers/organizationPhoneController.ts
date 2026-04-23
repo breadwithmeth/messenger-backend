@@ -125,7 +125,6 @@ export async function connectOrganizationPhone(req: Request, res: Response) {
     }
 
     const normalizedPhoneJid = normalizePhoneJid(phone.phoneJid);
-  logger.info({ organizationId, organizationPhoneId, phoneJid: phone.phoneJid, normalizedPhoneJid, currentStatus: phone.status, hasQrCode: Boolean(phone.qrCode), connectionType: phone.connectionType }, '[connectOrganizationPhone] получен запрос на подключение');
 
     // WABA номера не подключаются через Baileys (иначе будет conflict/replaced и таймауты на pre-keys)
     if (phone.connectionType === 'waba') {
@@ -142,7 +141,6 @@ export async function connectOrganizationPhone(req: Request, res: Response) {
       const currentWebSocket = existingSock.ws as unknown as WebSocket;
       const isOpen = currentWebSocket.readyState === WebSocket.OPEN;
       const isConnecting = currentWebSocket.readyState === WebSocket.CONNECTING;
-      logger.info({ organizationId, organizationPhoneId, normalizedPhoneJid, readyState: currentWebSocket.readyState, isOpen, isConnecting }, '[connectOrganizationPhone] найден существующий сокет');
       if (isOpen || isConnecting) {
         const connectionStatus = isOpen ? 'connected' : 'connecting';
         logger.info(`[connectOrganizationPhone] Сокет для ${phone.phoneJid} уже активен (readyState: ${currentWebSocket.readyState}).`);
@@ -152,7 +150,6 @@ export async function connectOrganizationPhone(req: Request, res: Response) {
 
     const authKey = normalizedPhoneJid.split('@')[0].split(':')[0];
     const shouldResetStaleSession = phone.status === 'logged_out' || (phone.status === 'pending' && !phone.qrCode);
-    logger.info({ organizationId, organizationPhoneId, normalizedPhoneJid, authKey, shouldResetStaleSession }, '[connectOrganizationPhone] подготавливаем состояние для запуска Baileys');
 
     await prisma.organizationPhone.update({
       where: { id: organizationPhoneId },
@@ -162,8 +159,6 @@ export async function connectOrganizationPhone(req: Request, res: Response) {
         qrCode: null,
       },
     });
-
-    logger.info({ organizationId, organizationPhoneId, normalizedPhoneJid }, '[connectOrganizationPhone] статус обновлен на loading');
 
     if (shouldResetStaleSession) {
       const deleted = await prisma.baileysAuth.deleteMany({

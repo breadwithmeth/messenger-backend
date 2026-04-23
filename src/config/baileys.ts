@@ -43,10 +43,7 @@ function envInt(name: string, fallback: number): number {
 const BAILEYS_CONNECT_TIMEOUT_MS = envInt('BAILEYS_CONNECT_TIMEOUT_MS', 120_000);
 const BAILEYS_DEFAULT_QUERY_TIMEOUT_MS = envInt('BAILEYS_DEFAULT_QUERY_TIMEOUT_MS', 120_000);
 const BAILEYS_KEEP_ALIVE_INTERVAL_MS = envInt('BAILEYS_KEEP_ALIVE_INTERVAL_MS', 25_000);
-const BAILEYS_QR_WAIT_TIMEOUT_MS = envInt('BAILEYS_QR_WAIT_TIMEOUT_MS', 60_000);
-const BAILEYS_VERSION_FETCH_TIMEOUT_MS = envInt('BAILEYS_VERSION_FETCH_TIMEOUT_MS', 20_000);
-const BAILEYS_RECONNECT_DELAY_MS = envInt('BAILEYS_RECONNECT_DELAY_MS', 5_000);
-const BAILEYS_RECONNECT_MAX_DELAY_MS = envInt('BAILEYS_RECONNECT_MAX_DELAY_MS', 60_000);
+const BAILEYS_QR_WAIT_TIMEOUT_MS = envInt('BAILEYS_QR_WAIT_TIMEOUT_MS', 20_000);
 
 function getDisconnectInfo(lastDisconnect: ConnectionState['lastDisconnect']) {
   const error = lastDisconnect?.error as Boom | Error | undefined;
@@ -750,18 +747,18 @@ export async function useDBAuthState(organizationId: number, phoneJid: string): 
       // Проверка на полноту данных
       if (parsedCreds.noiseKey && parsedCreds.signedIdentityKey && parsedCreds.registered !== undefined) {
         creds = parsedCreds;
-        logger.info({ organizationId, phoneJid, authKey: key }, '[BaileysAuth] creds загружены из БД');
+        // logger.info(`✅ Учетные данные (creds) успешно загружены из БД для ${key}.`);
       } else {
-        logger.warn({ organizationId, phoneJid, authKey: key }, '[BaileysAuth] creds неполные, инициализируем новые');
+        // logger.warn(`⚠️ Загруженные creds неполны для ${key}. Инициализация новых.`);
         creds = initAuthCreds();
       }
     } catch (e) {
-      logger.error({ err: e, organizationId, phoneJid, authKey: key }, '[BaileysAuth] ошибка парсинга creds, инициализируем новые');
+      // logger.error(`⚠️ Ошибка парсинга creds из БД для ${key}. Инициализация новых.`, e);
       creds = initAuthCreds();
     }
   } else {
     creds = initAuthCreds();
-    logger.info({ organizationId, phoneJid, authKey: key }, '[BaileysAuth] creds не найдены, инициализируем новые');
+    // logger.info(`creds не найдены в БД для ${key}, инициализация новых.`);
   }
 
   // 2. Создание хранилища ключей (SignalStore)
@@ -823,7 +820,7 @@ export async function useDBAuthState(organizationId: number, phoneJid: string): 
       keys: makeCacheableSignalKeyStore(keys, logger),
     },
     saveCreds: async () => {
-      logger.info({ organizationId, phoneJid, authKey: key }, '[BaileysAuth] сохраняем обновленные creds');
+      // logger.info(`🔐 Сохранение обновленных creds в БД для ${key}.`);
       const base64Creds = Buffer.from(JSON.stringify(creds, BufferJSON.replacer), 'utf8').toString('base64');
       await authDB.set('creds', base64Creds, 'base64_json');
     },
@@ -844,7 +841,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
   logger.info({ organizationId, organizationPhoneId, phoneJid }, '[Baileys] auth state подготовлен');
 
   // Получаем последнюю версию WhatsApp Web API
-  const version = await resolveBaileysVersion(organizationId, organizationPhoneId, phoneJid);
+  const { version } = await fetchLatestBaileysVersion();
   logger.info({ organizationId, organizationPhoneId, phoneJid, version: version.join('.'), connectTimeoutMs: BAILEYS_CONNECT_TIMEOUT_MS, queryTimeoutMs: BAILEYS_DEFAULT_QUERY_TIMEOUT_MS, qrWaitTimeoutMs: BAILEYS_QR_WAIT_TIMEOUT_MS }, '[Baileys] запускаем сессию');
 
   // Создаем новый экземпляр Baileys WASocket
@@ -901,7 +898,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
   const qrWatchdog = setTimeout(() => {
     if (qrResolved) return;
 
-    logger.warn({ organizationId, organizationPhoneId, phoneJid, timeoutMs: BAILEYS_QR_WAIT_TIMEOUT_MS }, '[Baileys] QR не был получен вовремя, переводим сессию в disconnected');
+    logger.warn(`[Baileys] QR не был получен вовремя для ${phoneJid}. Переводим сессию в disconnected.`);
 
     socks.delete(organizationPhoneId);
 
@@ -928,28 +925,22 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
   currentSock.ev.on('connection.update', safeAsyncListener('connection.update(main)', async (update: Partial<ConnectionState>) => { 
     const { connection, lastDisconnect, qr } = update;
 
-    logger.info({
-      organizationId,
-      organizationPhoneId,
-      phoneJid,
-      connection: connection || 'unknown',
-      hasQr: Boolean(qr),
-      ...getDisconnectInfo(lastDisconnect),
-    }, '[Baileys] connection.update');
+    // logger.info(`[ConnectionUpdate] Status for ${phoneJid}: connection=${connection}, QR_present=${!!qr}`);
+    // if (lastDisconnect) {
+    //   logger.info(`[ConnectionUpdate] lastDisconnect for ${phoneJid}: reason=${(lastDisconnect.error as Boom)?.output?.statusCode || lastDisconnect.error?.message || 'Неизвестно'}`);
+    // }
 
     // Если получен QR-код
     if (qr) {
       qrResolved = true;
       clearTimeout(qrWatchdog);
 
-      logger.info({ organizationId, organizationPhoneId, phoneJid, qrLength: qr.length }, '[Baileys] получен QR-код');
+      // logger.info(`[ConnectionUpdate] QR code received for ${phoneJid}. Length: ${qr.length}`);
       // Сохраняем QR-код в БД и обновляем статус
       await prisma.organizationPhone.update({
         where: { id: organizationPhoneId },
         data: { qrCode: qr, status: 'pending' },
       });
-
-      logger.info({ organizationId, organizationPhoneId, phoneJid }, '[Baileys] QR сохранен в БД, статус pending');
 
       // Выводим QR-код в терминал
       console.log(`\n======================================================`);
@@ -969,30 +960,9 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
       qrResolved = true;
       clearTimeout(qrWatchdog);
 
-      const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
-      const manualDisconnectReason = manualDisconnectRequests.get(organizationPhoneId);
-      
-      // Принудительно генерируем новый QR, если сессия была удалена на телефоне
-      const shouldGenerateFreshQr = statusCode === DisconnectReason.loggedOut;
-      
-      // Переподключаемся, если это не ручной выход и не logged out
-      const shouldReconnect = !manualDisconnectReason && !shouldGenerateFreshQr;
-
-      // Специальная логика для "Connection Failure" (405)
-      const isConnectionFailure = statusCode === DisconnectReason.connectionClosed; // 405
-      const reconnectAttempt = reconnectAttempts.get(organizationPhoneId) || 0;
-
-      logger.warn({
-        organizationId,
-        organizationPhoneId,
-        phoneJid,
-        shouldReconnect,
-        shouldGenerateFreshQr,
-        isConnectionFailure,
-        reconnectAttempt,
-        manualDisconnectReason,
-        ...getDisconnectInfo(lastDisconnect)
-      }, '[Baileys] соединение закрыто');
+      const shouldReconnect =
+        (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
+      logger.warn({ organizationId, organizationPhoneId, phoneJid, shouldReconnect, ...getDisconnectInfo(lastDisconnect) }, '[Baileys] соединение закрыто');
       
       // Удаляем сокет из Map перед попыткой переподключения или завершением
       socks.delete(organizationPhoneId);
@@ -1003,59 +973,41 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
           data: { status: 'disconnected', qrCode: null },
         }).catch(() => undefined);
 
-        logger.info({ organizationId, organizationPhoneId, phoneJid }, '[Baileys] статус обновлен на disconnected перед переподключением');
-
-        // Если "Connection Failure" повторяется, пробуем сгенерировать новый QR
-        const forceNewQrOnFailure = isConnectionFailure && reconnectAttempt > 2;
-
-        await scheduleReconnect(organizationId, organizationPhoneId, phoneJid, {
-          forceNewQr: forceNewQrOnFailure,
-          reason: forceNewQrOnFailure ? 'Repeated Connection Failure' : 'connection.close',
-          disconnectInfo: getDisconnectInfo(lastDisconnect),
+        // Задержка перед попыткой переподключения
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        logger.info({ organizationId, organizationPhoneId, phoneJid }, '[Baileys] повторная попытка подключения');
+        // Рекурсивно вызываем startBaileys для создания новой сессии
+        void startBaileys(organizationId, organizationPhoneId, phoneJid).catch((err) => {
+          logger.error({ err }, `[Connection] Ошибка при переподключении Baileys для ${phoneJid}`);
         });
       } else {
-          if (shouldGenerateFreshQr) {
-            await deleteAuthState(organizationId, phoneJid, manualDisconnectReason || 'logged_out').catch((err) => {
-              logger.error({ err, organizationId, organizationPhoneId, phoneJid }, '[Baileys] не удалось удалить auth-данные после logged_out');
-            });
+          // --- ИСПРАВЛЕНО: Используем только номер для ключа, как в useDBAuthState ---
+          const key = phoneJid.split('@')[0].split(':')[0];
 
-            await prisma.organizationPhone.update({
-                where: { id: organizationPhoneId },
-                data: { status: 'logged_out', lastConnectedAt: new Date(), qrCode: null }, 
-            }).catch((err) => {
-              logger.error({ err, organizationId, organizationPhoneId, phoneJid }, '[Baileys] не удалось обновить статус на logged_out');
-            });
-
-            logger.warn({ organizationId, organizationPhoneId, phoneJid, manualDisconnectReason }, '[Baileys] статус обновлен на logged_out');
-
-            if (!manualDisconnectReason) {
-              await scheduleReconnect(organizationId, organizationPhoneId, phoneJid, {
-                forceNewQr: true,
-                reason: 'logged_out',
-                disconnectInfo: getDisconnectInfo(lastDisconnect),
-              });
-            } else {
-              logger.info({ organizationId, organizationPhoneId, phoneJid, manualDisconnectReason }, '[Baileys] автопереподключение пропущено: ручной logout');
+          // Очищаем данные сессии из БД по правильному ключу
+          await prisma.baileysAuth.deleteMany({
+            where: {
+              organizationId: organizationId,
+              phoneJid: key, // Используем только номер
             }
-          } else {
-            await prisma.organizationPhone.update({
+          });
+          logger.warn({ organizationId, organizationPhoneId, phoneJid, authKey: key }, '[Baileys] logged_out, auth-данные удалены из БД');
+
+          // Обновляем статус в БД на 'logged_out' и очищаем QR-код
+          await prisma.organizationPhone.update({
               where: { id: organizationPhoneId },
-              data: { status: 'disconnected', qrCode: null },
-            }).catch((err) => {
-              logger.error({ err, organizationId, organizationPhoneId, phoneJid }, '[Baileys] не удалось обновить статус на disconnected после ручного закрытия');
-            });
+              data: { status: 'logged_out', lastConnectedAt: new Date(), qrCode: null }, 
+          });
 
-            logger.info({ organizationId, organizationPhoneId, phoneJid, manualDisconnectReason }, '[Baileys] автопереподключение пропущено: ручное отключение');
-          }
-
-          manualDisconnectRequests.delete(organizationPhoneId);
+          logger.warn({ organizationId, organizationPhoneId, phoneJid }, '[Baileys] статус обновлен на logged_out');
       }
     } else if (connection === 'open') {
       qrResolved = true;
       clearTimeout(qrWatchdog);
       resetReconnectState(organizationPhoneId, 'connection.open');
 
-      logger.info({ organizationId, organizationPhoneId, phoneJid, currentUserId: currentSock?.user?.id }, '[Baileys] соединение открыто');
+      // Если соединение открыто
+      // logger.info(`✅ Подключено к WhatsApp для ${phoneJid} (Организация: ${organizationId}, Phone ID: ${organizationPhoneId})`);
       
       // Очищаем счетчики ошибок при успешном подключении
       badMacErrorCount.delete(organizationPhoneId);
@@ -1074,7 +1026,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
       });
       
       if (existingPhone) {
-        logger.warn({ organizationId, organizationPhoneId, phoneJid, actualPhoneJid, existingPhoneId: existingPhone.id }, '[Baileys] фактический JID уже используется другим телефоном, обновляем только статус');
+        // logger.warn(`⚠️ PhoneJid ${actualPhoneJid} уже используется другим телефоном (ID: ${existingPhone.id}). Обновляем только статус.`);
         await prisma.organizationPhone.update({
           where: { id: organizationPhoneId },
           data: { status: 'connected', lastConnectedAt: new Date(), qrCode: null }
@@ -1087,29 +1039,23 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
       }
 
       logger.info({ organizationId, organizationPhoneId, phoneJid, actualPhoneJid }, '[Baileys] статус обновлен на connected');
-    } else if (connection === 'connecting') {
-      logger.info({ organizationId, organizationPhoneId, phoneJid, hasQr: Boolean(qr) }, '[Baileys] соединение в процессе установки');
     }
   }));
 
   // Обработчик обновления учетных данных
-  currentSock.ev.on('creds.update', safeAsyncListener('creds.update', async () => {
-    logger.info({ organizationId, organizationPhoneId, phoneJid }, '[Baileys] получено событие creds.update');
-    await saveCreds();
-  }));
+  currentSock.ev.on('creds.update', saveCreds); // Используем saveCreds для сохранения
 
   // ИСПРАВЛЕНИЕ: Добавляем обработчик ошибок синхронизации app state и сессий
   currentSock.ev.on('connection.update', safeAsyncListener('connection.update(recovery)', async (update) => {
     // Перехватываем ошибки синхронизации app state
     if (update.lastDisconnect?.error) {
       const error = update.lastDisconnect.error as any;
-      logger.warn({ organizationId, organizationPhoneId, phoneJid, errorName: error?.name, errorMessage: error?.message }, '[Baileys] connection.update(recovery) получил ошибку');
       
       // Проверяем на ошибки дешифрования в app state
       if (error?.message?.includes('bad decrypt') || 
           error?.message?.includes('error:1C800064') ||
           error?.name === 'critical_unblock_low') {
-        logger.warn({ organizationId, organizationPhoneId, phoneJid }, '[Baileys] обнаружена ошибка bad decrypt');
+        // logger.warn(`⚠️ Обнаружена ошибка дешифрования app state для ${phoneJid}.`);
         
         // Вызываем обработчик Bad Decrypt ошибки
         const recovered = await handleBadDecryptError(organizationId, organizationPhoneId, phoneJid);
@@ -1125,7 +1071,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
       if (error?.message?.includes('Bad MAC') || 
           error?.message?.includes('verifyMAC') ||
           error?.stack?.includes('libsignal')) {
-        logger.warn({ organizationId, organizationPhoneId, phoneJid }, '[Baileys] обнаружена ошибка Bad MAC');
+        // logger.warn(`⚠️ Обнаружена ошибка Bad MAC (libsignal) для ${phoneJid}.`);
         
         // Вызываем обработчик Bad MAC ошибки
         const recovered = await handleBadMacError(organizationId, organizationPhoneId, phoneJid);
