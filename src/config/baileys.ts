@@ -44,6 +44,7 @@ const BAILEYS_CONNECT_TIMEOUT_MS = envInt('BAILEYS_CONNECT_TIMEOUT_MS', 60_000);
 const BAILEYS_DEFAULT_QUERY_TIMEOUT_MS = envInt('BAILEYS_DEFAULT_QUERY_TIMEOUT_MS', 60_000);
 const BAILEYS_KEEP_ALIVE_INTERVAL_MS = envInt('BAILEYS_KEEP_ALIVE_INTERVAL_MS', 25_000);
 const BAILEYS_QR_WAIT_TIMEOUT_MS = envInt('BAILEYS_QR_WAIT_TIMEOUT_MS', 20_000);
+const BAILEYS_VERSION_FETCH_TIMEOUT_MS = envInt('BAILEYS_VERSION_FETCH_TIMEOUT_MS', 10_000);
 const BAILEYS_RECONNECT_DELAY_MS = envInt('BAILEYS_RECONNECT_DELAY_MS', 5_000);
 const BAILEYS_RECONNECT_MAX_DELAY_MS = envInt('BAILEYS_RECONNECT_MAX_DELAY_MS', 60_000);
 
@@ -199,6 +200,36 @@ async function scheduleReconnect(
   }, delayMs);
 
   reconnectTimers.set(organizationPhoneId, timer);
+}
+
+async function resolveBaileysVersion(organizationId: number, organizationPhoneId: number, phoneJid: string) {
+  logger.info({
+    organizationId,
+    organizationPhoneId,
+    phoneJid,
+    timeoutMs: BAILEYS_VERSION_FETCH_TIMEOUT_MS,
+  }, '[Baileys] начинаем получение версии WA Web');
+
+  const result = await fetchLatestBaileysVersion({ timeout: BAILEYS_VERSION_FETCH_TIMEOUT_MS });
+
+  if (result.isLatest) {
+    logger.info({
+      organizationId,
+      organizationPhoneId,
+      phoneJid,
+      version: result.version.join('.'),
+    }, '[Baileys] получена актуальная версия WA Web');
+  } else {
+    logger.warn({
+      organizationId,
+      organizationPhoneId,
+      phoneJid,
+      version: result.version.join('.'),
+      error: result.error instanceof Error ? result.error.message : result.error,
+    }, '[Baileys] не удалось получить актуальную версию WA Web, используем встроенную fallback-версию');
+  }
+
+  return result.version;
 }
 
 // Интерфейс для кастомного хранилища сигналов
@@ -808,10 +839,12 @@ export async function useDBAuthState(organizationId: number, phoneJid: string): 
  */
 export async function startBaileys(organizationId: number, organizationPhoneId: number, phoneJid: string): Promise<WASocket> {
   manualDisconnectRequests.delete(organizationPhoneId);
+  logger.info({ organizationId, organizationPhoneId, phoneJid }, '[Baileys] startBaileys вызван');
   const { state, saveCreds } = await useDBAuthState(organizationId, phoneJid);
+  logger.info({ organizationId, organizationPhoneId, phoneJid }, '[Baileys] auth state подготовлен');
 
   // Получаем последнюю версию WhatsApp Web API
-  const { version } = await fetchLatestBaileysVersion();
+  const version = await resolveBaileysVersion(organizationId, organizationPhoneId, phoneJid);
   logger.info({ organizationId, organizationPhoneId, phoneJid, version: version.join('.'), connectTimeoutMs: BAILEYS_CONNECT_TIMEOUT_MS, queryTimeoutMs: BAILEYS_DEFAULT_QUERY_TIMEOUT_MS, qrWaitTimeoutMs: BAILEYS_QR_WAIT_TIMEOUT_MS }, '[Baileys] запускаем сессию');
 
   // Создаем новый экземпляр Baileys WASocket
@@ -858,6 +891,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
         return { conversation: 'Сообщение не найдено в кэше или БД' };
     }
   });
+  logger.info({ organizationId, organizationPhoneId, phoneJid }, '[Baileys] WASocket создан');
 
   // !!! КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Добавляем созданный сокет в socks Map !!!
   socks.set(organizationPhoneId, currentSock);
