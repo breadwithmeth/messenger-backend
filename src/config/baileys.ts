@@ -404,13 +404,12 @@ export async function ensureChat(
         })
       : null;
 
-    // fallback: ищем по remoteJid и organizationPhoneId независимо от receivingPhoneJid, чтобы не плодить дубликаты
+    // fallback: ищем по remoteJid независимо от receivingPhoneJid, чтобы не плодить дубликаты
     if (!chat) {
       chat = await prisma.chat.findFirst({
         where: {
           organizationId,
           channel: 'whatsapp',
-          organizationPhoneId,
           remoteJid: normalizedRemoteJid,
         },
       });
@@ -497,12 +496,11 @@ export async function ensureChat(
         }
       } catch (e: any) {
         if (e?.code === 'P2002') {
-          // Уникальное ограничение на (organizationId, channel, organizationPhoneId, remoteJid)
+          // Уникальное ограничение на (organizationId, channel, remoteJid)
           const existing = await prisma.chat.findFirst({
             where: {
               organizationId,
               channel: 'whatsapp',
-              organizationPhoneId,
               remoteJid: normalizedRemoteJid,
             },
           });

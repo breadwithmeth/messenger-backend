@@ -269,7 +269,7 @@ model Chat {
   @@index([channel]) // Индекс для поиска по каналу
   @@index([organizationId, receivingPhoneJid, remoteJid]) // Для WhatsApp
   @@index([organizationId, telegramBotId, telegramChatId]) // Для Telegram
-  @@unique([organizationId, channel, organizationPhoneId, remoteJid]) // Уникальное ограничение по номеру и каналу
+  @@unique([organizationId, channel, remoteJid]) // Уникальное ограничение для предотвращения дубликатов
 }
 
 
