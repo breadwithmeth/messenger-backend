@@ -40,11 +40,11 @@ function envInt(name: string, fallback: number): number {
 
 // Таймауты по умолчанию можно переопределить через env,
 // чтобы избежать падений на медленных/нестабильных сетях (Timed Out в Baileys query).
-const BAILEYS_CONNECT_TIMEOUT_MS = envInt('BAILEYS_CONNECT_TIMEOUT_MS', 60_000);
-const BAILEYS_DEFAULT_QUERY_TIMEOUT_MS = envInt('BAILEYS_DEFAULT_QUERY_TIMEOUT_MS', 60_000);
+const BAILEYS_CONNECT_TIMEOUT_MS = envInt('BAILEYS_CONNECT_TIMEOUT_MS', 120_000);
+const BAILEYS_DEFAULT_QUERY_TIMEOUT_MS = envInt('BAILEYS_DEFAULT_QUERY_TIMEOUT_MS', 120_000);
 const BAILEYS_KEEP_ALIVE_INTERVAL_MS = envInt('BAILEYS_KEEP_ALIVE_INTERVAL_MS', 25_000);
-const BAILEYS_QR_WAIT_TIMEOUT_MS = envInt('BAILEYS_QR_WAIT_TIMEOUT_MS', 20_000);
-const BAILEYS_VERSION_FETCH_TIMEOUT_MS = envInt('BAILEYS_VERSION_FETCH_TIMEOUT_MS', 10_000);
+const BAILEYS_QR_WAIT_TIMEOUT_MS = envInt('BAILEYS_QR_WAIT_TIMEOUT_MS', 60_000);
+const BAILEYS_VERSION_FETCH_TIMEOUT_MS = envInt('BAILEYS_VERSION_FETCH_TIMEOUT_MS', 20_000);
 const BAILEYS_RECONNECT_DELAY_MS = envInt('BAILEYS_RECONNECT_DELAY_MS', 5_000);
 const BAILEYS_RECONNECT_MAX_DELAY_MS = envInt('BAILEYS_RECONNECT_MAX_DELAY_MS', 60_000);
 
@@ -971,14 +971,25 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
 
       const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
       const manualDisconnectReason = manualDisconnectRequests.get(organizationPhoneId);
+      
+      // Принудительно генерируем новый QR, если сессия была удалена на телефоне
       const shouldGenerateFreshQr = statusCode === DisconnectReason.loggedOut;
+      
+      // Переподключаемся, если это не ручной выход и не logged out
       const shouldReconnect = !manualDisconnectReason && !shouldGenerateFreshQr;
+
+      // Специальная логика для "Connection Failure" (405)
+      const isConnectionFailure = statusCode === DisconnectReason.connectionClosed; // 405
+      const reconnectAttempt = reconnectAttempts.get(organizationPhoneId) || 0;
+
       logger.warn({
         organizationId,
         organizationPhoneId,
         phoneJid,
         shouldReconnect,
         shouldGenerateFreshQr,
+        isConnectionFailure,
+        reconnectAttempt,
         manualDisconnectReason,
         ...getDisconnectInfo(lastDisconnect)
       }, '[Baileys] соединение закрыто');
@@ -994,9 +1005,12 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
 
         logger.info({ organizationId, organizationPhoneId, phoneJid }, '[Baileys] статус обновлен на disconnected перед переподключением');
 
+        // Если "Connection Failure" повторяется, пробуем сгенерировать новый QR
+        const forceNewQrOnFailure = isConnectionFailure && reconnectAttempt > 2;
+
         await scheduleReconnect(organizationId, organizationPhoneId, phoneJid, {
-          forceNewQr: false,
-          reason: 'connection.close',
+          forceNewQr: forceNewQrOnFailure,
+          reason: forceNewQrOnFailure ? 'Repeated Connection Failure' : 'connection.close',
           disconnectInfo: getDisconnectInfo(lastDisconnect),
         });
       } else {
