@@ -2,7 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import pino from 'pino';
 
 const prisma = new PrismaClient();
-const logger = pino();
+const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
 interface CreateTagInput {
   name: string;

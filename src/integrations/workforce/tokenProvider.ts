@@ -21,7 +21,7 @@ export class KeycloakClientCredentialsTokenProvider {
 
   constructor(config: ServiceTokenProviderConfig, logger?: Logger) {
     this.config = config;
-    this.logger = logger ?? pino({ level: 'info' });
+    this.logger = logger ?? pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
   }
 
   async getToken(): Promise<string> {

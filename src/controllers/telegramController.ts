@@ -10,7 +10,7 @@ import {
 } from '../services/telegramService';
 import pino from 'pino';
 
-const logger = pino({ level: 'info' });
+const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
 /**
  * Получить список всех ботов организации

@@ -9,7 +9,7 @@ import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
 
-const logger = pino({ level: 'info' });
+const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
 export const sendTextMessage = async (req: Request, res: Response) => {
   const { organizationPhoneId, receiverJid, text } = req.body;

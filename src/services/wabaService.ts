@@ -5,7 +5,7 @@ import { prisma } from '../config/authStorage';
 import pino from 'pino';
 import { saveMedia } from './storageService';
 
-const logger = pino({ level: 'info' });
+const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
 interface WABAConfig {
   accessToken: string;

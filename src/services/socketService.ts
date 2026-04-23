@@ -5,7 +5,7 @@ import { Server as HTTPServer } from 'http';
 import pino from 'pino';
 import { authenticateToken } from '../auth/tokenAuth';
 
-const logger = pino({ level: 'info' });
+const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
 let io: Server | null = null;
 

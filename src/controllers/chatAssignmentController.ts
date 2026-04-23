@@ -5,7 +5,7 @@ import { prisma } from '../config/authStorage';
 import { notifyNewMessage } from '../services/socketService';
 import pino from 'pino';
 
-const logger = pino({ level: 'info' });
+const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
 /**
  * Назначает чат определенному оператору

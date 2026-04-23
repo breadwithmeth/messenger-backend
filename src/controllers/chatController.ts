@@ -5,7 +5,7 @@ import * as chatService from '../services/chatService';
 import pino from 'pino';
 import { prisma } from '../config/authStorage'; // Используем единый клиент Prisma
 
-const logger = pino({ level: 'info' });
+const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
 type TicketHistoryPoint = {
   oldValue: string | null;

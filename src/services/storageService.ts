@@ -6,7 +6,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import pino from 'pino';
 
-const logger = pino({ level: 'info' });
+const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
 // Конфигурация хранилища
 const STORAGE_TYPE = process.env.STORAGE_TYPE || 'local'; // 'local', 'r2', 's3'

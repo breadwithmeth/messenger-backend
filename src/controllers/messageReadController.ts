@@ -4,7 +4,7 @@ import { Request, Response } from 'express';
 import { prisma } from '../config/authStorage';
 import pino from 'pino';
 
-const logger = pino({ level: 'info' });
+const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
 /**
  * Отмечает сообщения в чате как прочитанные

@@ -31,7 +31,11 @@ import workforceRoutes from './routes/workforceRoutes';
 
 
 const app = express();
-const logger = pino({ level: 'info' }); // Инициализируйте logger
+const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' }); // Инициализируйте logger
+
+if ((process.env.APP_LOG_LEVEL || 'silent') === 'silent') {
+  console.error = () => undefined;
+}
 
 app.use(express.json());
 

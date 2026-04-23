@@ -5,7 +5,7 @@ import { getBaileysSock } from '../config/baileys';
 import { jidNormalizedUser } from '@whiskeysockets/baileys';
 import pino from 'pino';
 
-const logger = pino({ level: 'info' });
+const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
 // GET /api/chats/:remoteJid/profile
 export async function getContactProfile(req: Request, res: Response) {

@@ -6,7 +6,7 @@ import { promisify } from 'util';
 import pino from 'pino';
 import { saveMedia } from './storageService'; // Импорт универсального storage
 
-const logger = pino({ level: 'info' });
+const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 const writeFile = promisify(fs.writeFile);
 const mkdir = promisify(fs.mkdir);
 

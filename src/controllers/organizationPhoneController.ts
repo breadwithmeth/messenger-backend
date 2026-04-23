@@ -4,7 +4,7 @@ import { prisma } from '../config/authStorage';
 import { startBaileys, getBaileysSock, markManualDisconnect } from '../config/baileys';
 import pino from 'pino';
 import WebSocket from 'ws'; 
-const logger = pino({ level: 'info' });
+const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
 function normalizePhoneJid(phoneJid: string): string {
   const trimmed = phoneJid.trim();

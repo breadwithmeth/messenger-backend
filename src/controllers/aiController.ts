@@ -4,7 +4,7 @@ import { Request, Response } from 'express';
 import { getSuggestedResponses, checkAIServiceHealth } from '../services/aiService';
 import pino from 'pino';
 
-const logger = pino({ level: 'info' });
+const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
 /**
  * GET /api/ai/suggestions/:chatId

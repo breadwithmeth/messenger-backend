@@ -13,7 +13,7 @@ export type AuthClaims = {
 };
 
 let singleton: WorkforceClient | null = null;
-const baseLogger = pino({ level: 'info' });
+const baseLogger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
 export function getWorkforceClient(): WorkforceClient {
   if (singleton) return singleton;

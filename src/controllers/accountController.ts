@@ -3,7 +3,7 @@ import { Request, Response } from 'express';
 import { prisma } from '../config/authStorage';
 import pino from 'pino';
 
-const logger = pino({ level: 'info' });
+const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
 /**
  * Создает новую запись о WhatsApp-номере (аккаунте) для организации.

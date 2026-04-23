@@ -49,7 +49,7 @@ export class WorkforceClient {
     };
     this.tokenProvider = args.tokenProvider;
     this.fetchImpl = args.fetchImpl ?? fetch;
-    this.logger = args.logger ?? pino({ level: 'info' });
+    this.logger = args.logger ?? pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
   }
 
   syncEmployee(payload: SyncEmployeeRequest, ctx?: RequestContext): Promise<EmployeeDto> {

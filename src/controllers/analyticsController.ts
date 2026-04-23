@@ -5,7 +5,7 @@ import { prisma } from '../config/authStorage';
 import { Prisma } from '@prisma/client';
 import pino from 'pino';
 
-const logger = pino({ level: 'info' });
+const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
 function parseDateParam(raw: unknown): Date | null {
   if (!raw || typeof raw !== 'string') return null;

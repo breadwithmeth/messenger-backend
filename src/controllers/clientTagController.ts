@@ -3,7 +3,7 @@ import { AuthRequest } from '../middlewares/authMiddleware';
 import pino from 'pino';
 import * as tagService from '../services/clientTagService';
 
-const logger = pino();
+const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
 /**
  * 🏷️ GET /api/clients/tags - Получить все теги организации

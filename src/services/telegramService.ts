@@ -4,7 +4,7 @@ import TelegramBot from 'node-telegram-bot-api';
 import { prisma } from '../config/authStorage';
 import pino from 'pino';
 
-const logger = pino({ level: 'info' });
+const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
 // Хранилище активных ботов
 const activeBots = new Map<number, TelegramBot>();

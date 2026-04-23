@@ -9,7 +9,7 @@ import { prisma } from './config/authStorage'; // Импортируйте prism
 const PORT = process.env.PORT || 3000;
 
 const server = http.createServer(app);
-const logger = pino({ level: 'info' }); // Инициализируйте logger
+const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' }); // Инициализируйте logger
 
 // Инициализируем Socket.IO
 initializeSocketIO(server);

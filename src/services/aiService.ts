@@ -4,7 +4,7 @@ import OpenAI from 'openai';
 import { prisma } from '../config/authStorage';
 import pino from 'pino';
 
-const logger = pino({ level: 'info' });
+const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
 // DeepSeek API configuration
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';

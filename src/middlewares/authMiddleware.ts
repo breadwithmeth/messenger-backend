@@ -5,7 +5,7 @@ import pino from 'pino';
 import { syncEmployeeFromClaims } from '../integrations/workforce/workforceIntegration';
 import { authenticateToken } from '../auth/tokenAuth';
 
-const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
+const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 const AUTH_DEBUG_RESPONSE = process.env.AUTH_DEBUG_RESPONSE === 'true' || process.env.NODE_ENV !== 'production';
 
 export interface AuthRequest extends Request {

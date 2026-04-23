@@ -6,7 +6,7 @@ import { prisma } from '../config/authStorage';
 import { ensureChat } from '../config/baileys';
 import pino from 'pino';
 
-const logger = pino({ level: 'info' });
+const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
 /**
  * Webhook verification для WhatsApp Business API
