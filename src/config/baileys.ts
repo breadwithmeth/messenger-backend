@@ -45,18 +45,6 @@ const BAILEYS_DEFAULT_QUERY_TIMEOUT_MS = envInt('BAILEYS_DEFAULT_QUERY_TIMEOUT_M
 const BAILEYS_KEEP_ALIVE_INTERVAL_MS = envInt('BAILEYS_KEEP_ALIVE_INTERVAL_MS', 25_000);
 const BAILEYS_QR_WAIT_TIMEOUT_MS = envInt('BAILEYS_QR_WAIT_TIMEOUT_MS', 20_000);
 
-function getDisconnectInfo(lastDisconnect: ConnectionState['lastDisconnect']) {
-  const error = lastDisconnect?.error as Boom | Error | undefined;
-  const boomStatusCode = (error as Boom | undefined)?.output?.statusCode;
-  const message = error instanceof Error ? error.message : undefined;
-
-  return {
-    statusCode: boomStatusCode,
-    message,
-    stack: error instanceof Error ? error.stack : undefined,
-  };
-}
-
 function safeAsyncListener<T extends any[]>(
   eventName: string,
   handler: (...args: T) => Promise<void> | void
@@ -842,7 +830,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
 
   // Получаем последнюю версию WhatsApp Web API
   const { version } = await fetchLatestBaileysVersion();
-  logger.info({ organizationId, organizationPhoneId, phoneJid, version: version.join('.'), connectTimeoutMs: BAILEYS_CONNECT_TIMEOUT_MS, queryTimeoutMs: BAILEYS_DEFAULT_QUERY_TIMEOUT_MS, qrWaitTimeoutMs: BAILEYS_QR_WAIT_TIMEOUT_MS }, '[Baileys] запускаем сессию');
+  // logger.info(`Используется WhatsApp Web API версии: ${version.join('.')}`);
 
   // Создаем новый экземпляр Baileys WASocket
   const currentSock = makeWASocket({ 
@@ -962,7 +950,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
 
       const shouldReconnect =
         (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-      logger.warn({ organizationId, organizationPhoneId, phoneJid, shouldReconnect, ...getDisconnectInfo(lastDisconnect) }, '[Baileys] соединение закрыто');
+      // logger.info(`[Connection] Соединение закрыто для ${phoneJid}. Причина: ${lastDisconnect?.error}. Переподключение: ${shouldReconnect}`);
       
       // Удаляем сокет из Map перед попыткой переподключения или завершением
       socks.delete(organizationPhoneId);
@@ -975,12 +963,16 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
 
         // Задержка перед попыткой переподключения
         await new Promise(resolve => setTimeout(resolve, 3000));
-        logger.info({ organizationId, organizationPhoneId, phoneJid }, '[Baileys] повторная попытка подключения');
+        // logger.info(`[Connection] Попытка переподключения для ${phoneJid}...`);
         // Рекурсивно вызываем startBaileys для создания новой сессии
         void startBaileys(organizationId, organizationPhoneId, phoneJid).catch((err) => {
           logger.error({ err }, `[Connection] Ошибка при переподключении Baileys для ${phoneJid}`);
         });
       } else {
+          // logger.error(`[Connection] Подключение для ${phoneJid} не будет переподключено (Logged out). Очистка данных сессии...`);
+          // --- ДОБАВЛЕНО: Детальный лог ошибки ---
+          // logger.error(`[Connection] Детали ошибки 'lastDisconnect' для ${phoneJid}:`, lastDisconnect);
+          
           // --- ИСПРАВЛЕНО: Используем только номер для ключа, как в useDBAuthState ---
           const key = phoneJid.split('@')[0].split(':')[0];
 
@@ -991,15 +983,13 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
               phoneJid: key, // Используем только номер
             }
           });
-          logger.warn({ organizationId, organizationPhoneId, phoneJid, authKey: key }, '[Baileys] logged_out, auth-данные удалены из БД');
+          // logger.info(`✅ Данные сессии для ${key} удалены из БД.`);
 
           // Обновляем статус в БД на 'logged_out' и очищаем QR-код
           await prisma.organizationPhone.update({
               where: { id: organizationPhoneId },
               data: { status: 'logged_out', lastConnectedAt: new Date(), qrCode: null }, 
           });
-
-          logger.warn({ organizationId, organizationPhoneId, phoneJid }, '[Baileys] статус обновлен на logged_out');
       }
     } else if (connection === 'open') {
       qrResolved = true;
@@ -1037,8 +1027,6 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
           data: { status: 'connected', phoneJid: actualPhoneJid, lastConnectedAt: new Date(), qrCode: null }
         });
       }
-
-      logger.info({ organizationId, organizationPhoneId, phoneJid, actualPhoneJid }, '[Baileys] статус обновлен на connected');
     }
   }));
 
