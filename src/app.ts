@@ -73,7 +73,7 @@ app.use((req, res, next) => {
 });
 
 // --- ДОБАВИТЬ: Раздача статических файлов ---
-app.use(express.static(path.join(__dirname, '..', 'public')));
+app.use(express.static(path.join(process.cwd(), 'public')));
 
 // Простой healthcheck (и для проверки CORS в проде)
 app.get('/health', (_req, res) => {

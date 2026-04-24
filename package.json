@@ -6,10 +6,10 @@
   "scripts": {
     "test": "jest",
     "lint": "eslint . --ext .ts",
-    "build": "tsc",
+    "build": "tsc --module commonjs --moduleResolution node --target es6",
     "start": "node dist/server.js",
     "dev:clean-port": "lsof -nP -iTCP:3004 -sTCP:LISTEN -t | xargs -I{} kill -9 {} || true",
-    "dev": "nodemon --watch src --ext ts --exec \"node --loader ts-node/esm --no-warnings src/server.ts\"",
+    "dev": "nodemon --watch src --ext ts --exec \"TS_NODE_PREFER_TS_EXTS=true TS_NODE_COMPILER_OPTIONS='{\\\"module\\\":\\\"ESNext\\\"}' node --experimental-specifier-resolution=node --loader ts-node/esm --no-warnings src/server.ts\"",
     "dev:restart": "npm run dev:clean-port && npm run dev",
     "waba:broadcast": "node scripts/waba-broadcast-template.js"
   },
