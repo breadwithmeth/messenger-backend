@@ -1,8 +1,6 @@
 // src/config/authStorage.ts
-import { PrismaClient } from '@prisma/client';
 import { Buffer } from 'buffer';
-
-const prisma = new PrismaClient();
+import prisma from './prisma';
 
 export type StoredDataType = 'json' | 'buffer' | 'base64_json';
 

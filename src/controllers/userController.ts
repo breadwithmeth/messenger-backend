@@ -1,10 +1,8 @@
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import { AuthRequest } from '../middlewares/authMiddleware'; // Импортируем AuthRequest
 import { normalizeAppRole } from '../auth/roleUtils';
-
-const prisma = new PrismaClient();
+import prisma from '../config/prisma';
 
 /**
  * Создание нового пользователя (оператора или администратора).

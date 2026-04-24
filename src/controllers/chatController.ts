@@ -313,23 +313,21 @@ export async function listChats(req: Request, res: Response) {
       }
 
       if (searchType_ === 'message' || searchType_ === 'all') {
-        // Поиск по тексту сообщений - используем messages relation
-        const matchingChats = await prisma.chat.findMany({
+        // Поиск по тексту сообщений. Ограничиваем выборку, чтобы не сканировать/возвращать все чаты.
+        const matchingMessages = await prisma.message.findMany({
           where: {
             organizationId: organizationId,
-            messages: {
-              some: {
-                content: {
-                  contains: searchQuery,
-                  mode: 'insensitive',
-                },
-              },
+            content: {
+              contains: searchQuery,
+              mode: 'insensitive',
             },
           },
-          select: { id: true },
+          select: { chatId: true },
+          distinct: ['chatId'],
+          take: 1000,
         });
 
-        const matchingChatIds = matchingChats.map(chat => chat.id);
+        const matchingChatIds = matchingMessages.map((message) => message.chatId);
         if (matchingChatIds.length > 0) {
           whereCondition.OR = whereCondition.OR || [];
           whereCondition.OR.push({
@@ -647,10 +645,12 @@ export const getChatMessages = async (req: Request, res: Response) => {
       }
     }
 
-    // Получаем общее количество сообщений в чате
-    const totalCount = await prisma.message.count({
-      where: { chatId, organizationId },
-    });
+    // Для курсорной пагинации (before) полный count слишком дорогой на больших чатах.
+    const totalCount = before
+      ? null
+      : await prisma.message.count({
+          where: { chatId, organizationId },
+        });
 
     // Получаем сообщения с оптимизированным select
     const messages = await prisma.message.findMany({
@@ -738,7 +738,7 @@ export const getChatMessages = async (req: Request, res: Response) => {
         total: totalCount,
         limit: take,
         offset: skip,
-        hasMore: skip + take < totalCount,
+        hasMore: totalCount === null ? messagesWithTicket.length === take : skip + take < totalCount,
         oldestTimestamp: messagesWithTicket.length > 0 ? messagesWithTicket[0].timestamp : null,
         newestTimestamp: messagesWithTicket.length > 0 ? messagesWithTicket[messagesWithTicket.length - 1].timestamp : null,
       },
