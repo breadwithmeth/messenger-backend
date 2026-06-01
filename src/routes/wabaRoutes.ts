@@ -6,6 +6,7 @@ import {
   verifyWebhook,
   handleWebhook,
   sendMessage,
+  broadcastTemplate,
   getTemplates,
   operatorSendMessage,
   getMessageStatus,
@@ -20,6 +21,7 @@ router.post('/webhook', handleWebhook);
 
 // Protected endpoints (требуют авторизации)
 router.post('/send', authMiddleware, sendMessage);
+router.post('/broadcast-template', authMiddleware, broadcastTemplate);
 router.get('/templates', authMiddleware, getTemplates);
 
 // Operator API (для операторов)

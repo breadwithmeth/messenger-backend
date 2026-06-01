@@ -8,6 +8,11 @@ import pino from 'pino';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
+function normalizePhone(value: unknown): string | null {
+  const digits = String(value ?? '').replace(/\D/g, '');
+  return digits.length > 0 ? digits : null;
+}
+
 /**
  * Webhook verification для WhatsApp Business API
  * GET /api/waba/webhook
@@ -585,6 +590,139 @@ export const sendMessage = async (req: Request, res: Response) => {
 };
 
 /**
+ * Массовая отправка шаблонного сообщения через WABA
+ * POST /api/waba/broadcast-template
+ */
+export const broadcastTemplate = async (req: Request, res: Response) => {
+  try {
+    const {
+      organizationPhoneId,
+      recipients,
+      templateName,
+      language = 'ru',
+      components = [{ type: 'body', parameters: [] }],
+      delayMs = 250,
+      dryRun = false,
+    } = req.body;
+
+    if (!organizationPhoneId || !Array.isArray(recipients) || recipients.length === 0 || !templateName) {
+      return res.status(400).json({
+        error: 'organizationPhoneId, recipients[] and templateName are required',
+      });
+    }
+
+    const orgPhone = await prisma.organizationPhone.findFirst({
+      where: {
+        id: Number(organizationPhoneId),
+        organizationId: res.locals.organizationId,
+        connectionType: 'waba',
+      },
+    });
+
+    if (!orgPhone) {
+      return res.status(404).json({ error: 'Organization phone not found or not configured for WABA' });
+    }
+
+    const wabaService = await createWABAService(Number(organizationPhoneId));
+    if (!wabaService && !dryRun) {
+      return res.status(500).json({
+        error: 'WABA service not configured',
+        details: 'wabaAccessToken is missing in database. Please update OrganizationPhone with your permanent System User Access Token from Meta.',
+      });
+    }
+
+    const normalizedRecipients = recipients
+      .map(normalizePhone)
+      .filter((value): value is string => Boolean(value));
+
+    if (normalizedRecipients.length === 0) {
+      return res.status(400).json({ error: 'No valid recipients after phone normalization' });
+    }
+
+    const results: Array<{ to: string; success: boolean; messageId?: string; error?: string }> = [];
+
+    for (let idx = 0; idx < normalizedRecipients.length; idx++) {
+      const to = normalizedRecipients[idx];
+
+      try {
+        if (!dryRun && wabaService) {
+          const sendResult = await wabaService.sendTemplateMessage(
+            to,
+            String(templateName),
+            String(language),
+            Array.isArray(components) ? components : []
+          );
+
+          const messageId = sendResult?.messages?.[0]?.id;
+
+          const remoteJid = `${to}@s.whatsapp.net`;
+          const chatId = await ensureChat(
+            orgPhone.organizationId,
+            orgPhone.id,
+            orgPhone.phoneJid,
+            remoteJid,
+            undefined,
+            { reopenClosedTicket: false }
+          );
+
+          await prisma.message.create({
+            data: {
+              chatId,
+              organizationPhoneId: orgPhone.id,
+              organizationId: orgPhone.organizationId,
+              channel: 'whatsapp',
+              whatsappMessageId: messageId,
+              receivingPhoneJid: orgPhone.phoneJid,
+              remoteJid,
+              senderJid: orgPhone.phoneJid,
+              fromMe: true,
+              content: `Template: ${templateName}`,
+              type: 'template',
+              timestamp: new Date(),
+              status: 'sent',
+              senderUserId: res.locals.userId,
+              isReadByOperator: true,
+            },
+          });
+
+          results.push({ to, success: true, messageId });
+        } else {
+          results.push({ to, success: true });
+        }
+      } catch (error: any) {
+        const errorMessage = error?.response?.data?.error?.message || error?.message || 'Unknown error';
+        results.push({ to, success: false, error: errorMessage });
+      }
+
+      if (idx < normalizedRecipients.length - 1 && Number(delayMs) > 0) {
+        await new Promise(resolve => setTimeout(resolve, Number(delayMs)));
+      }
+    }
+
+    const successCount = results.filter(item => item.success).length;
+    const failCount = results.length - successCount;
+
+    res.json({
+      success: failCount === 0,
+      dryRun: Boolean(dryRun),
+      organizationPhoneId: Number(organizationPhoneId),
+      templateName,
+      language,
+      totals: {
+        requested: recipients.length,
+        normalized: normalizedRecipients.length,
+        success: successCount,
+        fail: failCount,
+      },
+      results,
+    });
+  } catch (error: any) {
+    logger.error('❌ WABA: Broadcast template error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+/**
  * Отправка сообщения оператором (упрощённый API)
  * POST /api/waba/operator/send
  */
@@ -839,10 +977,27 @@ export const getChatMessages = async (req: Request, res: Response) => {
  */
 export const getTemplates = async (req: Request, res: Response) => {
   try {
-    const { organizationPhoneId } = req.query;
+    const { organizationPhoneId, limit, after, name, language, status, category } = req.query;
 
     if (!organizationPhoneId) {
       return res.status(400).json({ error: 'organizationPhoneId is required' });
+    }
+
+    const orgPhone = await prisma.organizationPhone.findFirst({
+      where: {
+        id: Number(organizationPhoneId),
+        organizationId: res.locals.organizationId,
+        connectionType: 'waba',
+      },
+      select: {
+        id: true,
+        wabaId: true,
+        wabaPhoneNumberId: true,
+      },
+    });
+
+    if (!orgPhone) {
+      return res.status(404).json({ error: 'Organization phone not found or not configured for WABA' });
     }
 
     const wabaService = await createWABAService(Number(organizationPhoneId));
@@ -850,12 +1005,29 @@ export const getTemplates = async (req: Request, res: Response) => {
       return res.status(500).json({ error: 'WABA service not configured' });
     }
 
-    // Здесь можно добавить получение шаблонов через Graph API
-    // const templates = await wabaService.getTemplates();
+    const templates = await wabaService.getTemplates({
+      limit: limit ? Number(limit) : undefined,
+      after: after ? String(after) : undefined,
+      name: name ? String(name) : undefined,
+      language: language ? String(language) : undefined,
+      status: status ? String(status) : undefined,
+      category: category ? String(category) : undefined,
+    });
 
-    res.json({ templates: [] });
+    res.json({
+      organizationPhoneId: Number(organizationPhoneId),
+      data: templates?.data || [],
+      paging: templates?.paging || null,
+      raw: templates,
+    });
   } catch (error: any) {
     logger.error('❌ WABA: Get templates error:', error);
-    res.status(500).json({ error: error.message });
+    const errorMessage = error.response?.data?.error?.message || error.message;
+    const errorDetails = error.response?.data || {};
+    res.status(500).json({
+      error: errorMessage,
+      details: errorDetails,
+      type: error.response?.data?.error?.type,
+    });
   }
 };

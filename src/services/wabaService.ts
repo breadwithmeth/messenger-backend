@@ -46,6 +46,15 @@ interface SendMessageOptions {
   };
 }
 
+interface GetTemplatesOptions {
+  limit?: number;
+  after?: string;
+  name?: string;
+  language?: string;
+  status?: string;
+  category?: string;
+}
+
 export class WABAService {
   private config: WABAConfig;
   private baseUrl: string;
@@ -198,6 +207,42 @@ export class WABAService {
         caption,
       },
     });
+  }
+
+  /**
+   * Получить шаблоны WABA из Graph API
+   */
+  async getTemplates(options: GetTemplatesOptions = {}): Promise<any> {
+    if (!this.config.wabaId) {
+      throw new Error('WABA ID is missing. Set wabaId for this organization phone.');
+    }
+
+    const url = `${this.baseUrl}/${this.config.wabaId}/message_templates`;
+
+    const params: Record<string, any> = {
+      limit: Number(options.limit) > 0 ? Number(options.limit) : 50,
+      fields: 'id,name,language,status,category,components',
+    };
+
+    if (options.after) params.after = options.after;
+    if (options.name) params.name = options.name;
+    if (options.language) params.language = options.language;
+    if (options.status) params.status = options.status;
+    if (options.category) params.category = options.category;
+
+    try {
+      const response = await axios.get(url, {
+        headers: {
+          'Authorization': `Bearer ${this.config.accessToken}`,
+        },
+        params,
+      });
+
+      return response.data;
+    } catch (error: any) {
+      logger.error('❌ WABA: Ошибка получения шаблонов:', error.response?.data || error.message);
+      throw error;
+    }
   }
 
   /**
