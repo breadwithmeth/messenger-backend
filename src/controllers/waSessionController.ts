@@ -48,8 +48,8 @@ export async function getQrHandler(req: Request, res: Response) {
     const qr = organizationPhone.qrCode;
 
     if (!qr) {
-      // Если QR-код еще не готов, но сессия в статусе 'pending' или 'loading'
-      if (organizationPhone.status === 'pending' || organizationPhone.status === 'loading') {
+      // Если QR-код еще не готов, но сессия в статусе запуска или переподключения
+      if (['pending', 'loading', 'reconnecting'].includes(organizationPhone.status)) {
           return res.status(202).json({ error: 'QR код ещё не готов или сессия находится в процессе запуска. Попробуйте снова через несколько секунд.', status: organizationPhone.status });
       }
       return res.status(404).json({ error: 'QR код недоступен. Возможно, сессия была отключена или требует перезапуска.', status: organizationPhone.status });

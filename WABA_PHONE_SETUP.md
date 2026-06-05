@@ -39,8 +39,9 @@
 
 ### D. Verify Token (для webhook)
    - Это токен, который вы сами придумываете
-   - Должен совпадать с `WABA_VERIFY_TOKEN` в .env
-   - Уже есть в .env: `FSbvxs92mCKoBz3kL1tv5IprRJP3GVl2uJVjt4JRzysuoa4cTWzfBpXoQoZffPsS`
+   - Для каждого WABA номера лучше хранить отдельный `wabaVerifyToken` в таблице `OrganizationPhone`
+   - `WABA_VERIFY_TOKEN` в `.env` остаётся поддержкой для старых настроек и массовой проверки
+   - Пример: `FSbvxs92mCKoBz3kL1tv5IprRJP3GVl2uJVjt4JRzysuoa4cTWzfBpXoQoZffPsS`
 
 ## Шаг 2: Добавьте номер в базу данных
 

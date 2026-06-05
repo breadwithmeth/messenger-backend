@@ -6,7 +6,7 @@
   "scripts": {
     "test": "jest",
     "lint": "eslint . --ext .ts",
-    "build": "tsc --module commonjs --moduleResolution node --target es6",
+    "build": "rm -rf dist && tsc --module commonjs --moduleResolution node --target es6 && node -e \"require('fs').writeFileSync('dist/package.json', '{\\\"type\\\":\\\"commonjs\\\"}\\n')\"",
     "start": "node dist/server.js",
     "dev:clean-port": "lsof -nP -iTCP:3004 -sTCP:LISTEN -t | xargs -I{} kill -9 {} || true",
     "dev": "nodemon --watch src --ext ts --exec \"TS_NODE_PREFER_TS_EXTS=true TS_NODE_COMPILER_OPTIONS='{\\\"module\\\":\\\"ESNext\\\"}' node --experimental-specifier-resolution=node --loader ts-node/esm --no-warnings src/server.ts\"",
@@ -24,7 +24,7 @@
     "@types/multer": "^2.0.0",
     "@types/node-telegram-bot-api": "^0.64.13",
     "@types/socket.io": "^3.0.1",
-    "@whiskeysockets/baileys": "^7.0.0-rc.9",
+    "@whiskeysockets/baileys": "^7.0.0-rc13",
     "axios": "^1.15.2",
     "bcrypt": "^6.0.0",
     "cors": "^2.8.5",

@@ -7,10 +7,198 @@ import { ensureChat } from '../config/baileys';
 import pino from 'pino';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const SENSITIVE_LOG_KEY = /(authorization|cookie|password|secret|token)/i;
+const REDACTED_LOG_VALUE = '[REDACTED]';
 
 function normalizePhone(value: unknown): string | null {
   const digits = String(value ?? '').replace(/\D/g, '');
   return digits.length > 0 ? digits : null;
+}
+
+function buildWabaPhoneJid(displayPhoneNumber: unknown, phoneNumberId: string): string {
+  const displayDigits = normalizePhone(displayPhoneNumber);
+  return `${displayDigits || phoneNumberId}@s.whatsapp.net`;
+}
+
+function redactForConsoleLog(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => redactForConsoleLog(item));
+  }
+
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, childValue]) => [
+      key,
+      SENSITIVE_LOG_KEY.test(key) ? REDACTED_LOG_VALUE : redactForConsoleLog(childValue),
+    ])
+  );
+}
+
+function logWabaWebhookRequest(req: Request, body: unknown = req.body) {
+  try {
+    console.log('[WABA WEBHOOK REQUEST]', JSON.stringify({
+      timestamp: new Date().toISOString(),
+      method: req.method,
+      url: `${req.baseUrl}${req.path}`,
+      query: redactForConsoleLog(req.query),
+      headers: redactForConsoleLog(req.headers),
+      body: redactForConsoleLog(body),
+    }, null, 2));
+  } catch (error) {
+    console.log('[WABA WEBHOOK REQUEST LOG ERROR]', String(error));
+  }
+}
+
+function getQueryString(req: Request, dottedKey: string, underscoredKey: string): string {
+  const value = req.query[dottedKey] ?? req.query[underscoredKey];
+  return Array.isArray(value) ? String(value[0] ?? '') : String(value ?? '');
+}
+
+async function ensureDefaultOrganization() {
+  let organization = await prisma.organization.findFirst();
+
+  if (!organization) {
+    organization = await prisma.organization.create({
+      data: {
+        name: 'Default Organization',
+      },
+    });
+    console.log('[WABA PHONE AUTO-ADD]', JSON.stringify({
+      status: 'created_default_organization',
+      organizationId: organization.id,
+    }));
+  }
+
+  return organization;
+}
+
+async function ensureWabaOrganizationPhone(value: any) {
+  const phoneNumberId = String(value?.metadata?.phone_number_id || '').trim();
+  const displayPhoneNumber = value?.metadata?.display_phone_number;
+
+  if (!phoneNumberId) {
+    console.log('[WABA PHONE AUTO-ADD]', JSON.stringify({
+      status: 'skipped',
+      reason: 'missing_phone_number_id',
+    }));
+    return null;
+  }
+
+  const phoneJid = buildWabaPhoneJid(displayPhoneNumber, phoneNumberId);
+  const displayName = `WABA ${displayPhoneNumber || phoneNumberId}`;
+
+  let orgPhone = await prisma.organizationPhone.findFirst({
+    where: {
+      OR: [
+        { wabaPhoneNumberId: phoneNumberId },
+        { phoneJid },
+      ],
+    },
+  });
+
+  if (orgPhone) {
+    const updateData: Record<string, unknown> = {
+      status: 'connected',
+      connectionType: 'waba',
+      wabaPhoneNumberId: phoneNumberId,
+      lastConnectedAt: new Date(),
+    };
+
+    if (!orgPhone.displayName || orgPhone.displayName.startsWith('WABA ')) {
+      updateData.displayName = displayName;
+    }
+    if (orgPhone.phoneJid !== phoneJid) {
+      updateData.phoneJid = phoneJid;
+    }
+    if (!orgPhone.wabaAccessToken && process.env.WABA_ACCESS_TOKEN) {
+      updateData.wabaAccessToken = process.env.WABA_ACCESS_TOKEN;
+    }
+    if (!orgPhone.wabaId && process.env.WABA_ID) {
+      updateData.wabaId = process.env.WABA_ID;
+    }
+    if (!orgPhone.wabaApiVersion) {
+      updateData.wabaApiVersion = 'v21.0';
+    }
+    if (!orgPhone.wabaVerifyToken && process.env.WABA_VERIFY_TOKEN) {
+      updateData.wabaVerifyToken = process.env.WABA_VERIFY_TOKEN;
+    }
+
+    orgPhone = await prisma.organizationPhone.update({
+      where: { id: orgPhone.id },
+      data: updateData,
+    });
+
+    console.log('[WABA PHONE AUTO-ADD]', JSON.stringify({
+      status: 'updated',
+      organizationPhoneId: orgPhone.id,
+      phoneNumberId,
+      phoneJid: orgPhone.phoneJid,
+    }));
+    return orgPhone;
+  }
+
+  const organization = await ensureDefaultOrganization();
+  let autoAddStatus = 'created';
+
+  try {
+    orgPhone = await prisma.organizationPhone.create({
+      data: {
+        organizationId: organization.id,
+        displayName,
+        phoneJid,
+        status: 'connected',
+        connectionType: 'waba',
+        wabaPhoneNumberId: phoneNumberId,
+        wabaAccessToken: process.env.WABA_ACCESS_TOKEN || null,
+        wabaId: process.env.WABA_ID || null,
+        wabaApiVersion: 'v21.0',
+        wabaVerifyToken: process.env.WABA_VERIFY_TOKEN || null,
+        lastConnectedAt: new Date(),
+      },
+    });
+  } catch (error: any) {
+    if (error?.code !== 'P2002') throw error;
+    autoAddStatus = 'updated_after_conflict';
+
+    orgPhone = await prisma.organizationPhone.findFirst({
+      where: {
+        OR: [
+          { wabaPhoneNumberId: phoneNumberId },
+          { phoneJid },
+        ],
+      },
+    });
+    if (!orgPhone) throw error;
+
+    orgPhone = await prisma.organizationPhone.update({
+      where: { id: orgPhone.id },
+      data: {
+        displayName,
+        phoneJid,
+        status: 'connected',
+        connectionType: 'waba',
+        wabaPhoneNumberId: phoneNumberId,
+        wabaAccessToken: orgPhone.wabaAccessToken || process.env.WABA_ACCESS_TOKEN || null,
+        wabaId: orgPhone.wabaId || process.env.WABA_ID || null,
+        wabaApiVersion: orgPhone.wabaApiVersion || 'v21.0',
+        wabaVerifyToken: orgPhone.wabaVerifyToken || process.env.WABA_VERIFY_TOKEN || null,
+        lastConnectedAt: new Date(),
+      },
+    });
+  }
+
+  console.log('[WABA PHONE AUTO-ADD]', JSON.stringify({
+    status: autoAddStatus,
+    organizationPhoneId: orgPhone.id,
+    organizationId: orgPhone.organizationId,
+    phoneNumberId,
+    phoneJid: orgPhone.phoneJid,
+  }));
+
+  return orgPhone;
 }
 
 /**
@@ -19,32 +207,88 @@ function normalizePhone(value: unknown): string | null {
  */
 export const verifyWebhook = async (req: Request, res: Response) => {
   try {
-    const mode = req.query['hub.mode'];
-    const token = req.query['hub.verify_token'];
-    const challenge = req.query['hub.challenge'];
+    const mode = getQueryString(req, 'hub.mode', 'hub_mode');
+    const token = getQueryString(req, 'hub.verify_token', 'hub_verify_token').trim();
+    const challenge = getQueryString(req, 'hub.challenge', 'hub_challenge');
 
-    logger.info('🔍 WABA: Webhook verification request', { 
-      mode, 
-      receivedToken: token,
+    logWabaWebhookRequest(req);
+
+    logger.info('🔍 WABA: Webhook verification request', {
+      mode,
+      receivedToken: token ? REDACTED_LOG_VALUE : '',
       challenge,
-      expectedToken: process.env.WABA_VERIFY_TOKEN 
+      hasEnvVerifyToken: Boolean(process.env.WABA_VERIFY_TOKEN),
     });
 
-    // Получаем verify token из параметра или переменной окружения
-    const expectedToken = process.env.WABA_VERIFY_TOKEN || 'your_verify_token';
+    if (mode !== 'subscribe' || !token || !challenge) {
+      logger.warn('⚠️ WABA: Webhook verification failed: missing mode, token, or challenge', {
+        mode,
+        hasToken: Boolean(token),
+        hasChallenge: Boolean(challenge),
+      });
+      console.log('[WABA WEBHOOK VERIFY]', JSON.stringify({
+        status: 'failed',
+        reason: 'missing_or_invalid_query',
+        mode,
+        hasToken: Boolean(token),
+        hasChallenge: Boolean(challenge),
+      }));
+      return res.sendStatus(403);
+    }
 
-    if (mode === 'subscribe' && token === expectedToken) {
-      logger.info('✅ WABA: Webhook verification successful');
+    if (token === String(process.env.WABA_VERIFY_TOKEN || '').trim()) {
+      console.log('[WABA WEBHOOK VERIFY]', JSON.stringify({
+        status: 'success',
+        source: 'env',
+        challenge,
+      }));
+      return res.status(200).send(challenge);
+    }
+
+    const matchedOrgPhone = await prisma.organizationPhone.findFirst({
+      where: {
+        wabaVerifyToken: token,
+      },
+      select: {
+        id: true,
+        phoneJid: true,
+        wabaPhoneNumberId: true,
+      },
+    });
+
+    const isValidToken = Boolean(matchedOrgPhone);
+
+    if (isValidToken) {
+      logger.info('✅ WABA: Webhook verification successful', {
+        matchedOrgPhoneId: matchedOrgPhone?.id,
+        phoneJid: matchedOrgPhone?.phoneJid,
+        wabaPhoneNumberId: matchedOrgPhone?.wabaPhoneNumberId,
+      });
+      console.log('[WABA WEBHOOK VERIFY]', JSON.stringify({
+        status: 'success',
+        source: 'database',
+        matchedOrgPhoneId: matchedOrgPhone?.id,
+        challenge,
+      }));
       return res.status(200).send(challenge);
     } else {
       logger.warn('⚠️ WABA: Webhook verification failed', {
-        modeMatch: mode === 'subscribe',
-        tokenMatch: token === expectedToken
+        tokenMatch: false,
       });
+      console.log('[WABA WEBHOOK VERIFY]', JSON.stringify({
+        status: 'failed',
+        reason: 'token_mismatch',
+        hasEnvVerifyToken: Boolean(process.env.WABA_VERIFY_TOKEN),
+      }));
       return res.sendStatus(403);
     }
   } catch (error) {
     logger.error('❌ WABA: Webhook verification error:', error);
+    console.log('[WABA WEBHOOK VERIFY]', JSON.stringify({
+      status: 'failed',
+      reason: 'server_error',
+      error: error instanceof Error ? error.message : String(error),
+    }));
     return res.sendStatus(500);
   }
 };
@@ -56,6 +300,39 @@ export const verifyWebhook = async (req: Request, res: Response) => {
 export const handleWebhook = async (req: Request, res: Response) => {
   try {
     const body = req.body;
+
+    logWabaWebhookRequest(req, body);
+
+    // Сохраняем сырый payload в логи WABA (не блокируем ответ)
+    try {
+      await (prisma as any).wabaWebhookLog.create({
+        data: {
+          payload: body,
+          eventType: 'webhook',
+        },
+      });
+    } catch (logErr) {
+      logger.warn('⚠️ WABA: Failed to persist webhook log', { err: String(logErr) });
+    }
+
+    // Лог в консоль: короткая структурированная информация о приходящем webhook
+    try {
+      const entryCount = Array.isArray(body.entry) ? body.entry.length : 0;
+      const phoneIds: string[] = [];
+      if (Array.isArray(body.entry)) {
+        for (const entry of body.entry) {
+          if (Array.isArray(entry.changes)) {
+            for (const ch of entry.changes) {
+              const id = ch?.value?.metadata?.phone_number_id;
+              if (id) phoneIds.push(String(id));
+            }
+          }
+        }
+      }
+      logger.info('📬 WABA: Incoming webhook', { object: body.object, entryCount, phoneNumberIds: phoneIds });
+    } catch (logErr) {
+      logger.warn('⚠️ WABA: Failed to log incoming webhook to console', { err: String(logErr) });
+    }
 
     // Быстро отвечаем 200 OK
     res.sendStatus(200);
@@ -81,51 +358,36 @@ async function processWebhookChange(change: any) {
     const value = change.value;
     if (!value) return;
 
-    const phoneNumberId = value.metadata?.phone_number_id;
+    const phoneNumberId = String(value.metadata?.phone_number_id || '').trim();
     const displayPhoneNumber = value.metadata?.display_phone_number;
-    if (!phoneNumberId) return;
+    const orgPhone = await ensureWabaOrganizationPhone(value);
+    if (!orgPhone) return;
 
-    // Находим или создаём организационный телефон по WABA phoneNumberId
-    let orgPhone = await prisma.organizationPhone.findFirst({
-      where: {
-        wabaPhoneNumberId: phoneNumberId,
-        connectionType: 'waba',
-      },
-    });
+    // Лог в консоль по обработке change
+    try {
+      logger.info('🔔 WABA: Processing change', {
+        phoneNumberId,
+        displayPhoneNumber,
+        eventType: value.messages ? 'messages' : value.statuses ? 'message_status' : 'unknown',
+        messagesCount: value.messages ? value.messages.length : 0,
+        statusesCount: value.statuses ? value.statuses.length : 0,
+      });
+    } catch (logErr) {
+      logger.warn('⚠️ WABA: Failed to write change log to console', { err: String(logErr) });
+    }
 
-    if (!orgPhone) {
-      logger.info(`🆕 WABA: Auto-creating OrganizationPhone for phoneNumberId: ${phoneNumberId}`);
-      
-      // Получаем первую организацию или создаём дефолтную
-      let organization = await prisma.organization.findFirst();
-      
-      if (!organization) {
-        logger.info('🆕 WABA: Creating default organization');
-        organization = await prisma.organization.create({
-          data: {
-            name: 'Default Organization',
-          },
-        });
-      }
-
-      // Создаём новый OrganizationPhone с данными из webhook
-      orgPhone = await prisma.organizationPhone.create({
+    // Сохраняем более детальную запись лога с привязкой к OrganizationPhone
+    try {
+      await (prisma as any).wabaWebhookLog.create({
         data: {
-          organizationId: organization.id,
-          displayName: `WABA ${displayPhoneNumber || phoneNumberId}`,
-          phoneJid: `${displayPhoneNumber?.replace(/^\+/, '') || phoneNumberId}@s.whatsapp.net`,
-          status: 'connected',
-          connectionType: 'waba',
-          wabaPhoneNumberId: phoneNumberId,
-          wabaAccessToken: process.env.WABA_ACCESS_TOKEN || null,
-          wabaId: process.env.WABA_ID || null,
-          wabaApiVersion: 'v21.0',
-          wabaVerifyToken: process.env.WABA_VERIFY_TOKEN || null,
-          lastConnectedAt: new Date(),
+          organizationPhoneId: orgPhone.id,
+          phoneNumberId: phoneNumberId,
+          eventType: value.messages ? 'messages' : value.statuses ? 'message_status' : 'unknown',
+          payload: value,
         },
       });
-      
-      logger.info(`✅ WABA: Created OrganizationPhone id=${orgPhone.id} for ${displayPhoneNumber}`);
+    } catch (logErr) {
+      logger.warn('⚠️ WABA: Failed to persist detailed webhook log', { err: String(logErr) });
     }
 
     // Обработка статусов сообщений
@@ -1029,5 +1291,33 @@ export const getTemplates = async (req: Request, res: Response) => {
       details: errorDetails,
       type: error.response?.data?.error?.type,
     });
+  }
+};
+
+/**
+ * Просмотр логов WABA webhook
+ * GET /api/waba/logs
+ */
+export const getWabaLogs = async (req: Request, res: Response) => {
+  try {
+    const { limit = '50', offset = '0' } = req.query;
+    const orgId = res.locals.organizationId;
+
+    const logs = await (prisma as any).wabaWebhookLog.findMany({
+      where: {
+        organizationPhone: {
+          organizationId: orgId,
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: Number(limit),
+      skip: Number(offset),
+      include: { organizationPhone: true },
+    });
+
+    res.json({ logs });
+  } catch (error: any) {
+    logger.error('❌ WABA: Get logs error:', error);
+    res.status(500).json({ error: error.message });
   }
 };

@@ -43,7 +43,8 @@ function envInt(name: string, fallback: number): number {
 const BAILEYS_CONNECT_TIMEOUT_MS = envInt('BAILEYS_CONNECT_TIMEOUT_MS', 60_000);
 const BAILEYS_DEFAULT_QUERY_TIMEOUT_MS = envInt('BAILEYS_DEFAULT_QUERY_TIMEOUT_MS', 60_000);
 const BAILEYS_KEEP_ALIVE_INTERVAL_MS = envInt('BAILEYS_KEEP_ALIVE_INTERVAL_MS', 25_000);
-const BAILEYS_QR_WAIT_TIMEOUT_MS = envInt('BAILEYS_QR_WAIT_TIMEOUT_MS', 20_000);
+const BAILEYS_QR_WAIT_TIMEOUT_MS = envInt('BAILEYS_QR_WAIT_TIMEOUT_MS', 120_000);
+const BAILEYS_RECONNECT_DELAY_MS = envInt('BAILEYS_RECONNECT_DELAY_MS', 3_000);
 
 function getDisconnectInfo(lastDisconnect: ConnectionState['lastDisconnect']) {
   const error = lastDisconnect?.error as Boom | Error | undefined;
@@ -852,13 +853,13 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
       if (shouldReconnect) {
         await prisma.organizationPhone.update({
           where: { id: organizationPhoneId },
-          data: { status: 'disconnected', qrCode: null },
+          data: { status: 'reconnecting', qrCode: null },
         }).catch(() => undefined);
 
-        logger.info({ organizationId, organizationPhoneId, phoneJid }, '[Baileys] статус обновлен на disconnected перед переподключением');
+        logger.info({ organizationId, organizationPhoneId, phoneJid }, '[Baileys] статус обновлен на reconnecting перед переподключением');
 
         // Задержка перед попыткой переподключения
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        await new Promise(resolve => setTimeout(resolve, BAILEYS_RECONNECT_DELAY_MS));
         logger.info({ organizationId, organizationPhoneId, phoneJid }, '[Baileys] повторная попытка подключения');
         // Рекурсивно вызываем startBaileys для создания новой сессии
         void startBaileys(organizationId, organizationPhoneId, phoneJid).catch((err) => {

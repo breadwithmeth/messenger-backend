@@ -33,6 +33,25 @@ import workforceRoutes from './routes/workforceRoutes';
 
 const app = express();
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' }); // Инициализируйте logger
+const SENSITIVE_LOG_KEY = /(authorization|cookie|password|secret|token)/i;
+const REDACTED_LOG_VALUE = '[REDACTED]';
+
+function redactForRequestLog(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => redactForRequestLog(item));
+  }
+
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, childValue]) => [
+      key,
+      SENSITIVE_LOG_KEY.test(key) ? REDACTED_LOG_VALUE : redactForRequestLog(childValue),
+    ])
+  );
+}
 
 if ((process.env.APP_LOG_LEVEL || 'silent') === 'silent') {
   console.error = () => undefined;
@@ -67,8 +86,15 @@ app.use((req, res, next) => {
 
 // --- ДОБАВЛЯЕМ ОБЩЕЕ ЛОГИРОВАНИЕ ВСЕХ ЗАПРОСОВ ---
 app.use((req, res, next) => {
-  // console.log(`🌐 INCOMING REQUEST: ${req.method} ${req.originalUrl}`);
-  // console.log(`🌐 Headers:`, req.headers);
+  const safeQuery = redactForRequestLog(req.query);
+  const safeBody = redactForRequestLog(req.body);
+  const requestPath = req.path;
+  const queryString = Object.keys(req.query).length ? ` query=${JSON.stringify(safeQuery)}` : '';
+  const bodyString = req.body && Object.keys(req.body).length ? ` body=${JSON.stringify(safeBody)}` : '';
+  const message = `[REQUEST] ${req.method} ${requestPath}${queryString}${bodyString}`;
+
+  console.log(message);
+  logger.info({ method: req.method, url: requestPath, query: safeQuery, body: safeBody }, 'Incoming request');
   next();
 });
 

@@ -297,6 +297,19 @@ model OrganizationPhone {
 
   chats           Chat[] // Связь с моделью Chat
   messages        Message[] // Связь с моделью Message
+  wabaWebhookLogs WabaWebhookLog[]
+}
+
+/// Логи входящих webhook от WABA
+model WabaWebhookLog {
+  id                 Int      @id @default(autoincrement())
+  organizationPhoneId Int?    // связь с OrganizationPhone если известна
+  phoneNumberId      String?  // metadata.phone_number_id из webhook
+  eventType          String?  // например: messages, message_status, etc.
+  payload            Json
+  createdAt          DateTime @default(now())
+
+  organizationPhone  OrganizationPhone? @relation(fields: [organizationPhoneId], references: [id], onDelete: Cascade)
 }
 
 // История изменений тикетов (аудит)

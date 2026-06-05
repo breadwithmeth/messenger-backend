@@ -8,6 +8,7 @@ import {
   sendMessage,
   broadcastTemplate,
   getTemplates,
+  getWabaLogs,
   operatorSendMessage,
   getMessageStatus,
   getChatMessages,
@@ -23,6 +24,7 @@ router.post('/webhook', handleWebhook);
 router.post('/send', authMiddleware, sendMessage);
 router.post('/broadcast-template', authMiddleware, broadcastTemplate);
 router.get('/templates', authMiddleware, getTemplates);
+router.get('/logs', authMiddleware, getWabaLogs);
 
 // Operator API (для операторов)
 router.post('/operator/send', authMiddleware, operatorSendMessage);

@@ -95,6 +95,8 @@ WHERE id = 1;
 WABA_VERIFY_TOKEN=your_custom_verify_token_12345
 ```
 
+> Примечание: `WABA_VERIFY_TOKEN` остаётся доступным как глобальный резервный вариант, но предпочтительно сохранять `wabaVerifyToken` в таблице `OrganizationPhone` для каждого номера WABA отдельно.
+
 ## API Endpoints
 
 ### Webhook (для Meta)
