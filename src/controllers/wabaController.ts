@@ -303,6 +303,14 @@ export const handleWebhook = async (req: Request, res: Response) => {
 
     logWabaWebhookRequest(req, body);
 
+    // Meta требует быстрый 200 OK. Все обращения к БД и обработку делаем после ACK.
+    res.sendStatus(200);
+    console.log('[WABA WEBHOOK ACK]', JSON.stringify({
+      status: 'accepted',
+      object: body?.object,
+      entryCount: Array.isArray(body?.entry) ? body.entry.length : 0,
+    }));
+
     // Сохраняем сырый payload в логи WABA (не блокируем ответ)
     try {
       await (prisma as any).wabaWebhookLog.create({
@@ -333,9 +341,6 @@ export const handleWebhook = async (req: Request, res: Response) => {
     } catch (logErr) {
       logger.warn('⚠️ WABA: Failed to log incoming webhook to console', { err: String(logErr) });
     }
-
-    // Быстро отвечаем 200 OK
-    res.sendStatus(200);
 
     // Обрабатываем webhook асинхронно
     if (body.object === 'whatsapp_business_account') {

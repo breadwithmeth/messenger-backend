@@ -45,6 +45,7 @@ const BAILEYS_DEFAULT_QUERY_TIMEOUT_MS = envInt('BAILEYS_DEFAULT_QUERY_TIMEOUT_M
 const BAILEYS_KEEP_ALIVE_INTERVAL_MS = envInt('BAILEYS_KEEP_ALIVE_INTERVAL_MS', 25_000);
 const BAILEYS_QR_WAIT_TIMEOUT_MS = envInt('BAILEYS_QR_WAIT_TIMEOUT_MS', 120_000);
 const BAILEYS_RECONNECT_DELAY_MS = envInt('BAILEYS_RECONNECT_DELAY_MS', 3_000);
+const BAILEYS_CONFLICT_GRACE_MS = envInt('BAILEYS_CONFLICT_GRACE_MS', 8_000);
 
 function getDisconnectInfo(lastDisconnect: ConnectionState['lastDisconnect']) {
   const error = lastDisconnect?.error as Boom | Error | undefined;
@@ -73,6 +74,21 @@ function safeAsyncListener<T extends any[]>(
       logger.error({ err }, `[Baileys] Unhandled error in listener: ${eventName}`);
     });
   };
+}
+
+function getSocketReadyState(sock?: WASocket): number | undefined {
+  return (sock?.ws as any)?.readyState;
+}
+
+function isSocketActive(sock?: WASocket): boolean {
+  const wsState = getSocketReadyState(sock);
+  return wsState === 0 || wsState === 1; // CONNECTING or OPEN
+}
+
+function deleteSocketIfCurrent(organizationPhoneId: number, sock: WASocket): void {
+  if (socks.get(organizationPhoneId) === sock) {
+    socks.delete(organizationPhoneId);
+  }
 }
 
 // Глобальная Map для хранения активных экземпляров WASocket по organizationPhoneId
@@ -736,9 +752,9 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
     connectTimeoutMs: BAILEYS_CONNECT_TIMEOUT_MS,
     defaultQueryTimeoutMs: BAILEYS_DEFAULT_QUERY_TIMEOUT_MS,
     keepAliveIntervalMs: BAILEYS_KEEP_ALIVE_INTERVAL_MS,
-    // ИСПРАВЛЕНИЕ: Отключаем автоматическую синхронизацию app state для предотвращения ошибок дешифрования
-    syncFullHistory: false, // Отключаем полную синхронизацию истории
-    shouldSyncHistoryMessage: () => false, // Отключаем синхронизацию сообщений
+    // Не тянем полную историю, но не запрещаем служебные history sync notifications:
+    // в Baileys v7 они нужны для initial LID mappings и стабильности сессии.
+    syncFullHistory: false,
     // Функция для получения сообщений из кэша или БД (для Baileys)
     getMessage: async (key) => {
         logger.debug(`Попытка получить сообщение из getMessage: ${key.id} от ${key.remoteJid}`);
@@ -847,10 +863,9 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
         !manualDisconnectReason && !conflictDisconnect && statusCode !== DisconnectReason.loggedOut;
       logger.warn({ organizationId, organizationPhoneId, phoneJid, shouldReconnect, manualDisconnectReason, conflictDisconnect, ...getDisconnectInfo(lastDisconnect) }, '[Baileys] соединение закрыто');
       
-      // Удаляем сокет из Map перед попыткой переподключения или завершением
-      socks.delete(organizationPhoneId);
-
       if (shouldReconnect) {
+        deleteSocketIfCurrent(organizationPhoneId, currentSock);
+
         await prisma.organizationPhone.update({
           where: { id: organizationPhoneId },
           data: { status: 'reconnecting', qrCode: null },
@@ -867,6 +882,17 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
         });
       } else {
           if (conflictDisconnect) {
+            logger.warn({ organizationId, organizationPhoneId, phoneJid, graceMs: BAILEYS_CONFLICT_GRACE_MS }, '[Baileys] conflict/replaced: ждём, не восстановится ли текущий сокет');
+            await new Promise(resolve => setTimeout(resolve, BAILEYS_CONFLICT_GRACE_MS));
+
+            const mappedSock = socks.get(organizationPhoneId);
+            if (isSocketActive(mappedSock)) {
+              logger.warn({ organizationId, organizationPhoneId, phoneJid, wsState: getSocketReadyState(mappedSock) }, '[Baileys] conflict/replaced проигнорирован: активный сокет уже есть');
+              return;
+            }
+
+            deleteSocketIfCurrent(organizationPhoneId, currentSock);
+
             await prisma.organizationPhone.update({
               where: { id: organizationPhoneId },
               data: { status: 'disconnected', qrCode: null },
@@ -877,6 +903,8 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
           }
 
           if (manualDisconnectReason && statusCode !== DisconnectReason.loggedOut) {
+            deleteSocketIfCurrent(organizationPhoneId, currentSock);
+
             await prisma.organizationPhone.update({
               where: { id: organizationPhoneId },
               data: { status: 'disconnected', qrCode: null },
@@ -885,6 +913,8 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
             logger.warn({ organizationId, organizationPhoneId, phoneJid, manualDisconnectReason }, '[Baileys] ручное отключение без удаления auth-данных');
             return;
           }
+
+          deleteSocketIfCurrent(organizationPhoneId, currentSock);
 
           // --- ИСПРАВЛЕНО: Используем только номер для ключа, как в useDBAuthState ---
           const key = phoneJid.split('@')[0].split(':')[0];
@@ -909,6 +939,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
     } else if (connection === 'open') {
       qrResolved = true;
       clearTimeout(qrWatchdog);
+      socks.set(organizationPhoneId, currentSock);
 
       logger.info({ organizationId, organizationPhoneId, phoneJid, currentUserId: currentSock?.user?.id }, '[Baileys] соединение открыто');
       
