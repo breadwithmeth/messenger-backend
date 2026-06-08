@@ -31,6 +31,18 @@ import { notifyNewChat, notifyNewMessage, notifyChatsUpdated } from '../services
 
 const logger = pino({ level: 'info' });
 
+function consoleBaileysSendLog(event: string, data: Record<string, unknown> = {}) {
+  try {
+    console.log('[BAILEYS LOWLEVEL SEND]', JSON.stringify({
+      timestamp: new Date().toISOString(),
+      event,
+      ...data,
+    }));
+  } catch (error) {
+    console.log('[BAILEYS LOWLEVEL SEND LOG ERROR]', String(error));
+  }
+}
+
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name];
   if (!raw) return fallback;
@@ -1516,11 +1528,42 @@ export async function sendMessage(
   }
 ) {
   if (!sock || !sock.user) {
+    consoleBaileysSendLog('socket-not-ready', {
+      jid,
+      organizationId,
+      organizationPhoneId,
+      senderJid,
+      hasSock: Boolean(sock),
+      hasUser: Boolean(sock?.user),
+    });
     throw new Error('Baileys socket is not connected or user is not defined.');
   }
 
   try {
+    consoleBaileysSendLog('send-start', {
+      jid,
+      organizationId,
+      organizationPhoneId,
+      senderJid,
+      sockUserId: sock.user.id,
+      contentKeys: Object.keys(content || {}),
+      hasMediaInfo: Boolean(mediaInfo),
+      mediaInfo: mediaInfo ? {
+        hasMediaUrl: Boolean(mediaInfo.mediaUrl),
+        filename: mediaInfo.filename,
+        size: mediaInfo.size,
+      } : undefined,
+    });
+
     const sentMessage = await sock.sendMessage(jid, content);
+
+    consoleBaileysSendLog('send-result', {
+      jid,
+      organizationId,
+      organizationPhoneId,
+      messageId: sentMessage?.key?.id,
+      hasMessage: Boolean(sentMessage),
+    });
 
     // Логирование mediaInfo для отладки
     logger.info(`[sendMessage] Получена информация о медиафайле:`, {
@@ -1581,6 +1624,15 @@ export async function sendMessage(
     { reopenClosedTicket: false }
   );
 
+      consoleBaileysSendLog('chat-ensured', {
+        jid,
+        remoteJid,
+        myJid,
+        chatId,
+        organizationId,
+        organizationPhoneId,
+      });
+
       // --- НАЧАЛО: УЛУЧШЕННАЯ ПРОВЕРКА И ЛОГИРОВАНИЕ userId ---
       logger.info(`[sendMessage] Проверка userId перед сохранением. Полученное значение: ${userId}, тип: ${typeof userId}`);
 
@@ -1630,15 +1682,39 @@ export async function sendMessage(
       await prisma.message.create({
         data: messageData,
       });
+      consoleBaileysSendLog('db-saved', {
+        jid,
+        remoteJid,
+        chatId,
+        organizationId,
+        organizationPhoneId,
+        messageId: sentMessage.key.id,
+        messageType,
+      });
       logger.info(`✅ Исходящее сообщение "${messageContent}" (ID: ${sentMessage.key.id}) сохранено в БД. Chat ID: ${chatId}, Type: ${messageType}`);
     } else {
       logger.warn(`⚠️ Исходящее сообщение на ${jid} не было сохранено: sentMessage is undefined.`);
+      consoleBaileysSendLog('result-empty-no-db-save', {
+        jid,
+        organizationId,
+        organizationPhoneId,
+      });
     }
     // --- КОНЕЦ НОВОГО КОДА ДЛЯ СОХРАНЕНИЯ ---
 
     return sentMessage;
   } catch (error: any) {
     logger.error(`❌ Ошибка при отправке и/или сохранении исходящего сообщения на ${jid}:`, error);
+    consoleBaileysSendLog('send-error', {
+      jid,
+      organizationId,
+      organizationPhoneId,
+      senderJid,
+      errorMessage: error?.message,
+      errorCode: error?.code,
+      outputStatusCode: error?.output?.statusCode,
+      stack: error?.stack,
+    });
     throw error; // Перебрасываем ошибку дальше
   }
 }

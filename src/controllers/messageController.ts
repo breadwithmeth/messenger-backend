@@ -11,14 +11,48 @@ import * as path from 'path';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
+function consoleSendLog(scope: string, event: string, data: Record<string, unknown> = {}) {
+  try {
+    console.log(`[${scope}]`, JSON.stringify({
+      timestamp: new Date().toISOString(),
+      event,
+      ...data,
+    }));
+  } catch (error) {
+    console.log(`[${scope} LOG ERROR]`, String(error));
+  }
+}
+
+function getSocketSnapshot(sock: any) {
+  return {
+    hasSock: Boolean(sock),
+    hasUser: Boolean(sock?.user),
+    sockUserId: sock?.user?.id,
+    wsState: sock?.ws?.readyState,
+  };
+}
+
 export const sendTextMessage = async (req: Request, res: Response) => {
   const { organizationPhoneId, receiverJid, text } = req.body;
   const organizationId = res.locals.organizationId;
   const userId = res.locals.userId; // <--- ПОЛУЧАЕМ ID ПОЛЬЗОВАТЕЛЯ
 
+  consoleSendLog('BAILEYS SEND', 'send-text-request', {
+    organizationId,
+    userId,
+    organizationPhoneId,
+    receiverJid,
+    textLength: typeof text === 'string' ? text.length : null,
+  });
+
   // 1. Валидация входных данных
   if (!organizationPhoneId || !receiverJid || !text) {
     logger.warn('[sendTextMessage] Отсутствуют необходимые параметры: organizationPhoneId, receiverJid или text.');
+    consoleSendLog('BAILEYS SEND', 'send-text-validation-failed', {
+      organizationPhoneId,
+      hasReceiverJid: Boolean(receiverJid),
+      hasText: Boolean(text),
+    });
     return res.status(400).json({ error: 'Missing organizationPhoneId, receiverJid, or text' });
   }
 
@@ -29,18 +63,29 @@ export const sendTextMessage = async (req: Request, res: Response) => {
   // --- НОВОЕ ИЗМЕНЕНИЕ: Проверка, что JID успешно нормализован ---
   if (!normalizedReceiverJid) {
     logger.error(`[sendTextMessage] Некорректный или ненормализуемый receiverJid: "${receiverJid}".`);
+    consoleSendLog('BAILEYS SEND', 'send-text-invalid-receiver', { receiverJid });
     return res.status(400).json({ error: 'Invalid receiverJid provided. Could not normalize WhatsApp ID.' });
   }
   // --- КОНЕЦ НОВОГО ИЗМЕНЕНИЯ ---
 
   // 3. Получение Baileys сокета
   const sock = getBaileysSock(organizationPhoneId);
+  consoleSendLog('BAILEYS SEND', 'send-text-socket-check', {
+    organizationPhoneId,
+    normalizedReceiverJid,
+    ...getSocketSnapshot(sock),
+  });
 
   // 4. Проверка готовности сокета
   // Сокет готов к отправке, если он существует и успешно аутентифицирован (имеет объект user).
   if (!sock || !sock.user) {
     logger.warn(`[sendTextMessage] Попытка отправить сообщение, но сокет для ID ${organizationPhoneId} не готов (пользователь не авторизован или сокет отсутствует).`);
     const status = sock ? 'connecting/closed' : 'not found';
+    consoleSendLog('BAILEYS SEND', 'send-text-socket-not-ready', {
+      organizationPhoneId,
+      status,
+      ...getSocketSnapshot(sock),
+    });
     return res.status(503).json({ 
       error: `WhatsApp аккаунт (ID: ${organizationPhoneId}) еще не полностью подключен или не готов к отправке сообщений. Текущий статус: ${status}. Попробуйте позже.`,
       details: 'Socket not ready or user not authenticated.'
@@ -53,11 +98,19 @@ export const sendTextMessage = async (req: Request, res: Response) => {
 
   if (!organizationPhone || !organizationPhone.phoneJid) {
       logger.error(`[sendTextMessage] Не удалось найти phoneJid для organizationPhoneId: ${organizationPhoneId} или он пуст.`);
+      consoleSendLog('BAILEYS SEND', 'send-text-sender-not-found', { organizationPhoneId });
       return res.status(404).json({ error: 'Sender WhatsApp account not found or not configured.' });
   }
   const senderJid = organizationPhone.phoneJid;
   // 5. Попытка отправить сообщение
   try {
+    consoleSendLog('BAILEYS SEND', 'send-text-calling-baileys', {
+      organizationId,
+      organizationPhoneId,
+      senderJid,
+      normalizedReceiverJid,
+    });
+
     const sentMessage = await sendMessage(
       sock,
       normalizedReceiverJid,
@@ -72,16 +125,31 @@ export const sendTextMessage = async (req: Request, res: Response) => {
     // sock.sendMessage() может вернуть undefined в некоторых случаях, даже без выбрасывания ошибки.
     if (!sentMessage) {
       logger.error(`❌ Сообщение не было отправлено (sentMessage is undefined) на ${normalizedReceiverJid} с ID ${organizationPhoneId}.`);
+      consoleSendLog('BAILEYS SEND', 'send-text-result-empty', {
+        organizationPhoneId,
+        normalizedReceiverJid,
+      });
       return res.status(500).json({ error: 'Failed to send message: WhatsApp API did not return a message object.', details: 'The message might not have been sent successfully.' });
     }
 
     // 7. Успешная отправка
     logger.info(`✅ Сообщение "${text}" отправлено на ${normalizedReceiverJid} с ID ${organizationPhoneId}. WhatsApp Message ID: ${sentMessage.key.id}`);
+    consoleSendLog('BAILEYS SEND', 'send-text-success', {
+      organizationPhoneId,
+      normalizedReceiverJid,
+      messageId: sentMessage.key.id,
+    });
     return res.status(200).json({ success: true, messageId: sentMessage.key.id });
 
   } catch (error: any) {
     // 8. Обработка ошибок отправки
     logger.error(`❌ Критическая ошибка при отправке сообщения на ${normalizedReceiverJid} с ID ${organizationPhoneId}:`, error);
+    consoleSendLog('BAILEYS SEND', 'send-text-error', {
+      organizationPhoneId,
+      normalizedReceiverJid,
+      errorMessage: error?.message,
+      errorCode: error?.code,
+    });
     return res.status(500).json({ error: 'Failed to send message due to an internal error.', details: error.message });
   }
 };
@@ -94,9 +162,26 @@ export const sendMediaMessage = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId;
   const userId = res.locals.userId;
 
+  consoleSendLog('BAILEYS SEND', 'send-media-request', {
+    organizationId,
+    userId,
+    organizationPhoneId,
+    receiverJid,
+    mediaType,
+    hasMediaPath: Boolean(mediaPath),
+    hasCaption: Boolean(caption),
+    filename,
+  });
+
   // 1. Валидация входных данных
   if (!organizationPhoneId || !receiverJid || !mediaType || !mediaPath) {
     logger.warn('[sendMediaMessage] Отсутствуют необходимые параметры: organizationPhoneId, receiverJid, mediaType или mediaPath.');
+    consoleSendLog('BAILEYS SEND', 'send-media-validation-failed', {
+      organizationPhoneId,
+      hasReceiverJid: Boolean(receiverJid),
+      mediaType,
+      hasMediaPath: Boolean(mediaPath),
+    });
     return res.status(400).json({ error: 'Missing organizationPhoneId, receiverJid, mediaType, or mediaPath' });
   }
 
@@ -104,6 +189,7 @@ export const sendMediaMessage = async (req: Request, res: Response) => {
   const allowedMediaTypes = ['image', 'video', 'document', 'audio'];
   if (!allowedMediaTypes.includes(mediaType)) {
     logger.warn(`[sendMediaMessage] Неподдерживаемый тип медиа: "${mediaType}"`);
+    consoleSendLog('BAILEYS SEND', 'send-media-unsupported-type', { mediaType });
     return res.status(400).json({ error: `Unsupported media type. Allowed types: ${allowedMediaTypes.join(', ')}` });
   }
 
@@ -111,14 +197,25 @@ export const sendMediaMessage = async (req: Request, res: Response) => {
   const normalizedReceiverJid = jidNormalizedUser(receiverJid);
   if (!normalizedReceiverJid) {
     logger.error(`[sendMediaMessage] Некорректный или ненормализуемый receiverJid: "${receiverJid}".`);
+    consoleSendLog('BAILEYS SEND', 'send-media-invalid-receiver', { receiverJid });
     return res.status(400).json({ error: 'Invalid receiverJid provided. Could not normalize WhatsApp ID.' });
   }
 
   // 4. Получение Baileys сокета
   const sock = getBaileysSock(organizationPhoneId);
+  consoleSendLog('BAILEYS SEND', 'send-media-socket-check', {
+    organizationPhoneId,
+    normalizedReceiverJid,
+    ...getSocketSnapshot(sock),
+  });
   if (!sock || !sock.user) {
     logger.warn(`[sendMediaMessage] Попытка отправить медиа, но сокет для ID ${organizationPhoneId} не готов.`);
     const status = sock ? 'connecting/closed' : 'not found';
+    consoleSendLog('BAILEYS SEND', 'send-media-socket-not-ready', {
+      organizationPhoneId,
+      status,
+      ...getSocketSnapshot(sock),
+    });
     return res.status(503).json({ 
       error: `WhatsApp аккаунт (ID: ${organizationPhoneId}) еще не полностью подключен. Текущий статус: ${status}. Попробуйте позже.`,
     });
@@ -132,6 +229,7 @@ export const sendMediaMessage = async (req: Request, res: Response) => {
 
   if (!organizationPhone || !organizationPhone.phoneJid) {
     logger.error(`[sendMediaMessage] Не удалось найти phoneJid для organizationPhoneId: ${organizationPhoneId}`);
+    consoleSendLog('BAILEYS SEND', 'send-media-sender-not-found', { organizationPhoneId });
     return res.status(404).json({ error: 'Sender WhatsApp account not found or not configured.' });
   }
 
@@ -220,6 +318,14 @@ export const sendMediaMessage = async (req: Request, res: Response) => {
     }
 
     // 7. Отправка медиафайла
+    consoleSendLog('BAILEYS SEND', 'send-media-calling-baileys', {
+      organizationId,
+      organizationPhoneId,
+      senderJid,
+      normalizedReceiverJid,
+      mediaType,
+    });
+
     const sentMessage = await sendMessage(
       sock,
       normalizedReceiverJid,
@@ -232,11 +338,22 @@ export const sendMediaMessage = async (req: Request, res: Response) => {
 
     if (!sentMessage) {
       logger.error(`❌ Медиафайл не был отправлен (sentMessage is undefined) на ${normalizedReceiverJid}`);
+      consoleSendLog('BAILEYS SEND', 'send-media-result-empty', {
+        organizationPhoneId,
+        normalizedReceiverJid,
+        mediaType,
+      });
       return res.status(500).json({ error: 'Failed to send media: WhatsApp API did not return a message object.' });
     }
 
     // 8. Успешная отправка
     logger.info(`✅ Медиафайл типа "${mediaType}" отправлен на ${normalizedReceiverJid} с ID ${organizationPhoneId}. WhatsApp Message ID: ${sentMessage.key.id}`);
+    consoleSendLog('BAILEYS SEND', 'send-media-success', {
+      organizationPhoneId,
+      normalizedReceiverJid,
+      mediaType,
+      messageId: sentMessage.key.id,
+    });
     return res.status(200).json({ 
       success: true, 
       messageId: sentMessage.key.id,
@@ -246,6 +363,13 @@ export const sendMediaMessage = async (req: Request, res: Response) => {
 
   } catch (error: any) {
     logger.error(`❌ Критическая ошибка при отправке медиафайла на ${normalizedReceiverJid}:`, error);
+    consoleSendLog('BAILEYS SEND', 'send-media-error', {
+      organizationPhoneId,
+      normalizedReceiverJid,
+      mediaType,
+      errorMessage: error?.message,
+      errorCode: error?.code,
+    });
     return res.status(500).json({ error: 'Failed to send media due to an internal error.', details: error.message });
   }
 };
@@ -259,19 +383,32 @@ export const sendMessageByTicket = async (req: Request, res: Response) => {
     const userId = res.locals.userId;
     const { ticketNumber, text } = req.body;
 
+    consoleSendLog('SEND-BY-TICKET', 'request', {
+      organizationId,
+      userId,
+      ticketNumber,
+      textLength: typeof text === 'string' ? text.length : null,
+    });
+
     // Валидация
     if (!organizationId) {
       logger.warn('[sendMessageByTicket] Несанкционированный доступ: organizationId не определен в res.locals.');
+      consoleSendLog('SEND-BY-TICKET', 'missing-organization', { userId, ticketNumber });
       return res.status(401).json({ error: 'Несанкционированный доступ: organizationId не определен.' });
     }
 
     if (!ticketNumber || isNaN(parseInt(ticketNumber))) {
       logger.warn(`[sendMessageByTicket] Некорректный ticketNumber: "${ticketNumber}". Ожидалось число.`);
+      consoleSendLog('SEND-BY-TICKET', 'invalid-ticket-number', { ticketNumber });
       return res.status(400).json({ error: 'Некорректный ticketNumber. Ожидалось число.' });
     }
 
     if (!text || typeof text !== 'string' || text.trim() === '') {
       logger.warn('[sendMessageByTicket] Отсутствует или пустой параметр text.');
+      consoleSendLog('SEND-BY-TICKET', 'missing-text', {
+        ticketNumber,
+        textType: typeof text,
+      });
       return res.status(400).json({ error: 'Параметр text обязателен и не должен быть пустым.' });
     }
 
@@ -292,24 +429,48 @@ export const sendMessageByTicket = async (req: Request, res: Response) => {
 
     if (!chat) {
       logger.warn(`[sendMessageByTicket] Тикет с номером ${ticketNumber} не найден или не принадлежит организации ${organizationId}.`);
+      consoleSendLog('SEND-BY-TICKET', 'chat-not-found', {
+        organizationId,
+        ticketNumber,
+      });
       return res.status(404).json({ error: 'Тикет не найден или не принадлежит вашей организации.' });
     }
 
     if (!chat.assignedUserId) {
       logger.warn(`[sendMessageByTicket] Тикет ${ticketNumber} не назначен ответственному. Отправка запрещена.`);
+      consoleSendLog('SEND-BY-TICKET', 'chat-not-assigned', {
+        chatId: chat.id,
+        ticketNumber,
+      });
       return res.status(400).json({ error: 'Нельзя отправлять сообщения: тикет не назначен ответственному сотруднику.' });
     }
 
     if (!chat.remoteJid || !chat.receivingPhoneJid || !chat.organizationPhoneId) {
       logger.error(`[sendMessageByTicket] У тикета ${ticketNumber} отсутствуют необходимые данные (remoteJid, receivingPhoneJid или organizationPhoneId).`);
+      consoleSendLog('SEND-BY-TICKET', 'chat-send-data-missing', {
+        chatId: chat.id,
+        ticketNumber,
+        hasRemoteJid: Boolean(chat.remoteJid),
+        hasReceivingPhoneJid: Boolean(chat.receivingPhoneJid),
+        hasOrganizationPhoneId: Boolean(chat.organizationPhoneId),
+      });
       return res.status(500).json({ error: 'У тикета отсутствуют необходимые данные для отправки сообщения.' });
     }
 
     // Получаем сокет Baileys
     const sock = getBaileysSock(chat.organizationPhoneId);
+    consoleSendLog('SEND-BY-TICKET', 'baileys-socket-check', {
+      organizationPhoneId: chat.organizationPhoneId,
+      remoteJid: chat.remoteJid,
+      ...getSocketSnapshot(sock),
+    });
 
     if (!sock || !sock.user) {
       logger.warn(`[sendMessageByTicket] Сокет для organizationPhoneId ${chat.organizationPhoneId} не готов.`);
+      consoleSendLog('SEND-BY-TICKET', 'baileys-socket-not-ready', {
+        organizationPhoneId: chat.organizationPhoneId,
+        ...getSocketSnapshot(sock),
+      });
       return res.status(503).json({
         error: `WhatsApp аккаунт не готов к отправке сообщений. Попробуйте позже.`,
         details: 'Socket not ready or user not authenticated.'
@@ -321,10 +482,21 @@ export const sendMessageByTicket = async (req: Request, res: Response) => {
 
     if (!normalizedReceiverJid) {
       logger.error(`[sendMessageByTicket] Некорректный remoteJid: "${chat.remoteJid}".`);
+      consoleSendLog('SEND-BY-TICKET', 'invalid-remote-jid', {
+        chatId: chat.id,
+        remoteJid: chat.remoteJid,
+      });
       return res.status(500).json({ error: 'Некорректный remoteJid в базе данных.' });
     }
 
     // Отправляем сообщение
+    consoleSendLog('SEND-BY-TICKET', 'baileys-calling-send', {
+      chatId: chat.id,
+      ticketNumber,
+      organizationPhoneId: chat.organizationPhoneId,
+      normalizedReceiverJid,
+    });
+
     const sentMessage = await sendMessage(
       sock,
       normalizedReceiverJid,
@@ -337,14 +509,30 @@ export const sendMessageByTicket = async (req: Request, res: Response) => {
 
     if (!sentMessage) {
       logger.error(`[sendMessageByTicket] Сообщение не было отправлено (sentMessage is undefined) для тикета ${ticketNumber}.`);
+      consoleSendLog('SEND-BY-TICKET', 'baileys-result-empty', {
+        chatId: chat.id,
+        ticketNumber,
+        organizationPhoneId: chat.organizationPhoneId,
+      });
       return res.status(500).json({ error: 'Не удалось отправить сообщение.', details: 'The message might not have been sent successfully.' });
     }
 
     logger.info(`[sendMessageByTicket] Сообщение отправлено в тикет ${ticketNumber}. WhatsApp Message ID: ${sentMessage.key.id}`);
+    consoleSendLog('SEND-BY-TICKET', 'success', {
+      chatId: chat.id,
+      ticketNumber,
+      organizationPhoneId: chat.organizationPhoneId,
+      messageId: sentMessage.key.id,
+    });
     res.status(200).json({ success: true, messageId: sentMessage.key.id, ticketNumber: parseInt(ticketNumber) });
 
   } catch (error: any) {
     logger.error(`[sendMessageByTicket] Ошибка при отправке сообщения в тикет:`, error);
+    consoleSendLog('SEND-BY-TICKET', 'error', {
+      ticketNumber: req.body.ticketNumber,
+      errorMessage: error?.message,
+      errorCode: error?.code,
+    });
     res.status(500).json({
       error: 'Не удалось отправить сообщение в тикет.',
       details: error.message,
@@ -363,6 +551,19 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
     const userId = res.locals.userId;
     const { chatId, text, type = 'text', mediaUrl, caption, filename, template } = req.body;
 
+    consoleSendLog('SEND-BY-CHAT', 'request', {
+      organizationId,
+      userId,
+      chatId,
+      type,
+      hasText: Boolean(text),
+      textLength: typeof text === 'string' ? text.length : null,
+      hasMediaUrl: Boolean(mediaUrl),
+      hasCaption: Boolean(caption),
+      filename,
+      hasTemplate: Boolean(template),
+    });
+
     logger.info(`[sendMessageByChat] Начало обработки запроса`, {
       chatId,
       type,
@@ -378,6 +579,10 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
         providedChatId: chatId,
         type: typeof chatId,
       });
+      consoleSendLog('SEND-BY-CHAT', 'invalid-chat-id', {
+        chatId,
+        chatIdType: typeof chatId,
+      });
       return res.status(400).json({ error: 'Некорректный chatId. Ожидалось число.' });
     }
 
@@ -385,6 +590,10 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
       logger.error(`[sendMessageByChat] ОШИБКА ВАЛИДАЦИИ: Отсутствует или пустой параметр text для типа text.`, {
         providedText: text,
         type: typeof text,
+      });
+      consoleSendLog('SEND-BY-CHAT', 'missing-text', {
+        chatId,
+        textType: typeof text,
       });
       return res.status(400).json({ error: 'Параметр text обязателен для типа text.' });
     }
@@ -394,12 +603,20 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
         requestedType: type,
         providedMediaUrl: mediaUrl,
       });
+      consoleSendLog('SEND-BY-CHAT', 'missing-media-url', {
+        chatId,
+        type,
+      });
       return res.status(400).json({ error: `Параметр mediaUrl обязателен для типа ${type}.` });
     }
 
     if (type === 'template' && (!template || !template.name)) {
       logger.error(`[sendMessageByChat] ОШИБКА ВАЛИДАЦИИ: Отсутствует template объект для типа template.`, {
         providedTemplate: template,
+      });
+      consoleSendLog('SEND-BY-CHAT', 'missing-template', {
+        chatId,
+        type,
       });
       return res.status(400).json({ error: 'Параметр template с полем name обязателен для типа template.' });
     }
@@ -442,11 +659,34 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
         chatId: parseInt(chatId),
         organizationId,
       });
+      consoleSendLog('SEND-BY-CHAT', 'chat-not-found', {
+        organizationId,
+        chatId: parseInt(chatId),
+      });
       return res.status(404).json({ error: 'Чат не найден или не принадлежит вашей организации.' });
     }
 
+    consoleSendLog('SEND-BY-CHAT', 'chat-loaded', {
+      organizationId,
+      userId,
+      chatId: chat.id,
+      ticketNumber: chat.ticketNumber,
+      channel: chat.channel,
+      assignedUserId: chat.assignedUserId,
+      organizationPhoneId: chat.organizationPhone?.id,
+      connectionType: chat.organizationPhone?.connectionType,
+      remoteJid: chat.remoteJid,
+      receivingPhoneJid: chat.receivingPhoneJid,
+      hasTelegramBot: Boolean(chat.telegramBot),
+      hasTelegramChatId: Boolean(chat.telegramChatId),
+    });
+
     if (!chat.assignedUserId) {
       logger.warn(`[sendMessageByChat] Чат ${chat.id} не назначен ответственному. Отправка запрещена.`);
+      consoleSendLog('SEND-BY-CHAT', 'chat-not-assigned', {
+        chatId: chat.id,
+        ticketNumber: chat.ticketNumber,
+      });
       return res.status(400).json({ error: 'Нельзя отправлять сообщения: чат не назначен ответственному сотруднику.' });
     }
 
@@ -461,6 +701,11 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
 
       if (!chat.telegramBot || !chat.telegramChatId) {
         logger.error(`[sendMessageByChat] У чата ${chatId} отсутствует telegramBot или telegramChatId.`);
+        consoleSendLog('SEND-BY-CHAT', 'telegram-chat-data-missing', {
+          chatId: chat.id,
+          hasTelegramBot: Boolean(chat.telegramBot),
+          hasTelegramChatId: Boolean(chat.telegramChatId),
+        });
         return res.status(500).json({ error: 'У чата отсутствует привязка к Telegram боту.' });
       }
 
@@ -585,10 +830,21 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
       // WhatsApp: определяем тип подключения (Baileys или WABA)
       if (!chat.organizationPhone) {
         logger.error(`[sendMessageByChat] У чата ${chatId} отсутствует organizationPhone.`);
+        consoleSendLog('SEND-BY-CHAT', 'organization-phone-missing', {
+          chatId: chat.id,
+          channel,
+        });
         return res.status(500).json({ error: 'У чата отсутствует привязка к телефону организации.' });
       }
 
       const connectionType = chat.organizationPhone.connectionType || 'baileys';
+      consoleSendLog('SEND-BY-CHAT', 'whatsapp-branch', {
+        chatId: chat.id,
+        organizationPhoneId: chat.organizationPhone.id,
+        connectionType,
+        remoteJid: chat.remoteJid,
+        type,
+      });
 
       if (connectionType === 'waba') {
       // Используем WABA API
@@ -762,11 +1018,28 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
     } else {
       // Используем Baileys
       logger.info(`[sendMessageByChat] Используем Baileys для чата ${chatId}`);
+      consoleSendLog('SEND-BY-CHAT', 'baileys-branch', {
+        chatId: chat.id,
+        organizationPhoneId: chat.organizationPhone.id,
+        phoneJid: chat.organizationPhone.phoneJid,
+        remoteJid: chat.remoteJid,
+        type,
+      });
       
       const sock = getBaileysSock(chat.organizationPhone.id);
+      consoleSendLog('SEND-BY-CHAT', 'baileys-socket-check', {
+        chatId: chat.id,
+        organizationPhoneId: chat.organizationPhone.id,
+        ...getSocketSnapshot(sock),
+      });
 
       if (!sock || !sock.user) {
         logger.warn(`[sendMessageByChat] Baileys сокет для organizationPhoneId ${chat.organizationPhone.id} не готов.`);
+        consoleSendLog('SEND-BY-CHAT', 'baileys-socket-not-ready', {
+          chatId: chat.id,
+          organizationPhoneId: chat.organizationPhone.id,
+          ...getSocketSnapshot(sock),
+        });
         return res.status(503).json({
           error: 'WhatsApp аккаунт не готов к отправке сообщений. Попробуйте позже.',
           details: 'Socket not ready or user not authenticated.'
@@ -777,6 +1050,10 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
 
       if (!normalizedReceiverJid) {
         logger.error(`[sendMessageByChat] Некорректный remoteJid: "${chat.remoteJid}".`);
+        consoleSendLog('SEND-BY-CHAT', 'baileys-invalid-remote-jid', {
+          chatId: chat.id,
+          remoteJid: chat.remoteJid,
+        });
         return res.status(500).json({ error: 'Некорректный remoteJid в базе данных.' });
       }
 
@@ -794,6 +1071,10 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
         case 'video':
         case 'audio': {
           if (!mediaUrl) {
+            consoleSendLog('SEND-BY-CHAT', 'baileys-media-url-missing', {
+              chatId: chat.id,
+              type,
+            });
             return res.status(400).json({ 
               error: `Отсутствует mediaUrl для типа ${type}.` 
             });
@@ -802,11 +1083,22 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
           try {
             // Скачиваем медиафайл
             logger.info(`[sendMessageByChat] Скачиваем медиа для Baileys: ${type} - ${mediaUrl}`);
+            consoleSendLog('SEND-BY-CHAT', 'baileys-media-download-start', {
+              chatId: chat.id,
+              type,
+              mediaUrl,
+            });
             
             const response = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
             const buffer = Buffer.from(response.data);
 
             logger.info(`[sendMessageByChat] Медиафайл успешно скачан`, {
+              type,
+              bufferSize: buffer.length,
+              responseStatus: response.status,
+            });
+            consoleSendLog('SEND-BY-CHAT', 'baileys-media-download-success', {
+              chatId: chat.id,
               type,
               bufferSize: buffer.length,
               responseStatus: response.status,
@@ -846,6 +1138,14 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
               errorStack: error.stack,
               response: error.response?.status,
             });
+            consoleSendLog('SEND-BY-CHAT', 'baileys-media-download-error', {
+              chatId: chat.id,
+              type,
+              mediaUrl,
+              errorMessage: error?.message,
+              errorCode: error?.code,
+              responseStatus: error?.response?.status,
+            });
             return res.status(500).json({ 
               error: `Не удалось скачать медиафайл: ${error.message}` 
             });
@@ -854,13 +1154,32 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
         }
         
         case 'template':
+          consoleSendLog('SEND-BY-CHAT', 'baileys-template-not-supported', {
+            chatId: chat.id,
+            templateName: template?.name,
+          });
           return res.status(400).json({ 
             error: 'Шаблоны не поддерживаются для Baileys подключений. Используйте только WABA.' 
           });
         
         default:
+          consoleSendLog('SEND-BY-CHAT', 'baileys-unsupported-type', {
+            chatId: chat.id,
+            type,
+          });
           return res.status(400).json({ error: `Неподдерживаемый тип сообщения: ${type}` });
       }
+
+      consoleSendLog('SEND-BY-CHAT', 'baileys-calling-send', {
+        organizationId,
+        userId,
+        chatId: chat.id,
+        organizationPhoneId: chat.organizationPhone.id,
+        senderJid: chat.organizationPhone.phoneJid,
+        normalizedReceiverJid,
+        type,
+        hasMediaInfo: Boolean(savedMediaPath || filename),
+      });
 
       sentMessage = await sendMessage(
         sock,
@@ -883,6 +1202,12 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
           remoteJid: chat.remoteJid,
           connectionType: chat.organizationPhone.connectionType,
         });
+        consoleSendLog('SEND-BY-CHAT', 'baileys-result-empty', {
+          chatId: chat.id,
+          organizationPhoneId: chat.organizationPhone.id,
+          type,
+          remoteJid: chat.remoteJid,
+        });
         return res.status(500).json({ error: 'Не удалось отправить сообщение.' });
       }
 
@@ -892,6 +1217,12 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
         chatId,
         remoteJid: chat.remoteJid,
         organizationPhoneId: chat.organizationPhone.id,
+      });
+      consoleSendLog('SEND-BY-CHAT', 'baileys-success', {
+        chatId: chat.id,
+        organizationPhoneId: chat.organizationPhone.id,
+        messageId: sentMessage.key.id,
+        type,
       });
 
       // Socket.IO уведомление отправляется автоматически в baileys.ts через sendMessage()
@@ -916,6 +1247,10 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
     } else {
       // Неизвестный канал
       logger.error(`[sendMessageByChat] Неподдерживаемый канал: ${channel}`);
+      consoleSendLog('SEND-BY-CHAT', 'unsupported-channel', {
+        chatId,
+        channel,
+      });
       return res.status(400).json({ error: `Неподдерживаемый канал: ${channel}` });
     }
 
@@ -930,6 +1265,14 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
         hasMediaUrl: !!req.body.mediaUrl,
         hasText: !!req.body.text,
       },
+    });
+    consoleSendLog('SEND-BY-CHAT', 'critical-error', {
+      chatId: req.body.chatId,
+      type: req.body.type,
+      hasMediaUrl: Boolean(req.body.mediaUrl),
+      hasText: Boolean(req.body.text),
+      errorMessage: error?.message,
+      errorCode: error?.code,
     });
     res.status(500).json({
       error: 'Не удалось отправить сообщение.',
