@@ -9,7 +9,7 @@ import prisma from '../config/prisma';
  * ID организации берется из токена аутентифицированного пользователя.
  */
 export const createUser = async (req: AuthRequest, res: Response) => { // Используем AuthRequest
-  const { email, password, name, role } = req.body;
+  const { email, password, name, role, isHr } = req.body;
   
   // Получаем ID организации из объекта user, добавленного authMiddleware
   const organizationId = req.user?.organizationId;
@@ -40,6 +40,29 @@ export const createUser = async (req: AuthRequest, res: Response) => { // Исп
 
     // 3. Создаем пользователя в базе данных с ID организации создателя
     const normalizedRole = normalizeAppRole(typeof role === 'string' ? role : undefined) || 'employee';
+    const requestedIsHr = isHr === true;
+
+    if (requestedIsHr) {
+      if (!req.user?.userId) {
+        return res.status(401).json({ error: 'Could not determine current user.' });
+      }
+
+      const creator = await prisma.user.findFirst({
+        where: {
+          id: req.user.userId,
+          organizationId,
+        },
+        select: {
+          isHr: true,
+          role: true,
+        },
+      });
+      const creatorRole = normalizeAppRole(creator?.role);
+
+      if (!creator?.isHr && creatorRole !== 'admin') {
+        return res.status(403).json({ error: 'Only HR users or admins can grant HR access' });
+      }
+    }
 
     const newUser = await prisma.user.create({
       data: {
@@ -48,6 +71,7 @@ export const createUser = async (req: AuthRequest, res: Response) => { // Исп
         name,
         organizationId: organizationId, // Используем ID из токена
         role: normalizedRole,
+        isHr: requestedIsHr,
       },
     });
 
@@ -84,6 +108,7 @@ export const getUsersByOrganization = async (req: Request, res: Response) => {
         email: true,
         name: true,
         role: true,
+        isHr: true,
         createdAt: true,
       },
     });
@@ -111,6 +136,7 @@ export const getMe = async (req: Request, res: Response) => {
         id: true,
         email: true,
         role: true,
+        isHr: true,
         organizationId: true,
         createdAt: true,
       },

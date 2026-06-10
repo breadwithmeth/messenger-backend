@@ -15,6 +15,7 @@ export interface AuthenticatedPrincipal {
   email?: string;
   username?: string;
   role?: string;
+  isHr?: boolean;
   keycloakRoles?: string[];
   keycloakId?: string;
   source: AuthSource;
@@ -320,12 +321,27 @@ async function verifyKeycloakJwt(token: string): Promise<AuthenticatedPrincipal 
   throw new Error(`Keycloak token verification failed. ${errors.join(' | ')}`);
 }
 
+async function attachCurrentHrAccess(principal: AuthenticatedPrincipal): Promise<AuthenticatedPrincipal> {
+  const user = await prisma.user.findFirst({
+    where: {
+      id: principal.userId,
+      organizationId: principal.organizationId,
+    },
+    select: { isHr: true },
+  });
+
+  return {
+    ...principal,
+    isHr: user?.isHr === true,
+  };
+}
+
 export async function authenticateToken(token: string): Promise<AuthenticatedPrincipal> {
   const local = verifyLocalJwt(token);
-  if (local) return local;
+  if (local) return attachCurrentHrAccess(local);
 
   const keycloak = await verifyKeycloakJwt(token);
-  if (keycloak) return keycloak;
+  if (keycloak) return attachCurrentHrAccess(keycloak);
 
   throw new Error('Invalid token');
 }

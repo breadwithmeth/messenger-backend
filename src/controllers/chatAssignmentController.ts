@@ -4,6 +4,7 @@ import { Request, Response } from 'express';
 import { prisma } from '../config/authStorage';
 import { notifyNewMessage } from '../services/socketService';
 import pino from 'pino';
+import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
@@ -14,6 +15,7 @@ export const assignChatToOperator = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId;
   const currentUserId = res.locals.userId;
   const { chatId, operatorId: operatorIdRaw, priority = 'medium' } = req.body;
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
 
   // Если operatorId не передан или равен 0, используем текущего авторизованного пользователя
   const resolvedOperatorId =
@@ -51,6 +53,7 @@ export const assignChatToOperator = async (req: Request, res: Response) => {
       where: {
         id: chatIdNum,
         organizationId: organizationId,
+        ...chatVisibilityWhere(canAccessHrChats),
       },
     });
 
@@ -72,6 +75,10 @@ export const assignChatToOperator = async (req: Request, res: Response) => {
     if (!operator) {
       logger.warn(`[assignChatToOperator] Оператор с ID ${operatorId} не найден для организации ${organizationId}`);
       return res.status(404).json({ error: 'Оператор не найден' });
+    }
+
+    if (chat.isHr && !operator.isHr) {
+      return res.status(403).json({ error: 'HR-чат можно назначить только HR-пользователю' });
     }
 
     // Назначаем чат оператору
@@ -149,6 +156,7 @@ export const assignChatToOperator = async (req: Request, res: Response) => {
 export const unassignChat = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId;
   const { chatId } = req.body;
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
 
   if (!organizationId) {
     logger.warn('[unassignChat] organizationId не определен в res.locals.');
@@ -168,6 +176,7 @@ export const unassignChat = async (req: Request, res: Response) => {
       where: {
         id: chatIdNum,
         organizationId: organizationId,
+        ...chatVisibilityWhere(canAccessHrChats),
       },
     });
 
@@ -211,6 +220,7 @@ export const getMyAssignedChats = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId;
   const userId = res.locals.userId;
   const { from, to, status } = req.query;
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
 
   if (!organizationId || !userId) {
     logger.warn('[getMyAssignedChats] organizationId или userId не определены в res.locals.');
@@ -260,6 +270,7 @@ export const getMyAssignedChats = async (req: Request, res: Response) => {
         // assignedUserId: userId,
         // Опциональная фильтрация по статусу
         ...(status && typeof status === 'string' ? { status } : {}),
+        ...chatVisibilityWhere(canAccessHrChats),
         ...dateFilter, // Добавляем фильтр по времени
       },
       include: {
@@ -332,6 +343,7 @@ export const getMyAssignedChats = async (req: Request, res: Response) => {
 export const getUnassignedChats = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId;
   const { from, to } = req.query;
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
 
   if (!organizationId) {
     logger.warn('[getUnassignedChats] organizationId не определен в res.locals.');
@@ -382,6 +394,7 @@ export const getUnassignedChats = async (req: Request, res: Response) => {
         status: {
           in: ['open'],
         },
+        ...chatVisibilityWhere(canAccessHrChats),
         ...dateFilter, // Добавляем фильтр по времени
       },
       include: {
@@ -446,6 +459,7 @@ export const getUnassignedChats = async (req: Request, res: Response) => {
 export const setChatPriority = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId;
   const { chatId, priority } = req.body;
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
 
   if (!organizationId) {
     logger.warn('[setChatPriority] organizationId не определен в res.locals.');
@@ -470,6 +484,7 @@ export const setChatPriority = async (req: Request, res: Response) => {
       where: {
         id: chatIdNum,
         organizationId: organizationId,
+        ...chatVisibilityWhere(canAccessHrChats),
       },
     });
 
@@ -505,6 +520,7 @@ export const setChatPriority = async (req: Request, res: Response) => {
 export const closeChat = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId;
   const { chatId, reason } = req.body;
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
 
   if (!organizationId) {
     logger.warn('[closeChat] organizationId не определен в res.locals.');
@@ -524,6 +540,7 @@ export const closeChat = async (req: Request, res: Response) => {
       where: {
         id: chatIdNum,
         organizationId: organizationId,
+        ...chatVisibilityWhere(canAccessHrChats),
       },
     });
 

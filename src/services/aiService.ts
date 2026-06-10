@@ -3,6 +3,7 @@
 import OpenAI from 'openai';
 import { prisma } from '../config/authStorage';
 import pino from 'pino';
+import { chatVisibilityWhere } from '../auth/hrAccess';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
@@ -25,14 +26,15 @@ const openai = new OpenAI({
 export async function getSuggestedResponses(
   chatId: number,
   organizationId: number,
-  limit: number = 3
+  limit: number = 3,
+  canAccessHrChats = false
 ): Promise<string[]> {
   try {
     logger.info(`[AI Service] Генерация предложений для чата #${chatId}`);
 
     // Получаем чат для контекста
-    const chat = await prisma.chat.findUnique({
-      where: { id: chatId, organizationId },
+    const chat = await prisma.chat.findFirst({
+      where: { id: chatId, organizationId, ...chatVisibilityWhere(canAccessHrChats) },
       select: {
         id: true,
         name: true,

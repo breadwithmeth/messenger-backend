@@ -13,6 +13,7 @@ export interface AuthRequest extends Request {
     userId: number;
     organizationId: number;
     role?: string;
+    isHr?: boolean;
     keycloakRoles?: string[];
     // Optional Keycloak-ish claims (if token contains them)
     keycloakId?: string;
@@ -138,6 +139,7 @@ export function authMiddleware(req: AuthRequest, res: Response, next: NextFuncti
         userId: principal.userId,
         organizationId: principal.organizationId,
         role: principal.role,
+        isHr: principal.isHr,
         keycloakRoles: principal.keycloakRoles,
         keycloakId: principal.keycloakId,
         email: principal.email,
@@ -146,6 +148,7 @@ export function authMiddleware(req: AuthRequest, res: Response, next: NextFuncti
 
       res.locals.userId = principal.userId;
       res.locals.organizationId = principal.organizationId;
+      res.locals.isHr = principal.isHr === true;
 
       const requestIdHeader = req.headers['x-request-id'];
       const requestId = Array.isArray(requestIdHeader) ? requestIdHeader[0] : requestIdHeader;

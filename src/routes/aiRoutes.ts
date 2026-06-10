@@ -2,6 +2,7 @@
 
 import express from 'express';
 import { getSuggestions, healthCheck } from '../controllers/aiController';
+import { authMiddleware } from '../middlewares/authMiddleware';
 
 const router = express.Router();
 
@@ -12,7 +13,7 @@ const router = express.Router();
  * Query params:
  * - limit: количество предложений (1-10, по умолчанию 3)
  */
-router.get('/suggestions/:chatId', getSuggestions);
+router.get('/suggestions/:chatId', authMiddleware, getSuggestions);
 
 /**
  * GET /api/ai/health

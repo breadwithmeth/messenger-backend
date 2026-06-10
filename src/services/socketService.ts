@@ -4,6 +4,7 @@ import { Server, Socket } from 'socket.io';
 import { Server as HTTPServer } from 'http';
 import pino from 'pino';
 import { authenticateToken } from '../auth/tokenAuth';
+import prisma from '../config/prisma';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
@@ -13,12 +14,72 @@ interface SocketData {
   userId: number;
   organizationId: number;
   userEmail?: string;
+  isHr?: boolean;
 }
 
 interface AuthPayload {
   userId: number;
   organizationId: number;
   email?: string;
+  isHr?: boolean;
+}
+
+async function resolveChatRequiresHr(chatId: number | undefined, data?: any): Promise<boolean> {
+  if (typeof data?.isHr === 'boolean') return data.isHr;
+  if (!chatId) return false;
+
+  const chat = await prisma.chat.findUnique({
+    where: { id: chatId },
+    select: { isHr: true },
+  });
+
+  return chat?.isHr === true;
+}
+
+function emitToVisibleSockets(room: string, event: string, data: any, requiresHr: boolean) {
+  if (!io) return;
+
+  const socketIds = io.sockets.adapter.rooms.get(room);
+  if (!socketIds) return;
+
+  for (const socketId of socketIds) {
+    const socket = io.sockets.sockets.get(socketId);
+    if (!socket) continue;
+
+    const socketData = socket.data as SocketData;
+    if (!requiresHr || socketData.isHr === true) {
+      socket.emit(event, data);
+    }
+  }
+}
+
+function emitChatScopedEvent(organizationId: number, event: string, data: any, chatId?: number) {
+  void (async () => {
+    try {
+      const requiresHr = await resolveChatRequiresHr(chatId, data);
+      emitToVisibleSockets(`org_${organizationId}`, event, data, requiresHr);
+      if (chatId) {
+        emitToVisibleSockets(`chat_${chatId}`, event, data, requiresHr);
+      }
+    } catch (error: any) {
+      logger.error(`[Socket.IO] Ошибка отправки события ${event}:`, error.message);
+    }
+  })();
+}
+
+async function socketCanAccessChat(socket: Socket, chatId: number): Promise<boolean> {
+  const socketData = socket.data as SocketData;
+  const chat = await prisma.chat.findFirst({
+    where: {
+      id: chatId,
+      organizationId: socketData.organizationId,
+    },
+    select: {
+      isHr: true,
+    },
+  });
+
+  return Boolean(chat) && (!chat?.isHr || socketData.isHr === true);
 }
 
 /**
@@ -50,6 +111,7 @@ export function initializeSocketIO(httpServer: HTTPServer): Server {
       socket.data.userId = decoded.userId;
       socket.data.organizationId = decoded.organizationId;
       socket.data.userEmail = decoded.email;
+      socket.data.isHr = decoded.isHr === true;
 
       logger.info(`[Socket.IO] Пользователь аутентифицирован: ${decoded.email || 'unknown'} (ID: ${decoded.userId}, Org: ${decoded.organizationId})`);
       next();
@@ -84,7 +146,12 @@ export function initializeSocketIO(httpServer: HTTPServer): Server {
     });
 
     // Обработка запроса на подписку на конкретный чат
-    socket.on('subscribe:chat', (chatId: number) => {
+    socket.on('subscribe:chat', async (chatId: number) => {
+      if (!(await socketCanAccessChat(socket, Number(chatId)))) {
+        socket.emit('error', { error: 'Chat not found' });
+        return;
+      }
+
       const chatRoom = `chat_${chatId}`;
       socket.join(chatRoom);
       logger.info(`[Socket.IO] Пользователь ${userEmail} подписан на чат: ${chatRoom}`);
@@ -100,7 +167,9 @@ export function initializeSocketIO(httpServer: HTTPServer): Server {
     });
 
     // Обработка события "пользователь печатает"
-    socket.on('typing:start', (data: { chatId: number }) => {
+    socket.on('typing:start', async (data: { chatId: number }) => {
+      if (!(await socketCanAccessChat(socket, Number(data.chatId)))) return;
+
       const chatRoom = `chat_${data.chatId}`;
       socket.to(chatRoom).emit('typing:start', {
         chatId: data.chatId,
@@ -112,7 +181,9 @@ export function initializeSocketIO(httpServer: HTTPServer): Server {
     });
 
     // Обработка события "пользователь прекратил печатать"
-    socket.on('typing:stop', (data: { chatId: number }) => {
+    socket.on('typing:stop', async (data: { chatId: number }) => {
+      if (!(await socketCanAccessChat(socket, Number(data.chatId)))) return;
+
       const chatRoom = `chat_${data.chatId}`;
       socket.to(chatRoom).emit('typing:stop', {
         chatId: data.chatId,
@@ -156,15 +227,14 @@ export function getSocketIO(): Server {
  */
 export function notifyNewChat(organizationId: number, chatData: any) {
   try {
-    const io = getSocketIO();
-    const room = `org_${organizationId}`;
-    
-    io.to(room).emit('chat:new', {
+    getSocketIO();
+    const eventData = {
       ...chatData,
       timestamp: new Date().toISOString(),
-    });
+    };
+    emitChatScopedEvent(organizationId, 'chat:new', eventData, chatData.id);
     
-    logger.info(`[Socket.IO] 📢 Отправлено событие chat:new в комнату ${room}, chatId: ${chatData.id}`);
+    logger.info(`[Socket.IO] 📢 Отправлено событие chat:new, chatId: ${chatData.id}`);
   } catch (error: any) {
     logger.error('[Socket.IO] Ошибка отправки события chat:new:', error.message);
   }
@@ -175,20 +245,14 @@ export function notifyNewChat(organizationId: number, chatData: any) {
  */
 export function notifyNewMessage(organizationId: number, messageData: any) {
   try {
-    const io = getSocketIO();
-    const orgRoom = `org_${organizationId}`;
-    const chatRoom = `chat_${messageData.chatId}`;
+    getSocketIO();
     
     const eventData = {
       ...messageData,
       timestamp: messageData.timestamp || new Date().toISOString(),
     };
     
-    // Отправляем в комнату организации
-    io.to(orgRoom).emit('message:new', eventData);
-    
-    // Отправляем в комнату конкретного чата
-    io.to(chatRoom).emit('message:new', eventData);
+    emitChatScopedEvent(organizationId, 'message:new', eventData, messageData.chatId);
     
     logger.info(`[Socket.IO] 📢 Отправлено событие message:new, chatId: ${messageData.chatId}, messageId: ${messageData.id}`);
   } catch (error: any) {
@@ -201,17 +265,14 @@ export function notifyNewMessage(organizationId: number, messageData: any) {
  */
 export function notifyChatsUpdated(organizationId: number, chatData: any) {
   try {
-    const io = getSocketIO();
-    const orgRoom = `org_${organizationId}`;
-    const chatRoom = `chat_${chatData.id}`;
+    getSocketIO();
     
     const eventData = {
       ...chatData,
       timestamp: new Date().toISOString(),
     };
     
-    io.to(orgRoom).emit('chat:updated', eventData);
-    io.to(chatRoom).emit('chat:updated', eventData);
+    emitChatScopedEvent(organizationId, 'chat:updated', eventData, chatData.id);
     
     logger.info(`[Socket.IO] 📢 Отправлено событие chat:updated, chatId: ${chatData.id}`);
   } catch (error: any) {
@@ -224,9 +285,7 @@ export function notifyChatsUpdated(organizationId: number, chatData: any) {
  */
 export function notifyMessagesRead(organizationId: number, chatId: number, readByUserId?: number) {
   try {
-    const io = getSocketIO();
-    const orgRoom = `org_${organizationId}`;
-    const chatRoom = `chat_${chatId}`;
+    getSocketIO();
     
     const eventData = {
       chatId,
@@ -234,8 +293,7 @@ export function notifyMessagesRead(organizationId: number, chatId: number, readB
       timestamp: new Date().toISOString(),
     };
     
-    io.to(orgRoom).emit('messages:read', eventData);
-    io.to(chatRoom).emit('messages:read', eventData);
+    emitChatScopedEvent(organizationId, 'messages:read', eventData, chatId);
     
     logger.info(`[Socket.IO] 📢 Отправлено событие messages:read, chatId: ${chatId}`);
   } catch (error: any) {
@@ -248,9 +306,7 @@ export function notifyMessagesRead(organizationId: number, chatId: number, readB
  */
 export function notifyMessageStatus(organizationId: number, messageId: number, status: string, chatId: number) {
   try {
-    const io = getSocketIO();
-    const orgRoom = `org_${organizationId}`;
-    const chatRoom = `chat_${chatId}`;
+    getSocketIO();
     
     const eventData = {
       messageId,
@@ -259,8 +315,7 @@ export function notifyMessageStatus(organizationId: number, messageId: number, s
       timestamp: new Date().toISOString(),
     };
     
-    io.to(orgRoom).emit('message:status', eventData);
-    io.to(chatRoom).emit('message:status', eventData);
+    emitChatScopedEvent(organizationId, 'message:status', eventData, chatId);
     
     logger.info(`[Socket.IO] 📢 Отправлено событие message:status, messageId: ${messageId}, status: ${status}`);
   } catch (error: any) {
@@ -273,17 +328,14 @@ export function notifyMessageStatus(organizationId: number, messageId: number, s
  */
 export function notifyChatDeleted(organizationId: number, chatId: number) {
   try {
-    const io = getSocketIO();
-    const orgRoom = `org_${organizationId}`;
-    const chatRoom = `chat_${chatId}`;
+    getSocketIO();
     
     const eventData = {
       chatId,
       timestamp: new Date().toISOString(),
     };
     
-    io.to(orgRoom).emit('chat:deleted', eventData);
-    io.to(chatRoom).emit('chat:deleted', eventData);
+    emitChatScopedEvent(organizationId, 'chat:deleted', eventData, chatId);
     
     logger.info(`[Socket.IO] 📢 Отправлено событие chat:deleted, chatId: ${chatId}`);
   } catch (error: any) {

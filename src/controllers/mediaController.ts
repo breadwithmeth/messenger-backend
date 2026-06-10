@@ -7,6 +7,7 @@ import { sendMessage, getBaileysSock } from '../config/baileys';
 import { jidNormalizedUser } from '@whiskeysockets/baileys';
 import { prisma } from '../config/authStorage';
 import pino from 'pino';
+import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
@@ -52,6 +53,7 @@ export const uploadAndSendMedia = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId;
   const userId = res.locals.userId;
   const file = req.file;
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
 
   consoleMediaSendLog('upload-and-send-request', {
     organizationId,
@@ -108,6 +110,7 @@ export const uploadAndSendMedia = async (req: Request, res: Response) => {
       where: {
         id: parseInt(chatId, 10),
         organizationId: organizationId,
+        ...chatVisibilityWhere(canAccessHrChats),
       },
       include: {
         organizationPhone: {
@@ -453,6 +456,7 @@ export const sendMediaByChatId = async (req: Request, res: Response) => {
   const { chatId, mediaType, mediaPath, caption, filename } = req.body;
   const organizationId = res.locals.organizationId;
   const userId = res.locals.userId;
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
 
   consoleMediaSendLog('send-by-chat-request', {
     organizationId,
@@ -493,6 +497,7 @@ export const sendMediaByChatId = async (req: Request, res: Response) => {
       where: {
         id: parseInt(chatId, 10),
         organizationId: organizationId,
+        ...chatVisibilityWhere(canAccessHrChats),
       },
       include: {
         organizationPhone: {

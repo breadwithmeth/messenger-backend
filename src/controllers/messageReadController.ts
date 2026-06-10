@@ -3,6 +3,7 @@
 import { Request, Response } from 'express';
 import { prisma } from '../config/authStorage';
 import pino from 'pino';
+import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
@@ -13,6 +14,7 @@ export const markMessagesAsRead = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId;
   const userId = res.locals.userId;
   const chatId = parseInt(req.params.chatId, 10);
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
   if (!organizationId || !userId) {
     logger.warn('[markMessagesAsRead] organizationId или userId не определены в res.locals.');
     return res.status(401).json({ error: 'Несанкционированный доступ' });
@@ -29,6 +31,7 @@ export const markMessagesAsRead = async (req: Request, res: Response) => {
       where: {
         id: chatId,
         organizationId: organizationId,
+        ...chatVisibilityWhere(canAccessHrChats),
       },
     });
 
@@ -89,6 +92,7 @@ export const markMessagesAsRead = async (req: Request, res: Response) => {
 export const getUnreadCount = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId;
   const userId = res.locals.userId;
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
 
   if (!organizationId || !userId) {
     logger.warn('[getUnreadCount] organizationId или userId не определены в res.locals.');
@@ -107,6 +111,7 @@ export const getUnreadCount = async (req: Request, res: Response) => {
           status: {
             in: ['open', 'closed'],
           },
+          ...chatVisibilityWhere(canAccessHrChats),
         },
       },
     });
@@ -119,6 +124,7 @@ export const getUnreadCount = async (req: Request, res: Response) => {
         status: {
           in: ['open', 'closed'],
         },
+        ...chatVisibilityWhere(canAccessHrChats),
         unreadCount: {
           gt: 0,
         },
@@ -153,6 +159,7 @@ export const getUnreadCount = async (req: Request, res: Response) => {
  */
 export const getMessageStats = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId;
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
 
   if (!organizationId) {
     logger.warn('[getMessageStats] organizationId не определен в res.locals.');
@@ -162,13 +169,14 @@ export const getMessageStats = async (req: Request, res: Response) => {
   try {
     // Общая статистика по чатам
     const totalChats = await prisma.chat.count({
-      where: { organizationId },
+      where: { organizationId, ...chatVisibilityWhere(canAccessHrChats) },
     });
 
     const openChats = await prisma.chat.count({
       where: {
         organizationId,
         status: 'open',
+        ...chatVisibilityWhere(canAccessHrChats),
       },
     });
 
@@ -181,6 +189,7 @@ export const getMessageStats = async (req: Request, res: Response) => {
         status: {
           in: ['open', 'closed'],
         },
+        ...chatVisibilityWhere(canAccessHrChats),
       },
     });
 
@@ -191,12 +200,13 @@ export const getMessageStats = async (req: Request, res: Response) => {
         status: {
           in: ['open', 'closed'],
         },
+        ...chatVisibilityWhere(canAccessHrChats),
       },
     });
 
     // Статистика по сообщениям
     const totalMessages = await prisma.message.count({
-      where: { organizationId },
+      where: { organizationId, chat: chatVisibilityWhere(canAccessHrChats) },
     });
 
     const totalUnreadMessages = await prisma.message.count({
@@ -204,6 +214,7 @@ export const getMessageStats = async (req: Request, res: Response) => {
         organizationId,
         isReadByOperator: false,
         fromMe: false,
+        chat: chatVisibilityWhere(canAccessHrChats),
       },
     });
 
@@ -224,6 +235,7 @@ export const getMessageStats = async (req: Request, res: Response) => {
                 status: {
                   in: ['open', 'pending'],
                 },
+                ...chatVisibilityWhere(canAccessHrChats),
               },
             },
           },
@@ -260,6 +272,7 @@ export const markTicketMessagesAsRead = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId;
   const userId = res.locals.userId;
   const ticketNumber = parseInt(req.params.ticketNumber, 10);
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
 
   if (!organizationId || !userId) {
     logger.warn('[markTicketMessagesAsRead] organizationId или userId не определены в res.locals.');
@@ -277,6 +290,7 @@ export const markTicketMessagesAsRead = async (req: Request, res: Response) => {
       where: {
         ticketNumber: ticketNumber,
         organizationId: organizationId,
+        ...chatVisibilityWhere(canAccessHrChats),
       },
     });
 

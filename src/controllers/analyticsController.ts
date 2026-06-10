@@ -4,6 +4,7 @@ import { Request, Response } from 'express';
 import { prisma } from '../config/authStorage';
 import { Prisma } from '@prisma/client';
 import pino from 'pino';
+import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
@@ -30,6 +31,7 @@ function clampInt(n: number, min: number, max: number): number {
  */
 export const getChatAnalytics = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId as number | undefined;
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
   if (!organizationId) {
     return res.status(401).json({ error: 'Несанкционированный доступ' });
   }
@@ -54,6 +56,7 @@ export const getChatAnalytics = async (req: Request, res: Response) => {
     // Базовые where для Chat
     const chatWhere: any = {
       organizationId,
+      ...chatVisibilityWhere(canAccessHrChats),
     };
     if (channel) chatWhere.channel = channel;
     if (organizationPhoneId) chatWhere.organizationPhoneId = organizationPhoneId;
@@ -88,6 +91,7 @@ export const getChatAnalytics = async (req: Request, res: Response) => {
       where: {
         organizationId,
         ...(channel ? { channel } : {}),
+        ...chatVisibilityWhere(canAccessHrChats),
       },
       _count: true,
     });
@@ -127,6 +131,7 @@ export const getChatAnalytics = async (req: Request, res: Response) => {
     if (channel) extraChatFilters.push(Prisma.sql`AND c."channel" = ${channel}`);
     if (organizationPhoneId) extraChatFilters.push(Prisma.sql`AND c."organizationPhoneId" = ${organizationPhoneId}`);
     if (assignedUserId !== null) extraChatFilters.push(Prisma.sql`AND c."assignedUserId" = ${assignedUserId}`);
+    if (!canAccessHrChats) extraChatFilters.push(Prisma.sql`AND c."isHr" = false`);
 
     const extraChatFiltersSql = extraChatFilters.length ? Prisma.join(extraChatFilters, ' ') : Prisma.empty;
 
@@ -400,6 +405,7 @@ export const getChatAnalytics = async (req: Request, res: Response) => {
  */
 export const getOperatorAnalytics = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId as number | undefined;
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
   if (!organizationId) {
     return res.status(401).json({ error: 'Несанкционированный доступ' });
   }
@@ -432,12 +438,14 @@ export const getOperatorAnalytics = async (req: Request, res: Response) => {
         email: true,
         name: true,
         role: true,
+        isHr: true,
       },
       orderBy: { id: 'asc' },
     });
 
     const chatWhere: any = {
       organizationId,
+      ...chatVisibilityWhere(canAccessHrChats),
     };
     if (channel) chatWhere.channel = channel;
     if (organizationPhoneId) chatWhere.organizationPhoneId = organizationPhoneId;
@@ -469,6 +477,7 @@ export const getOperatorAnalytics = async (req: Request, res: Response) => {
         AND c."organizationId" = ${organizationId}
         ${channel ? Prisma.sql`AND c."channel" = ${channel}` : Prisma.empty}
         ${organizationPhoneId ? Prisma.sql`AND c."organizationPhoneId" = ${organizationPhoneId}` : Prisma.empty}
+        ${!canAccessHrChats ? Prisma.sql`AND c."isHr" = false` : Prisma.empty}
         ${operatorId !== null ? Prisma.sql`AND m."senderUserId" = ${operatorId}` : Prisma.empty}
       GROUP BY m."senderUserId";
     `;
@@ -489,6 +498,7 @@ export const getOperatorAnalytics = async (req: Request, res: Response) => {
         AND c."assignedUserId" IS NOT NULL
         ${channel ? Prisma.sql`AND c."channel" = ${channel}` : Prisma.empty}
         ${organizationPhoneId ? Prisma.sql`AND c."organizationPhoneId" = ${organizationPhoneId}` : Prisma.empty}
+        ${!canAccessHrChats ? Prisma.sql`AND c."isHr" = false` : Prisma.empty}
         ${operatorId !== null ? Prisma.sql`AND c."assignedUserId" = ${operatorId}` : Prisma.empty}
       GROUP BY c."assignedUserId";
     `;
@@ -510,6 +520,7 @@ export const getOperatorAnalytics = async (req: Request, res: Response) => {
           AND c."organizationId" = ${organizationId}
           ${channel ? Prisma.sql`AND c."channel" = ${channel}` : Prisma.empty}
           ${organizationPhoneId ? Prisma.sql`AND c."organizationPhoneId" = ${organizationPhoneId}` : Prisma.empty}
+          ${!canAccessHrChats ? Prisma.sql`AND c."isHr" = false` : Prisma.empty}
       ),
       ordered AS (
         SELECT *,
@@ -698,6 +709,7 @@ export const getOperatorAnalytics = async (req: Request, res: Response) => {
  */
 export const listAnalyticsTickets = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId as number | undefined;
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
   if (!organizationId) {
     return res.status(401).json({ error: 'Несанкционированный доступ' });
   }
@@ -732,6 +744,7 @@ export const listAnalyticsTickets = async (req: Request, res: Response) => {
     if (channel) chatFilters.push(Prisma.sql`AND c."channel" = ${channel}`);
     if (organizationPhoneId) chatFilters.push(Prisma.sql`AND c."organizationPhoneId" = ${organizationPhoneId}`);
     if (assignedUserId !== null) chatFilters.push(Prisma.sql`AND c."assignedUserId" = ${assignedUserId}`);
+    if (!canAccessHrChats) chatFilters.push(Prisma.sql`AND c."isHr" = false`);
     const chatFiltersSql = chatFilters.length ? Prisma.join(chatFilters, ' ') : Prisma.empty;
 
     const stateFilterSql =

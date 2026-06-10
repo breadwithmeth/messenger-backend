@@ -8,6 +8,7 @@ import { prisma } from '../config/authStorage'; // Для получения pho
 import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
+import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
@@ -32,10 +33,37 @@ function getSocketSnapshot(sock: any) {
   };
 }
 
+async function canUseExistingChatByJid(
+  organizationId: number,
+  organizationPhoneId: unknown,
+  receiverJid: string,
+  normalizedReceiverJid: string,
+  canAccessHrChats: boolean
+): Promise<boolean> {
+  const parsedOrganizationPhoneId = Number.parseInt(String(organizationPhoneId), 10);
+  if (!Number.isInteger(parsedOrganizationPhoneId)) return true;
+
+  const existingChat = await prisma.chat.findFirst({
+    where: {
+      organizationId,
+      organizationPhoneId: parsedOrganizationPhoneId,
+      remoteJid: {
+        in: Array.from(new Set([receiverJid, normalizedReceiverJid])),
+      },
+    },
+    select: {
+      isHr: true,
+    },
+  });
+
+  return !existingChat?.isHr || canAccessHrChats;
+}
+
 export const sendTextMessage = async (req: Request, res: Response) => {
   const { organizationPhoneId, receiverJid, text } = req.body;
   const organizationId = res.locals.organizationId;
   const userId = res.locals.userId; // <--- ПОЛУЧАЕМ ID ПОЛЬЗОВАТЕЛЯ
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
 
   consoleSendLog('BAILEYS SEND', 'send-text-request', {
     organizationId,
@@ -67,6 +95,13 @@ export const sendTextMessage = async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Invalid receiverJid provided. Could not normalize WhatsApp ID.' });
   }
   // --- КОНЕЦ НОВОГО ИЗМЕНЕНИЯ ---
+
+  if (
+    organizationId &&
+    !(await canUseExistingChatByJid(organizationId, organizationPhoneId, receiverJid, normalizedReceiverJid, canAccessHrChats))
+  ) {
+    return res.status(404).json({ error: 'Чат не найден или не принадлежит вашей организации.' });
+  }
 
   // 3. Получение Baileys сокета
   const sock = getBaileysSock(organizationPhoneId);
@@ -161,6 +196,7 @@ export const sendMediaMessage = async (req: Request, res: Response) => {
   const { organizationPhoneId, receiverJid, mediaType, mediaPath, caption, filename } = req.body;
   const organizationId = res.locals.organizationId;
   const userId = res.locals.userId;
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
 
   consoleSendLog('BAILEYS SEND', 'send-media-request', {
     organizationId,
@@ -199,6 +235,13 @@ export const sendMediaMessage = async (req: Request, res: Response) => {
     logger.error(`[sendMediaMessage] Некорректный или ненормализуемый receiverJid: "${receiverJid}".`);
     consoleSendLog('BAILEYS SEND', 'send-media-invalid-receiver', { receiverJid });
     return res.status(400).json({ error: 'Invalid receiverJid provided. Could not normalize WhatsApp ID.' });
+  }
+
+  if (
+    organizationId &&
+    !(await canUseExistingChatByJid(organizationId, organizationPhoneId, receiverJid, normalizedReceiverJid, canAccessHrChats))
+  ) {
+    return res.status(404).json({ error: 'Чат не найден или не принадлежит вашей организации.' });
   }
 
   // 4. Получение Baileys сокета
@@ -382,6 +425,7 @@ export const sendMessageByTicket = async (req: Request, res: Response) => {
     const organizationId = res.locals.organizationId;
     const userId = res.locals.userId;
     const { ticketNumber, text } = req.body;
+    const canAccessHrChats = userCanAccessHrChats(res.locals);
 
     consoleSendLog('SEND-BY-TICKET', 'request', {
       organizationId,
@@ -417,6 +461,7 @@ export const sendMessageByTicket = async (req: Request, res: Response) => {
       where: {
         ticketNumber: parseInt(ticketNumber),
         organizationId: organizationId,
+        ...chatVisibilityWhere(canAccessHrChats),
       },
       select: {
         id: true,
@@ -424,6 +469,7 @@ export const sendMessageByTicket = async (req: Request, res: Response) => {
         receivingPhoneJid: true,
         organizationPhoneId: true,
         assignedUserId: true,
+        isHr: true,
       },
     });
 
@@ -550,6 +596,7 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
     const organizationId = res.locals.organizationId;
     const userId = res.locals.userId;
     const { chatId, text, type = 'text', mediaUrl, caption, filename, template } = req.body;
+    const canAccessHrChats = userCanAccessHrChats(res.locals);
 
     consoleSendLog('SEND-BY-CHAT', 'request', {
       organizationId,
@@ -626,6 +673,7 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
       where: {
         id: parseInt(chatId),
         organizationId: organizationId,
+        ...chatVisibilityWhere(canAccessHrChats),
       },
       include: {
         organizationPhone: {

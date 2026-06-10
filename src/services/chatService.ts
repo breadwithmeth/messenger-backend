@@ -1,14 +1,16 @@
 // src/services/chatService.ts
 import { prisma } from '../config/authStorage';
 import pino from 'pino';
+import { chatVisibilityWhere } from '../auth/hrAccess';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
-export async function getChatsByOrganizationSortedByLastMessage(organizationId: number) {
+export async function getChatsByOrganizationSortedByLastMessage(organizationId: number, canAccessHrChats = false) {
   try {
     const chats = await prisma.chat.findMany({
       where: {
         organizationId: organizationId,
+        ...chatVisibilityWhere(canAccessHrChats),
       },
       orderBy: [
         { priority: 'desc' }, // Сначала по приоритету

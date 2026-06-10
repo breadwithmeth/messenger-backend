@@ -5,6 +5,7 @@ import { createWABAService } from '../services/wabaService';
 import { prisma } from '../config/authStorage';
 import { ensureChat } from '../config/baileys';
 import pino from 'pino';
+import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 const SENSITIVE_LOG_KEY = /(authorization|cookie|password|secret|token)/i;
@@ -18,6 +19,26 @@ function normalizePhone(value: unknown): string | null {
 function buildWabaPhoneJid(displayPhoneNumber: unknown, phoneNumberId: string): string {
   const displayDigits = normalizePhone(displayPhoneNumber);
   return `${displayDigits || phoneNumberId}@s.whatsapp.net`;
+}
+
+async function canAccessExistingWabaChat(
+  organizationId: number,
+  organizationPhoneId: number,
+  remoteJid: string,
+  canAccessHrChats: boolean
+): Promise<boolean> {
+  const existingChat = await prisma.chat.findFirst({
+    where: {
+      organizationId,
+      organizationPhoneId,
+      remoteJid,
+    },
+    select: {
+      isHr: true,
+    },
+  });
+
+  return !existingChat?.isHr || canAccessHrChats;
 }
 
 function redactForConsoleLog(value: unknown): unknown {
@@ -701,6 +722,7 @@ async function handleIncomingMessage(orgPhone: any, message: any, contact?: any)
 export const sendMessage = async (req: Request, res: Response) => {
   try {
     const { organizationPhoneId, to, message, type = 'text' } = req.body;
+    const canAccessHrChats = userCanAccessHrChats(res.locals);
 
     if (!organizationPhoneId || !to || !message) {
       return res.status(400).json({ error: 'Missing required fields' });
@@ -717,6 +739,18 @@ export const sendMessage = async (req: Request, res: Response) => {
 
     if (!orgPhone) {
       return res.status(404).json({ error: 'Organization phone not found or not configured for WABA' });
+    }
+
+    const remoteJid = to.includes('@') ? to : `${to}@s.whatsapp.net`;
+    const canAccessChat = await canAccessExistingWabaChat(
+      orgPhone.organizationId,
+      orgPhone.id,
+      remoteJid,
+      canAccessHrChats
+    );
+
+    if (!canAccessChat) {
+      return res.status(404).json({ error: 'Chat not found' });
     }
 
     const wabaService = await createWABAService(organizationPhoneId);
@@ -806,9 +840,6 @@ export const sendMessage = async (req: Request, res: Response) => {
         return res.status(400).json({ error: `Unsupported message type: ${type}. Supported: text, image, document, video, audio, interactive, template` });
     }
 
-    // Нормализуем номер получателя в формат WhatsApp JID
-    const remoteJid = to.includes('@') ? to : `${to}@s.whatsapp.net`;
-
     // Сохраняем отправленное сообщение в БД
     const chatId = await ensureChat(
       orgPhone.organizationId,
@@ -862,6 +893,7 @@ export const sendMessage = async (req: Request, res: Response) => {
  */
 export const broadcastTemplate = async (req: Request, res: Response) => {
   try {
+    const canAccessHrChats = userCanAccessHrChats(res.locals);
     const {
       organizationPhoneId,
       recipients,
@@ -910,8 +942,21 @@ export const broadcastTemplate = async (req: Request, res: Response) => {
 
     for (let idx = 0; idx < normalizedRecipients.length; idx++) {
       const to = normalizedRecipients[idx];
+      const remoteJid = `${to}@s.whatsapp.net`;
 
       try {
+        const canAccessChat = await canAccessExistingWabaChat(
+          orgPhone.organizationId,
+          orgPhone.id,
+          remoteJid,
+          canAccessHrChats
+        );
+
+        if (!canAccessChat) {
+          results.push({ to, success: false, error: 'Chat not found' });
+          continue;
+        }
+
         if (!dryRun && wabaService) {
           const sendResult = await wabaService.sendTemplateMessage(
             to,
@@ -922,7 +967,6 @@ export const broadcastTemplate = async (req: Request, res: Response) => {
 
           const messageId = sendResult?.messages?.[0]?.id;
 
-          const remoteJid = `${to}@s.whatsapp.net`;
           const chatId = await ensureChat(
             orgPhone.organizationId,
             orgPhone.id,
@@ -996,6 +1040,7 @@ export const broadcastTemplate = async (req: Request, res: Response) => {
 export const operatorSendMessage = async (req: Request, res: Response) => {
   try {
     const { chatId, message, type = 'text', mediaUrl, caption, filename, template } = req.body;
+    const canAccessHrChats = userCanAccessHrChats(res.locals);
 
     if (!chatId || !message) {
       return res.status(400).json({ error: 'chatId and message are required' });
@@ -1006,6 +1051,7 @@ export const operatorSendMessage = async (req: Request, res: Response) => {
       where: {
         id: chatId,
         organizationId: res.locals.organizationId,
+        ...chatVisibilityWhere(canAccessHrChats),
       },
       include: {
         organizationPhone: true,
@@ -1116,11 +1162,13 @@ export const operatorSendMessage = async (req: Request, res: Response) => {
 export const getMessageStatus = async (req: Request, res: Response) => {
   try {
     const { messageId } = req.params;
+    const canAccessHrChats = userCanAccessHrChats(res.locals);
 
     const message = await prisma.message.findFirst({
       where: {
         id: parseInt(messageId),
         organizationId: res.locals.organizationId,
+        chat: chatVisibilityWhere(canAccessHrChats),
       },
       select: {
         id: true,
@@ -1164,11 +1212,13 @@ export const getChatMessages = async (req: Request, res: Response) => {
   try {
     const { chatId } = req.params;
     const { limit = '50', offset = '0' } = req.query;
+    const canAccessHrChats = userCanAccessHrChats(res.locals);
 
     const chat = await prisma.chat.findFirst({
       where: {
         id: parseInt(chatId),
         organizationId: res.locals.organizationId,
+        ...chatVisibilityWhere(canAccessHrChats),
       },
       select: {
         id: true,

@@ -6,6 +6,7 @@ export async function createUser(data: {
   passwordHash: string;
   name?: string;
   role?: string;
+  isHr?: boolean;
 }) {
   return prisma.user.create({ data });
 }
@@ -33,6 +34,7 @@ export async function updateUser(id: number, data: Partial<{
   passwordHash: string;
   name: string;
   role: string;
+  isHr: boolean;
 }>) {
   return prisma.user.update({
     where: { id },

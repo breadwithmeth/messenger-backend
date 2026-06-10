@@ -3,6 +3,7 @@
 import { Request, Response } from 'express';
 import { prisma } from '../config/authStorage';
 import pino from 'pino';
+import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
@@ -14,13 +15,15 @@ export const markMessagesAsRead = async (req: Request, res: Response) => {
   const { messageIds } = req.body; // Массив ID сообщений для отметки как прочитанные
   const organizationId = res.locals.organizationId;
   const userId = res.locals.userId;
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
 
   try {
     // Проверяем, что чат принадлежит организации
-    const chat = await prisma.chat.findUnique({
+    const chat = await prisma.chat.findFirst({
       where: {
         id: parseInt(chatId),
         organizationId: organizationId,
+        ...chatVisibilityWhere(canAccessHrChats),
       },
     });
 
@@ -84,12 +87,14 @@ export const markMessagesAsRead = async (req: Request, res: Response) => {
 export const markChatAsRead = async (req: Request, res: Response) => {
   const { chatId } = req.params;
   const organizationId = res.locals.organizationId;
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
 
   try {
-    const chat = await prisma.chat.findUnique({
+    const chat = await prisma.chat.findFirst({
       where: {
         id: parseInt(chatId),
         organizationId: organizationId,
+        ...chatVisibilityWhere(canAccessHrChats),
       },
     });
 
@@ -135,6 +140,7 @@ export const markChatAsRead = async (req: Request, res: Response) => {
 export const getUnreadCounts = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId;
   const userId = res.locals.userId;
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
 
   try {
     // Общее количество непрочитанных сообщений для организации
@@ -143,6 +149,7 @@ export const getUnreadCounts = async (req: Request, res: Response) => {
         organizationId: organizationId,
         isReadByOperator: false,
         fromMe: false,
+        chat: chatVisibilityWhere(canAccessHrChats),
       },
     });
 
@@ -151,6 +158,7 @@ export const getUnreadCounts = async (req: Request, res: Response) => {
       where: {
         organizationId: organizationId,
         unreadCount: { gt: 0 },
+        ...chatVisibilityWhere(canAccessHrChats),
       },
     });
 
@@ -162,6 +170,7 @@ export const getUnreadCounts = async (req: Request, res: Response) => {
         fromMe: false,
         chat: {
           assignedUserId: userId,
+          ...chatVisibilityWhere(canAccessHrChats),
         },
       },
     });
@@ -172,6 +181,7 @@ export const getUnreadCounts = async (req: Request, res: Response) => {
         organizationId: organizationId,
         assignedUserId: userId,
         unreadCount: { gt: 0 },
+        ...chatVisibilityWhere(canAccessHrChats),
       },
     });
 
@@ -198,11 +208,13 @@ export const getChatsWithUnread = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId;
   const { assignedOnly } = req.query;
   const userId = res.locals.userId;
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
 
   try {
     let whereCondition: any = {
       organizationId: organizationId,
       unreadCount: { gt: 0 },
+      ...chatVisibilityWhere(canAccessHrChats),
     };
 
     // Если запрашиваются только назначенные чаты

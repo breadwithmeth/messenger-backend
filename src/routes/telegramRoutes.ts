@@ -2,8 +2,11 @@
 
 import { Router } from 'express';
 import * as telegramController from '../controllers/telegramController';
+import { authMiddleware } from '../middlewares/authMiddleware';
 
 const router = Router();
+
+router.use(authMiddleware);
 
 /**
  * Управление ботами

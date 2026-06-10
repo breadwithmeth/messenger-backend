@@ -9,6 +9,7 @@ import {
   getTelegramBot,
 } from '../services/telegramService';
 import pino from 'pino';
+import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
@@ -261,6 +262,8 @@ export async function sendMessage(req: Request, res: Response): Promise<void> {
   try {
     const { botId } = req.params;
     const { chatId, content, replyToMessageId } = req.body;
+    const organizationId = res.locals.organizationId;
+    const canAccessHrChats = userCanAccessHrChats(res.locals);
 
     if (!chatId || !content) {
       res.status(400).json({ error: 'Не указаны chatId или content' });
@@ -269,6 +272,23 @@ export async function sendMessage(req: Request, res: Response): Promise<void> {
 
     // Получаем userId из res.locals (устанавливается middleware аутентификации)
     const userId = res.locals.userId;
+
+    const existingChat = await prisma.chat.findFirst({
+      where: {
+        organizationId,
+        channel: 'telegram',
+        telegramBotId: parseInt(botId),
+        telegramChatId: String(chatId),
+      },
+      select: {
+        isHr: true,
+      },
+    });
+
+    if (existingChat?.isHr && !canAccessHrChats) {
+      res.status(404).json({ error: 'Чат не найден' });
+      return;
+    }
 
     const sent = await sendTelegramMessage(
       parseInt(botId),
@@ -298,10 +318,14 @@ export async function getBotChats(req: Request, res: Response): Promise<void> {
   try {
     const { botId } = req.params;
     const { limit = 50, offset = 0, status } = req.query;
+    const organizationId = res.locals.organizationId;
+    const canAccessHrChats = userCanAccessHrChats(res.locals);
 
     const where: any = {
+      organizationId,
       channel: 'telegram',
       telegramBotId: parseInt(botId),
+      ...chatVisibilityWhere(canAccessHrChats),
     };
 
     if (status && typeof status === 'string') {

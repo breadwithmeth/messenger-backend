@@ -4,6 +4,8 @@ import { Request, Response } from 'express';
 import * as chatService from '../services/chatService';
 import pino from 'pino';
 import { prisma } from '../config/authStorage'; // Используем единый клиент Prisma
+import { canAccessChat, chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
+import { normalizeAppRole } from '../auth/roleUtils';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
@@ -44,6 +46,7 @@ export const getChatComments = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId;
   const chatId = parseInt(req.params.chatId as string, 10);
   const { limit = '50', offset = '0' } = req.query;
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
 
   if (!organizationId) {
     return res.status(401).json({ error: 'Несанкционированный доступ' });
@@ -55,7 +58,7 @@ export const getChatComments = async (req: Request, res: Response) => {
 
   try {
     const chat = await prisma.chat.findFirst({
-      where: { id: chatId, organizationId },
+      where: { id: chatId, organizationId, ...chatVisibilityWhere(canAccessHrChats) },
       select: { id: true },
     });
 
@@ -102,6 +105,7 @@ export const addChatComment = async (req: Request, res: Response) => {
   const userId = res.locals.userId;
   const chatId = parseInt(req.params.chatId as string, 10);
   const { content } = req.body || {};
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
 
   if (!organizationId || !userId) {
     return res.status(401).json({ error: 'Несанкционированный доступ' });
@@ -117,7 +121,7 @@ export const addChatComment = async (req: Request, res: Response) => {
 
   try {
     const chat = await prisma.chat.findFirst({
-      where: { id: chatId, organizationId },
+      where: { id: chatId, organizationId, ...chatVisibilityWhere(canAccessHrChats) },
       select: { id: true },
     });
 
@@ -253,6 +257,7 @@ export async function listChats(req: Request, res: Response) {
       assignedToMe, // Новый параметр для фильтрации по текущему пользователю
       priority, 
       channel, 
+      isHr,
       includeProfile, 
       search, // Новый параметр для поиска по тексту сообщения или номеру телефона
       searchType, // 'message', 'phone', или 'all' (по умолчанию)
@@ -267,6 +272,8 @@ export async function listChats(req: Request, res: Response) {
       return res.status(400).json({ error: 'organizationId обязателен' });
     }
 
+    const canAccessHrChats = userCanAccessHrChats(res.locals);
+
     // Парсинг пагинации
     const take = Math.min(parseInt(limit as string, 10) || 50, 100); // Максимум 100 чатов за раз
     const skip = parseInt(offset as string, 10) || 0;
@@ -274,7 +281,12 @@ export async function listChats(req: Request, res: Response) {
     // Построение условий фильтрации
     let whereCondition: any = {
       organizationId: organizationId,
+      ...chatVisibilityWhere(canAccessHrChats),
     };
+
+    if (canAccessHrChats && typeof isHr === 'string' && ['true', 'false'].includes(isHr)) {
+      whereCondition.isHr = isHr === 'true';
+    }
 
     // Фильтрация по поиску (текст сообщения или номер телефона)
     if (search && typeof search === 'string' && search.trim().length > 0) {
@@ -427,6 +439,7 @@ export async function listChats(req: Request, res: Response) {
         remoteJid: true,
         receivingPhoneJid: true,
         isGroup: true,
+        isHr: true,
         status: true,
         priority: true,
         unreadCount: true,
@@ -562,10 +575,103 @@ export async function listChats(req: Request, res: Response) {
   }
 }
 
+export const setChatHr = async (req: Request, res: Response) => {
+  const organizationId = res.locals.organizationId;
+  const userId = res.locals.userId;
+  const chatId = parseInt(req.params.chatId as string, 10);
+  const { isHr } = req.body || {};
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
+
+  if (!organizationId || !userId) {
+    return res.status(401).json({ error: 'Несанкционированный доступ' });
+  }
+
+  if (Number.isNaN(chatId)) {
+    return res.status(400).json({ error: 'Некорректный chatId' });
+  }
+
+  if (typeof isHr !== 'boolean') {
+    return res.status(400).json({ error: 'isHr должен быть boolean' });
+  }
+
+  try {
+    const currentUser = await prisma.user.findFirst({
+      where: {
+        id: userId,
+        organizationId,
+      },
+      select: {
+        isHr: true,
+        role: true,
+      },
+    });
+    const currentRole = normalizeAppRole(currentUser?.role);
+
+    if (!currentUser?.isHr && currentRole !== 'admin') {
+      return res.status(403).json({ error: 'Only HR users or admins can manage HR chats' });
+    }
+
+    const chat = await prisma.chat.findFirst({
+      where: {
+        id: chatId,
+        organizationId,
+      },
+      select: {
+        id: true,
+        isHr: true,
+      },
+    });
+
+    if (!chat || !canAccessChat(chat, canAccessHrChats)) {
+      return res.status(404).json({ error: 'Чат не найден' });
+    }
+
+    if (chat.isHr === isHr) {
+      return res.json({ success: true, chat });
+    }
+
+    const [updatedChat, history] = await prisma.$transaction([
+      prisma.chat.update({
+        where: { id: chatId },
+        data: { isHr },
+        select: {
+          id: true,
+          isHr: true,
+          name: true,
+          ticketNumber: true,
+          status: true,
+          priority: true,
+          updatedAt: true,
+        },
+      }),
+      prisma.ticketHistory.create({
+        data: {
+          chatId,
+          userId,
+          changeType: 'hr_flag_changed',
+          oldValue: String(chat.isHr),
+          newValue: String(isHr),
+          description: isHr ? 'Чат помечен как HR' : 'HR-метка снята с чата',
+        },
+      }),
+    ]);
+
+    return res.json({
+      success: true,
+      chat: updatedChat,
+      history,
+    });
+  } catch (error: any) {
+    logger.error(`[setChatHr] Ошибка изменения HR-метки чата ${chatId}:`, error);
+    return res.status(500).json({ error: 'Не удалось изменить HR-метку чата', details: error.message });
+  }
+};
+
 export const getChatMessages = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId;
   const chatId = parseInt(req.params.chatId as string, 10);
   const { limit = '100', offset = '0', before } = req.query;
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
 
   if (!organizationId) {
     logger.warn('[getChatMessages] Несанкционированный доступ: organizationId не определен в res.locals.');
@@ -587,9 +693,11 @@ export const getChatMessages = async (req: Request, res: Response) => {
       where: {
         id: chatId,
         organizationId: organizationId,
+        ...chatVisibilityWhere(canAccessHrChats),
       },
       select: {
         id: true,
+        isHr: true,
         ticketNumber: true,
         status: true,
         priority: true,
@@ -724,6 +832,7 @@ export const getChatMessages = async (req: Request, res: Response) => {
     res.status(200).json({
       chat: {
         id: chat.id,
+        isHr: chat.isHr,
       },
       ticket: chat.ticketNumber
         ? {

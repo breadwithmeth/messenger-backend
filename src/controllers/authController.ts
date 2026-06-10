@@ -29,5 +29,5 @@ export async function loginHandler(req: Request, res: Response) {
     { expiresIn: '7d' }
   );
 
-  res.json({ token, user: { id: user.id, email: user.email } });
+  res.json({ token, user: { id: user.id, email: user.email, isHr: user.isHr } });
 }

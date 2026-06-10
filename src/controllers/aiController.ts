@@ -3,6 +3,7 @@
 import { Request, Response } from 'express';
 import { getSuggestedResponses, checkAIServiceHealth } from '../services/aiService';
 import pino from 'pino';
+import { userCanAccessHrChats } from '../auth/hrAccess';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
@@ -14,6 +15,7 @@ export const getSuggestions = async (req: Request, res: Response) => {
   try {
     const chatId = parseInt(req.params.chatId);
     const organizationId = res.locals.organizationId;
+    const canAccessHrChats = userCanAccessHrChats(res.locals);
     const limit = parseInt(req.query.limit as string) || 3;
 
     // Валидация
@@ -32,7 +34,7 @@ export const getSuggestions = async (req: Request, res: Response) => {
     logger.info(`[AI Controller] Запрос предложений для чата #${chatId}, limit=${limit}`);
 
     // Получаем предложения от AI
-    const suggestions = await getSuggestedResponses(chatId, organizationId, limit);
+    const suggestions = await getSuggestedResponses(chatId, organizationId, limit, canAccessHrChats);
 
     logger.info(`[AI Controller] Получено ${suggestions.length} предложений для чата #${chatId}`);
 

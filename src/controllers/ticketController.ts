@@ -3,8 +3,13 @@
 import { Request, Response } from 'express';
 import { prisma } from '../config/authStorage';
 import pino from 'pino';
+import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+
+function visibleTicketWhere(res: Response) {
+  return chatVisibilityWhere(userCanAccessHrChats(res.locals));
+}
 
 /**
  * Получить список тикетов с фильтрацией и пагинацией
@@ -30,7 +35,8 @@ export async function listTickets(req: Request, res: Response) {
     // Построение фильтров
     const where: any = {
       organizationId,
-      ticketNumber: { not: null } // Только чаты с номером тикета
+      ticketNumber: { not: null }, // Только чаты с номером тикета
+      ...visibleTicketWhere(res),
     };
 
     if (status) where.status = status as string;
@@ -101,6 +107,7 @@ export async function listTickets(req: Request, res: Response) {
         } : null,
         client,
         unreadCount: ticket.unreadCount,
+        isHr: ticket.isHr,
         createdAt: ticket.createdAt,
         updatedAt: ticket.updatedAt,
         lastMessageAt: ticket.lastMessageAt,
@@ -138,7 +145,8 @@ export async function getTicketByNumber(req: Request, res: Response) {
     const ticket = await prisma.chat.findFirst({
       where: {
         organizationId,
-        ticketNumber: parseInt(ticketNumber)
+        ticketNumber: parseInt(ticketNumber),
+        ...visibleTicketWhere(res),
       },
       include: {
         assignedUser: {
@@ -206,7 +214,8 @@ export async function assignTicket(req: Request, res: Response) {
     const ticket = await prisma.chat.findFirst({
       where: {
         organizationId,
-        ticketNumber: parseInt(ticketNumber)
+        ticketNumber: parseInt(ticketNumber),
+        ...visibleTicketWhere(res),
       }
     });
 
@@ -224,6 +233,10 @@ export async function assignTicket(req: Request, res: Response) {
 
     if (!assignedUser) {
       return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+
+    if (ticket.isHr && !assignedUser.isHr) {
+      return res.status(403).json({ error: 'HR-тикет можно назначить только HR-пользователю' });
     }
 
     // Обновить тикет и создать запись в истории
@@ -281,7 +294,8 @@ export async function changeTicketStatus(req: Request, res: Response) {
     const ticket = await prisma.chat.findFirst({
       where: {
         organizationId,
-        ticketNumber: parseInt(ticketNumber)
+        ticketNumber: parseInt(ticketNumber),
+        ...visibleTicketWhere(res),
       }
     });
 
@@ -373,6 +387,7 @@ export async function closeTicket(req: Request, res: Response) {
       where: {
         organizationId,
         ticketNumber: parsedTicketNumber,
+        ...visibleTicketWhere(res),
       },
     });
 
@@ -451,7 +466,8 @@ export async function changeTicketPriority(req: Request, res: Response) {
     const ticket = await prisma.chat.findFirst({
       where: {
         organizationId,
-        ticketNumber: parseInt(ticketNumber)
+        ticketNumber: parseInt(ticketNumber),
+        ...visibleTicketWhere(res),
       }
     });
 
@@ -508,7 +524,8 @@ export async function addTicketTag(req: Request, res: Response) {
     const ticket = await prisma.chat.findFirst({
       where: {
         organizationId,
-        ticketNumber: parseInt(ticketNumber)
+        ticketNumber: parseInt(ticketNumber),
+        ...visibleTicketWhere(res),
       }
     });
 
@@ -571,7 +588,8 @@ export async function removeTicketTag(req: Request, res: Response) {
     const ticket = await prisma.chat.findFirst({
       where: {
         organizationId,
-        ticketNumber: parseInt(ticketNumber)
+        ticketNumber: parseInt(ticketNumber),
+        ...visibleTicketWhere(res),
       }
     });
 
@@ -633,7 +651,8 @@ export async function getTicketHistory(req: Request, res: Response) {
     const ticket = await prisma.chat.findFirst({
       where: {
         organizationId,
-        ticketNumber: parseInt(ticketNumber)
+        ticketNumber: parseInt(ticketNumber),
+        ...visibleTicketWhere(res),
       }
     });
 
@@ -680,7 +699,8 @@ export async function addTicketNote(req: Request, res: Response) {
     const ticket = await prisma.chat.findFirst({
       where: {
         organizationId,
-        ticketNumber: parseInt(ticketNumber)
+        ticketNumber: parseInt(ticketNumber),
+        ...visibleTicketWhere(res),
       }
     });
 
@@ -728,14 +748,16 @@ export async function getTicketStats(req: Request, res: Response) {
       prisma.chat.count({
         where: {
           organizationId,
-          ticketNumber: { not: null }
+          ticketNumber: { not: null },
+          ...visibleTicketWhere(res),
         }
       }),
       prisma.chat.groupBy({
         by: ['status'],
         where: {
           organizationId,
-          ticketNumber: { not: null }
+          ticketNumber: { not: null },
+          ...visibleTicketWhere(res),
         },
         _count: true
       }),
@@ -743,7 +765,8 @@ export async function getTicketStats(req: Request, res: Response) {
         by: ['priority'],
         where: {
           organizationId,
-          ticketNumber: { not: null }
+          ticketNumber: { not: null },
+          ...visibleTicketWhere(res),
         },
         _count: true
       })
@@ -795,9 +818,11 @@ export async function getTicketMessages(req: Request, res: Response) {
       where: {
         ticketNumber: ticketNumber,
         organizationId: organizationId,
+        ...visibleTicketWhere(res),
       },
       select: {
         id: true,
+        isHr: true,
         assignedUserId: true,
         assignedUser: {
           select: {
@@ -838,7 +863,13 @@ export async function getTicketMessages(req: Request, res: Response) {
     const responsibleUser = hasResponsible ? chat.assignedUser : null;
 
     logger.info(`[getTicketMessages] Успешно получено ${messages.length} сообщений для тикета ${ticketNumber} (чат ${chat.id}) организации ${organizationId}.`);
-    res.status(200).json({ messages: messages.map((m) => ({ ...m, hasResponsible, responsibleUser })) });
+    res.status(200).json({
+      chat: {
+        id: chat.id,
+        isHr: chat.isHr,
+      },
+      messages: messages.map((m) => ({ ...m, hasResponsible, responsibleUser })),
+    });
   } catch (error: any) {
     logger.error(`[getTicketMessages] Ошибка при получении сообщений для тикета ${req.params.ticketNumber} организации ${res.locals.organizationId}:`, error);
     res.status(500).json({
