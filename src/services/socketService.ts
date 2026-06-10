@@ -26,6 +26,16 @@ interface AuthPayload {
 
 async function resolveChatRequiresHr(chatId: number | undefined, data?: any): Promise<boolean> {
   if (typeof data?.isHr === 'boolean') return data.isHr;
+
+  const messageId = typeof data?.id === 'number' ? data.id : typeof data?.messageId === 'number' ? data.messageId : null;
+  if (messageId) {
+    const message = await prisma.message.findUnique({
+      where: { id: messageId },
+      select: { isHr: true },
+    });
+    if (message?.isHr === true) return true;
+  }
+
   if (!chatId) return false;
 
   const chat = await prisma.chat.findUnique({

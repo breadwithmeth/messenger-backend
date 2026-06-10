@@ -346,6 +346,7 @@ async function handleIncomingMessage(
         size,
         timestamp: new Date(msg.date * 1000),
         status: 'delivered',
+        isHr: chat.isHr,
       },
     });
 
@@ -549,6 +550,7 @@ export async function sendTelegramMessage(
           timestamp: new Date(sent.date * 1000),
           status: 'sent',
           senderUserId: options?.userId,
+          isHr: chat.isHr,
         },
       });
 
@@ -626,6 +628,7 @@ export async function sendTelegramPhoto(
           timestamp: new Date(sent.date * 1000),
           status: 'sent',
           senderUserId: options?.userId,
+          isHr: chat.isHr,
         },
       });
 
@@ -703,6 +706,7 @@ export async function sendTelegramDocument(
           timestamp: new Date(sent.date * 1000),
           status: 'sent',
           senderUserId: options?.userId,
+          isHr: chat.isHr,
         },
       });
 
@@ -778,6 +782,7 @@ export async function sendTelegramVideo(
           timestamp: new Date(sent.date * 1000),
           status: 'sent',
           senderUserId: options?.userId,
+          isHr: chat.isHr,
         },
       });
 
@@ -853,6 +858,7 @@ export async function sendTelegramAudio(
           timestamp: new Date(sent.date * 1000),
           status: 'sent',
           senderUserId: options?.userId,
+          isHr: chat.isHr,
         },
       });
 

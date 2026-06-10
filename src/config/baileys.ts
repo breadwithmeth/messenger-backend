@@ -1299,7 +1299,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
 
             const chatAssignment = await prisma.chat.findUnique({
               where: { id: chatId },
-              select: { assignedUserId: true },
+              select: { assignedUserId: true, isHr: true },
             });
             const hasResponsible = Boolean(chatAssignment?.assignedUserId);
             
@@ -1341,6 +1341,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
                     timestamp: timestampDate,
                     status: 'received',
                     organizationId: organizationId,
+                    isHr: chatAssignment?.isHr === true,
                     // Входящие сообщения по умолчанию не прочитаны оператором
                     isReadByOperator: msg.key.fromMe || false, // Исходящие считаем прочитанными
                     // --- СОХРАНЕНИЕ ДАННЫХ ОТВЕТОВ ---
@@ -1623,6 +1624,10 @@ export async function sendMessage(
     undefined,
     { reopenClosedTicket: false }
   );
+  const chat = await prisma.chat.findUnique({
+    where: { id: chatId },
+    select: { isHr: true },
+  });
 
       consoleBaileysSendLog('chat-ensured', {
         jid,
@@ -1653,6 +1658,7 @@ export async function sendMessage(
         timestamp: new Date(),
         status: 'sent',
         organizationId: organizationId,
+        isHr: chat?.isHr === true,
       };
 
       // Присваиваем senderUserId только если userId является числом

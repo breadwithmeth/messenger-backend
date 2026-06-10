@@ -3,7 +3,7 @@
 import { Request, Response } from 'express';
 import { prisma } from '../config/authStorage';
 import pino from 'pino';
-import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
+import { chatVisibilityWhere, messageVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
@@ -74,6 +74,7 @@ export async function listTickets(req: Request, res: Response) {
             }
           },
           messages: {
+            where: messageVisibilityWhere(userCanAccessHrChats(res.locals)),
             take: 1,
             orderBy: { timestamp: 'desc' },
             select: {
@@ -81,6 +82,17 @@ export async function listTickets(req: Request, res: Response) {
               content: true,
               timestamp: true
             }
+          },
+          _count: {
+            select: {
+              messages: {
+                where: {
+                  ...messageVisibilityWhere(userCanAccessHrChats(res.locals)),
+                  isReadByOperator: false,
+                  fromMe: false,
+                },
+              },
+            },
           }
         }
       }),
@@ -106,7 +118,7 @@ export async function listTickets(req: Request, res: Response) {
           name: assignedUser.name
         } : null,
         client,
-        unreadCount: ticket.unreadCount,
+        unreadCount: ticket._count.messages,
         isHr: ticket.isHr,
         createdAt: ticket.createdAt,
         updatedAt: ticket.updatedAt,
@@ -163,6 +175,7 @@ export async function getTicketByNumber(req: Request, res: Response) {
           }
         },
         messages: {
+          where: messageVisibilityWhere(userCanAccessHrChats(res.locals)),
           orderBy: { timestamp: 'desc' },
           take: 50,
           include: {
@@ -173,6 +186,17 @@ export async function getTicketByNumber(req: Request, res: Response) {
               }
             }
           }
+        },
+        _count: {
+          select: {
+            messages: {
+              where: {
+                ...messageVisibilityWhere(userCanAccessHrChats(res.locals)),
+                isReadByOperator: false,
+                fromMe: false,
+              },
+            },
+          },
         }
       }
     });
@@ -183,6 +207,7 @@ export async function getTicketByNumber(req: Request, res: Response) {
 
     res.json({
       ...ticket,
+      unreadCount: ticket._count.messages,
       tags: ticket.tags ? JSON.parse(ticket.tags) : [],
       client: ticket.clients[0] || null,
       // Явно добавляем важные поля (они уже есть в ticket, но для ясности)
@@ -844,6 +869,7 @@ export async function getTicketMessages(req: Request, res: Response) {
       where: {
         chatId: chat.id,
         organizationId: organizationId,
+        ...messageVisibilityWhere(userCanAccessHrChats(res.locals)),
       },
       include: {
         senderUser: {

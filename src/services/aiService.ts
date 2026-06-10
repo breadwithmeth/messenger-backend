@@ -3,7 +3,7 @@
 import OpenAI from 'openai';
 import { prisma } from '../config/authStorage';
 import pino from 'pino';
-import { chatVisibilityWhere } from '../auth/hrAccess';
+import { chatVisibilityWhere, messageVisibilityWhere } from '../auth/hrAccess';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
@@ -53,6 +53,7 @@ export async function getSuggestedResponses(
     const messages = await prisma.message.findMany({
       where: {
         chatId,
+        ...messageVisibilityWhere(canAccessHrChats),
         timestamp: {
           gte: oneHourAgo,
         },

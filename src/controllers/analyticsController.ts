@@ -4,7 +4,7 @@ import { Request, Response } from 'express';
 import { prisma } from '../config/authStorage';
 import { Prisma } from '@prisma/client';
 import pino from 'pino';
-import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
+import { chatVisibilityWhere, messageVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
@@ -73,6 +73,7 @@ export const getChatAnalytics = async (req: Request, res: Response) => {
     const activeChatsPromise = prisma.message.findMany({
       where: {
         organizationId,
+        ...messageVisibilityWhere(canAccessHrChats),
         timestamp: { gte: from, lte: to },
         chat: chatWhere,
       },
@@ -100,6 +101,7 @@ export const getChatAnalytics = async (req: Request, res: Response) => {
     const totalMessagesPromise = prisma.message.count({
       where: {
         organizationId,
+        ...messageVisibilityWhere(canAccessHrChats),
         timestamp: { gte: from, lte: to },
         chat: chatWhere,
       },
@@ -108,6 +110,7 @@ export const getChatAnalytics = async (req: Request, res: Response) => {
     const inboundMessagesPromise = prisma.message.count({
       where: {
         organizationId,
+        ...messageVisibilityWhere(canAccessHrChats),
         timestamp: { gte: from, lte: to },
         fromMe: false,
         chat: chatWhere,
@@ -117,6 +120,7 @@ export const getChatAnalytics = async (req: Request, res: Response) => {
     const outboundMessagesPromise = prisma.message.count({
       where: {
         organizationId,
+        ...messageVisibilityWhere(canAccessHrChats),
         timestamp: { gte: from, lte: to },
         fromMe: true,
         chat: chatWhere,
@@ -134,6 +138,8 @@ export const getChatAnalytics = async (req: Request, res: Response) => {
     if (!canAccessHrChats) extraChatFilters.push(Prisma.sql`AND c."isHr" = false`);
 
     const extraChatFiltersSql = extraChatFilters.length ? Prisma.join(extraChatFilters, ' ') : Prisma.empty;
+    const messageFilterSql = !canAccessHrChats ? Prisma.sql`AND m."isHr" = false` : Prisma.empty;
+    const responseMessageFilterSql = !canAccessHrChats ? Prisma.sql`AND m2."isHr" = false` : Prisma.empty;
 
     const responseTimeSql = Prisma.sql`
       WITH first_inbound AS (
@@ -144,6 +150,7 @@ export const getChatAnalytics = async (req: Request, res: Response) => {
           AND m."fromMe" = false
           AND m."timestamp" >= ${from}
           AND m."timestamp" <= ${to}
+          ${messageFilterSql}
           AND c."organizationId" = ${organizationId}
           ${extraChatFiltersSql}
         GROUP BY m."chatId"
@@ -159,6 +166,7 @@ export const getChatAnalytics = async (req: Request, res: Response) => {
                    AND m2."senderUserId" IS NOT NULL
                    AND m2."timestamp" >= fi.first_inbound
                    AND m2."timestamp" <= ${to}
+                   ${responseMessageFilterSql}
                ) AS first_reply
         FROM first_inbound fi
       )
@@ -177,6 +185,7 @@ export const getChatAnalytics = async (req: Request, res: Response) => {
         JOIN "Chat" c ON c."id" = m."chatId"
         WHERE m."organizationId" = ${organizationId}
           AND m."fromMe" = false
+          ${messageFilterSql}
           AND c."organizationId" = ${organizationId}
           ${extraChatFiltersSql}
         GROUP BY m."chatId"
@@ -209,6 +218,7 @@ export const getChatAnalytics = async (req: Request, res: Response) => {
         WHERE m."organizationId" = ${organizationId}
           AND m."timestamp" >= ${windowStart}
           AND m."timestamp" <= ${to}
+          ${messageFilterSql}
           AND c."organizationId" = ${organizationId}
           ${extraChatFiltersSql}
       ),
@@ -455,6 +465,7 @@ export const getOperatorAnalytics = async (req: Request, res: Response) => {
       by: ['senderUserId'],
       where: {
         organizationId,
+        ...messageVisibilityWhere(canAccessHrChats),
         timestamp: { gte: from, lte: to },
         senderUserId: { not: null },
         fromMe: true,
@@ -474,6 +485,7 @@ export const getOperatorAnalytics = async (req: Request, res: Response) => {
         AND m."timestamp" >= ${from}
         AND m."timestamp" <= ${to}
         AND m."senderUserId" IS NOT NULL
+        ${!canAccessHrChats ? Prisma.sql`AND m."isHr" = false` : Prisma.empty}
         AND c."organizationId" = ${organizationId}
         ${channel ? Prisma.sql`AND c."channel" = ${channel}` : Prisma.empty}
         ${organizationPhoneId ? Prisma.sql`AND c."organizationPhoneId" = ${organizationPhoneId}` : Prisma.empty}
@@ -494,6 +506,7 @@ export const getOperatorAnalytics = async (req: Request, res: Response) => {
       WHERE m."organizationId" = ${organizationId}
         AND m."timestamp" >= ${from}
         AND m."timestamp" <= ${to}
+        ${!canAccessHrChats ? Prisma.sql`AND m."isHr" = false` : Prisma.empty}
         AND c."organizationId" = ${organizationId}
         AND c."assignedUserId" IS NOT NULL
         ${channel ? Prisma.sql`AND c."channel" = ${channel}` : Prisma.empty}
@@ -517,6 +530,7 @@ export const getOperatorAnalytics = async (req: Request, res: Response) => {
         WHERE m."organizationId" = ${organizationId}
           AND m."timestamp" >= ${windowStart}
           AND m."timestamp" <= ${to}
+          ${!canAccessHrChats ? Prisma.sql`AND m."isHr" = false` : Prisma.empty}
           AND c."organizationId" = ${organizationId}
           ${channel ? Prisma.sql`AND c."channel" = ${channel}` : Prisma.empty}
           ${organizationPhoneId ? Prisma.sql`AND c."organizationPhoneId" = ${organizationPhoneId}` : Prisma.empty}
@@ -765,6 +779,7 @@ export const listAnalyticsTickets = async (req: Request, res: Response) => {
         WHERE m."organizationId" = ${organizationId}
           AND m."timestamp" >= ${windowStart}
           AND m."timestamp" <= ${to}
+          ${!canAccessHrChats ? Prisma.sql`AND m."isHr" = false` : Prisma.empty}
           AND c."organizationId" = ${organizationId}
           ${chatFiltersSql}
       ),

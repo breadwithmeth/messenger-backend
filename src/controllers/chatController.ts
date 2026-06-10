@@ -4,7 +4,7 @@ import { Request, Response } from 'express';
 import * as chatService from '../services/chatService';
 import pino from 'pino';
 import { prisma } from '../config/authStorage'; // Используем единый клиент Prisma
-import { canAccessChat, chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
+import { canAccessChat, chatVisibilityWhere, messageVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 import { normalizeAppRole } from '../auth/roleUtils';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
@@ -329,6 +329,7 @@ export async function listChats(req: Request, res: Response) {
         const matchingMessages = await prisma.message.findMany({
           where: {
             organizationId: organizationId,
+            ...messageVisibilityWhere(canAccessHrChats),
             content: {
               contains: searchQuery,
               mode: 'insensitive',
@@ -504,6 +505,7 @@ export async function listChats(req: Request, res: Response) {
           },
         },
         messages: {
+          where: messageVisibilityWhere(canAccessHrChats),
           take: 1,
           orderBy: {
             timestamp: 'desc',
@@ -519,6 +521,17 @@ export async function listChats(req: Request, res: Response) {
             mediaUrl: true,
             quotedMessageId: true,
             quotedContent: true, // Добавлено для отображения реплаев в последнем сообщении
+          },
+        },
+        _count: {
+          select: {
+            messages: {
+              where: {
+                ...messageVisibilityWhere(canAccessHrChats),
+                isReadByOperator: false,
+                fromMe: false,
+              },
+            },
           },
         },
       },
@@ -537,6 +550,7 @@ export async function listChats(req: Request, res: Response) {
 
       const base: any = {
         ...chat,
+        unreadCount: chat._count.messages,
         lastMessage: chat.messages.length > 0 ? chat.messages[0] : null,
         ticket: chat.ticketNumber
           ? {
@@ -549,6 +563,7 @@ export async function listChats(req: Request, res: Response) {
       };
       delete base.messages;
       delete base.ticketHistory;
+      delete base._count;
 
       if (wantProfile) {
         // Используем уже сохранённые данные из Chat.name
@@ -743,6 +758,7 @@ export const getChatMessages = async (req: Request, res: Response) => {
     const whereCondition: any = {
       chatId: chatId,
       organizationId: organizationId,
+      ...messageVisibilityWhere(canAccessHrChats),
     };
 
     // Фильтр "before" для подгрузки старых сообщений (курсорная пагинация)
@@ -757,7 +773,7 @@ export const getChatMessages = async (req: Request, res: Response) => {
     const totalCount = before
       ? null
       : await prisma.message.count({
-          where: { chatId, organizationId },
+          where: { chatId, organizationId, ...messageVisibilityWhere(canAccessHrChats) },
         });
 
     // Получаем сообщения с оптимизированным select

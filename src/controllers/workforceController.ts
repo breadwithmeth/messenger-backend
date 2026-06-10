@@ -10,6 +10,7 @@ import {
   UpstreamUnavailableError,
 } from '../integrations/workforce/errors';
 import { prisma } from '../config/authStorage';
+import { chatVisibilityWhere, messageVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
 function getRequestId(req: AuthRequest): string | undefined {
   const raw = req.headers['x-request-id'];
@@ -216,6 +217,7 @@ export async function getMyActivityStats(req: AuthRequest, res: Response) {
   const presenceLimit = clampInt(presenceLimitRaw, 1, 200, 50);
   const messagesLimitRaw = Number(req.query.messagesLimit ?? 500);
   const messagesLimit = clampInt(messagesLimitRaw, 1, 2000, 500);
+  const canAccessHrChats = userCanAccessHrChats(res.locals);
 
   try {
     const client = getWorkforceClient();
@@ -227,14 +229,16 @@ export async function getMyActivityStats(req: AuthRequest, res: Response) {
       prisma.message.count({
         where: {
           organizationId,
+          ...messageVisibilityWhere(canAccessHrChats),
           timestamp: { gte: from, lte: to },
           fromMe: false,
-          chat: { organizationId, assignedUserId: userId },
+          chat: { organizationId, assignedUserId: userId, ...chatVisibilityWhere(canAccessHrChats) },
         },
       }),
       prisma.message.count({
         where: {
           organizationId,
+          ...messageVisibilityWhere(canAccessHrChats),
           timestamp: { gte: from, lte: to },
           fromMe: true,
           senderUserId: userId,
@@ -243,10 +247,11 @@ export async function getMyActivityStats(req: AuthRequest, res: Response) {
       prisma.message.findMany({
         where: {
           organizationId,
+          ...messageVisibilityWhere(canAccessHrChats),
           timestamp: { gte: from, lte: to },
           OR: [
             { fromMe: true, senderUserId: userId },
-            { fromMe: false, chat: { organizationId, assignedUserId: userId } },
+            { fromMe: false, chat: { organizationId, assignedUserId: userId, ...chatVisibilityWhere(canAccessHrChats) } },
           ],
         },
         select: {

@@ -143,6 +143,7 @@ model Message {
   size                Int?
   timestamp           DateTime
   status              String            @default("pending") // e.g., pending, sent, delivered, read
+  isHr                Boolean           @default(false) // Сообщение создано, когда чат был HR
 
   // Поле для отметки как прочитанное оператором
   isReadByOperator    Boolean           @default(false)
@@ -161,6 +162,8 @@ model Message {
   
   @@index([channel])
   @@index([chatId, timestamp])
+  @@index([organizationId, isHr])
+  @@index([chatId, isHr, timestamp])
 }
 model ClientMetadata {
   id        Int      @id @default(autoincrement())

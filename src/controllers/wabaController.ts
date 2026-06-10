@@ -5,7 +5,7 @@ import { createWABAService } from '../services/wabaService';
 import { prisma } from '../config/authStorage';
 import { ensureChat } from '../config/baileys';
 import pino from 'pino';
-import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
+import { chatVisibilityWhere, messageVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 const SENSITIVE_LOG_KEY = /(authorization|cookie|password|secret|token)/i;
@@ -649,7 +649,7 @@ async function handleIncomingMessage(orgPhone: any, message: any, contact?: any)
 
     const chatAssignment = await prisma.chat.findUnique({
       where: { id: chatId },
-      select: { assignedUserId: true },
+      select: { assignedUserId: true, isHr: true },
     });
     const hasResponsible = Boolean(chatAssignment?.assignedUserId);
 
@@ -673,6 +673,7 @@ async function handleIncomingMessage(orgPhone: any, message: any, contact?: any)
         timestamp,
         status: 'received',
         isReadByOperator: false,
+        isHr: chatAssignment?.isHr === true,
         // --- СОХРАНЕНИЕ ДАННЫХ ОТВЕТОВ ---
         quotedMessageId: quotedMessageId,
         quotedContent: quotedContent,
@@ -849,6 +850,10 @@ export const sendMessage = async (req: Request, res: Response) => {
       undefined,
       { reopenClosedTicket: false }
     );
+    const chat = await prisma.chat.findUnique({
+      where: { id: chatId },
+      select: { isHr: true },
+    });
 
     await prisma.message.create({
       data: {
@@ -868,6 +873,7 @@ export const sendMessage = async (req: Request, res: Response) => {
         status: 'sent',
         senderUserId: res.locals.userId,
         isReadByOperator: true,
+        isHr: chat?.isHr === true,
       },
     });
 
@@ -975,6 +981,10 @@ export const broadcastTemplate = async (req: Request, res: Response) => {
             undefined,
             { reopenClosedTicket: false }
           );
+          const chat = await prisma.chat.findUnique({
+            where: { id: chatId },
+            select: { isHr: true },
+          });
 
           await prisma.message.create({
             data: {
@@ -993,6 +1003,7 @@ export const broadcastTemplate = async (req: Request, res: Response) => {
               status: 'sent',
               senderUserId: res.locals.userId,
               isReadByOperator: true,
+              isHr: chat?.isHr === true,
             },
           });
 
@@ -1133,6 +1144,7 @@ export const operatorSendMessage = async (req: Request, res: Response) => {
         status: 'sent',
         senderUserId: res.locals.userId,
         isReadByOperator: true,
+        isHr: chat.isHr,
       },
     });
 
@@ -1168,6 +1180,7 @@ export const getMessageStatus = async (req: Request, res: Response) => {
       where: {
         id: parseInt(messageId),
         organizationId: res.locals.organizationId,
+        ...messageVisibilityWhere(canAccessHrChats),
         chat: chatVisibilityWhere(canAccessHrChats),
       },
       select: {
@@ -1238,7 +1251,7 @@ export const getChatMessages = async (req: Request, res: Response) => {
     }
 
     const messages = await prisma.message.findMany({
-      where: { chatId: chat.id },
+      where: { chatId: chat.id, ...messageVisibilityWhere(canAccessHrChats) },
       orderBy: { timestamp: 'desc' },
       take: parseInt(limit as string),
       skip: parseInt(offset as string),
@@ -1264,7 +1277,7 @@ export const getChatMessages = async (req: Request, res: Response) => {
     });
 
     const total = await prisma.message.count({
-      where: { chatId: chat.id },
+      where: { chatId: chat.id, ...messageVisibilityWhere(canAccessHrChats) },
     });
 
     const hasResponsible = Boolean(chat.assignedUserId);

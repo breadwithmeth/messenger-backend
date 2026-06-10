@@ -3,7 +3,7 @@
 import { Request, Response } from 'express';
 import { prisma } from '../config/authStorage';
 import pino from 'pino';
-import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
+import { chatVisibilityWhere, messageVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
@@ -34,6 +34,7 @@ export const markMessagesAsRead = async (req: Request, res: Response) => {
     let whereCondition: any = {
       chatId: parseInt(chatId),
       organizationId: organizationId,
+      ...messageVisibilityWhere(canAccessHrChats),
       isReadByOperator: false,
       fromMe: false, // Только входящие сообщения могут быть отмечены как прочитанные
     };
@@ -52,10 +53,21 @@ export const markMessagesAsRead = async (req: Request, res: Response) => {
       },
     });
 
-    // Пересчитываем количество непрочитанных сообщений в чате
-    const unreadCount = await prisma.message.count({
+    // Пересчитываем общий счетчик для чата, но наружу отдаем только видимый пользователю счетчик
+    const remainingUnreadCount = await prisma.message.count({
       where: {
         chatId: parseInt(chatId),
+        organizationId,
+        isReadByOperator: false,
+        fromMe: false,
+      },
+    });
+
+    const visibleUnreadCount = await prisma.message.count({
+      where: {
+        chatId: parseInt(chatId),
+        organizationId,
+        ...messageVisibilityWhere(canAccessHrChats),
         isReadByOperator: false,
         fromMe: false,
       },
@@ -64,7 +76,7 @@ export const markMessagesAsRead = async (req: Request, res: Response) => {
     // Обновляем счетчик в чате
     await prisma.chat.update({
       where: { id: parseInt(chatId) },
-      data: { unreadCount },
+      data: { unreadCount: remainingUnreadCount },
     });
 
     logger.info(`[markMessagesAsRead] Отмечено как прочитанные ${updateResult.count} сообщений в чате ${chatId}`);
@@ -72,7 +84,7 @@ export const markMessagesAsRead = async (req: Request, res: Response) => {
     res.json({
       success: true,
       markedCount: updateResult.count,
-      unreadCount,
+      unreadCount: visibleUnreadCount,
       message: `Отмечено как прочитанные ${updateResult.count} сообщений`,
     });
   } catch (error: any) {
@@ -106,6 +118,7 @@ export const markChatAsRead = async (req: Request, res: Response) => {
     const updateResult = await prisma.message.updateMany({
       where: {
         chatId: parseInt(chatId),
+        ...messageVisibilityWhere(canAccessHrChats),
         isReadByOperator: false,
         fromMe: false,
       },
@@ -115,10 +128,19 @@ export const markChatAsRead = async (req: Request, res: Response) => {
       },
     });
 
-    // Обнуляем счетчик непрочитанных в чате
+    const unreadCount = await prisma.message.count({
+      where: {
+        chatId: parseInt(chatId),
+        organizationId,
+        isReadByOperator: false,
+        fromMe: false,
+      },
+    });
+
+    // Обновляем счетчик непрочитанных в чате с учетом скрытых HR-сообщений
     await prisma.chat.update({
       where: { id: parseInt(chatId) },
-      data: { unreadCount: 0 },
+      data: { unreadCount },
     });
 
     logger.info(`[markChatAsRead] Весь чат ${chatId} отмечен как прочитанный (${updateResult.count} сообщений)`);
@@ -147,6 +169,7 @@ export const getUnreadCounts = async (req: Request, res: Response) => {
     const totalUnreadMessages = await prisma.message.count({
       where: {
         organizationId: organizationId,
+        ...messageVisibilityWhere(canAccessHrChats),
         isReadByOperator: false,
         fromMe: false,
         chat: chatVisibilityWhere(canAccessHrChats),
@@ -157,8 +180,14 @@ export const getUnreadCounts = async (req: Request, res: Response) => {
     const chatsWithUnread = await prisma.chat.count({
       where: {
         organizationId: organizationId,
-        unreadCount: { gt: 0 },
         ...chatVisibilityWhere(canAccessHrChats),
+        messages: {
+          some: {
+            ...messageVisibilityWhere(canAccessHrChats),
+            isReadByOperator: false,
+            fromMe: false,
+          },
+        },
       },
     });
 
@@ -166,6 +195,7 @@ export const getUnreadCounts = async (req: Request, res: Response) => {
     const assignedUnreadMessages = await prisma.message.count({
       where: {
         organizationId: organizationId,
+        ...messageVisibilityWhere(canAccessHrChats),
         isReadByOperator: false,
         fromMe: false,
         chat: {
@@ -180,8 +210,14 @@ export const getUnreadCounts = async (req: Request, res: Response) => {
       where: {
         organizationId: organizationId,
         assignedUserId: userId,
-        unreadCount: { gt: 0 },
         ...chatVisibilityWhere(canAccessHrChats),
+        messages: {
+          some: {
+            ...messageVisibilityWhere(canAccessHrChats),
+            isReadByOperator: false,
+            fromMe: false,
+          },
+        },
       },
     });
 
@@ -213,8 +249,14 @@ export const getChatsWithUnread = async (req: Request, res: Response) => {
   try {
     let whereCondition: any = {
       organizationId: organizationId,
-      unreadCount: { gt: 0 },
       ...chatVisibilityWhere(canAccessHrChats),
+      messages: {
+        some: {
+          ...messageVisibilityWhere(canAccessHrChats),
+          isReadByOperator: false,
+          fromMe: false,
+        },
+      },
     };
 
     // Если запрашиваются только назначенные чаты
@@ -240,6 +282,7 @@ export const getChatsWithUnread = async (req: Request, res: Response) => {
           },
         },
         messages: {
+          where: messageVisibilityWhere(canAccessHrChats),
           take: 1,
           orderBy: {
             timestamp: 'desc',
@@ -253,6 +296,17 @@ export const getChatsWithUnread = async (req: Request, res: Response) => {
             isReadByOperator: true,
           },
         },
+        _count: {
+          select: {
+            messages: {
+              where: {
+                ...messageVisibilityWhere(canAccessHrChats),
+                isReadByOperator: false,
+                fromMe: false,
+              },
+            },
+          },
+        },
       },
       orderBy: [
         { unreadCount: 'desc' },
@@ -262,8 +316,10 @@ export const getChatsWithUnread = async (req: Request, res: Response) => {
 
     const chatsWithLastMessage = chats.map(chat => ({
       ...chat,
+      unreadCount: chat._count.messages,
       lastMessage: chat.messages.length > 0 ? chat.messages[0] : null,
       messages: undefined,
+      _count: undefined,
     }));
 
     res.json({

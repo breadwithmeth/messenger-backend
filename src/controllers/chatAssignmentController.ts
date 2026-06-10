@@ -4,7 +4,7 @@ import { Request, Response } from 'express';
 import { prisma } from '../config/authStorage';
 import { notifyNewMessage } from '../services/socketService';
 import pino from 'pino';
-import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
+import { chatVisibilityWhere, messageVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
@@ -106,6 +106,7 @@ export const assignChatToOperator = async (req: Request, res: Response) => {
       const lastIncoming = await prisma.message.findFirst({
         where: {
           chatId: chatIdNum,
+          ...messageVisibilityWhere(canAccessHrChats),
           fromMe: false,
           timestamp: { gte: recentThreshold },
         },
@@ -289,6 +290,7 @@ export const getMyAssignedChats = async (req: Request, res: Response) => {
           },
         },
         messages: {
+          where: messageVisibilityWhere(canAccessHrChats),
           take: 1,
           orderBy: {
             timestamp: 'desc',
@@ -303,6 +305,17 @@ export const getMyAssignedChats = async (req: Request, res: Response) => {
             isReadByOperator: true,
           },
         },
+        _count: {
+          select: {
+            messages: {
+              where: {
+                ...messageVisibilityWhere(canAccessHrChats),
+                isReadByOperator: false,
+                fromMe: false,
+              },
+            },
+          },
+        },
       },
       orderBy: [
         { priority: 'desc' },
@@ -314,8 +327,10 @@ export const getMyAssignedChats = async (req: Request, res: Response) => {
     // Преобразуем результат для удобства
     const chatsWithLastMessage = assignedChats.map(chat => ({
       ...chat,
+      unreadCount: chat._count.messages,
       lastMessage: chat.messages.length > 0 ? chat.messages[0] : null,
       messages: undefined,
+      _count: undefined,
     }));
 
     logger.info(`✅ Получено ${assignedChats.length} назначенных чатов для пользователя ${userId}${from || to ? ' с фильтром по времени' : ''}`);
@@ -406,6 +421,7 @@ export const getUnassignedChats = async (req: Request, res: Response) => {
           },
         },
         messages: {
+          where: messageVisibilityWhere(canAccessHrChats),
           take: 1,
           orderBy: {
             timestamp: 'desc',
@@ -420,6 +436,17 @@ export const getUnassignedChats = async (req: Request, res: Response) => {
             isReadByOperator: true,
           },
         },
+        _count: {
+          select: {
+            messages: {
+              where: {
+                ...messageVisibilityWhere(canAccessHrChats),
+                isReadByOperator: false,
+                fromMe: false,
+              },
+            },
+          },
+        },
       },
       orderBy: [
         { priority: 'desc' },
@@ -431,8 +458,10 @@ export const getUnassignedChats = async (req: Request, res: Response) => {
     // Преобразуем результат для удобства
     const chatsWithLastMessage = unassignedChats.map(chat => ({
       ...chat,
+      unreadCount: chat._count.messages,
       lastMessage: chat.messages.length > 0 ? chat.messages[0] : null,
       messages: undefined,
+      _count: undefined,
     }));
 
     logger.info(`✅ Получено ${unassignedChats.length} неназначенных чатов для организации ${organizationId}${from || to ? ' с фильтром по времени' : ''}`);

@@ -1009,6 +1009,7 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
           status: 'sent',
           senderUserId: userId,
           isReadByOperator: true,
+          isHr: chat.isHr,
         },
       });
 

@@ -1,7 +1,7 @@
 // src/services/chatService.ts
 import { prisma } from '../config/authStorage';
 import pino from 'pino';
-import { chatVisibilityWhere } from '../auth/hrAccess';
+import { chatVisibilityWhere, messageVisibilityWhere } from '../auth/hrAccess';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
@@ -47,6 +47,7 @@ export async function getChatsByOrganizationSortedByLastMessage(organizationId: 
         },
         // --- ИЗМЕНЕНИЕ ЗДЕСЬ: Добавляем orderBy для messages, чтобы получить последнее ---
         messages: {
+          where: messageVisibilityWhere(canAccessHrChats),
           take: 1, // Берем только одно сообщение
           orderBy: {
             timestamp: 'desc', // Сортируем сообщения в чате по убыванию времени (самое новое будет первым)
@@ -61,6 +62,17 @@ export async function getChatsByOrganizationSortedByLastMessage(organizationId: 
             isReadByOperator: true,
           },
         },
+        _count: {
+          select: {
+            messages: {
+              where: {
+                ...messageVisibilityWhere(canAccessHrChats),
+                isReadByOperator: false,
+                fromMe: false,
+              },
+            },
+          },
+        },
         // --- КОНЕЦ ИЗМЕНЕНИЯ ---
       },
     });
@@ -71,8 +83,10 @@ export async function getChatsByOrganizationSortedByLastMessage(organizationId: 
     // можно слегка преобразовать результат.
     const chatsWithLastMessage = chats.map(chat => ({
       ...chat,
+      unreadCount: chat._count.messages,
       lastMessage: chat.messages.length > 0 ? chat.messages[0] : null,
       messages: undefined, // Удаляем исходный массив messages, чтобы избежать дублирования
+      _count: undefined,
     }));
 
     return chatsWithLastMessage;
