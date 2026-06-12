@@ -52,6 +52,12 @@ async function initializeConnectedSessions() {
         logger.info(`[ServerInit] startWaSession вызвана для ${phone.phoneJid}.`);
       } catch (e: any) {
         logger.error({ err: e }, `[ServerInit] Ошибка инициализации сессии для phoneId=${phone.id}, jid=${phone.phoneJid}`);
+        await prisma.organizationPhone.update({
+          where: { id: phone.id },
+          data: { status: 'disconnected', qrCode: null },
+        }).catch((updateErr) => {
+          logger.error({ err: updateErr }, `[ServerInit] Не удалось сбросить статус после ошибки инициализации для phoneId=${phone.id}`);
+        });
         // продолжаем инициализацию остальных сессий
       }
     }

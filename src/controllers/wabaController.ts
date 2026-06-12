@@ -5,6 +5,7 @@ import { createWABAService } from '../services/wabaService';
 import { prisma } from '../config/authStorage';
 import { ensureChat } from '../config/baileys';
 import pino from 'pino';
+import axios from 'axios';
 import { chatVisibilityWhere, messageVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
@@ -76,6 +77,23 @@ function logWabaWebhookRequest(req: Request, body: unknown = req.body) {
 function getQueryString(req: Request, dottedKey: string, underscoredKey: string): string {
   const value = req.query[dottedKey] ?? req.query[underscoredKey];
   return Array.isArray(value) ? String(value[0] ?? '') : String(value ?? '');
+}
+
+function getGraphErrorSnapshot(error: any): Record<string, unknown> {
+  const responseData = error?.response?.data;
+  const graphError = responseData?.error;
+
+  return {
+    message: graphError?.message || error?.message,
+    code: graphError?.code,
+    subcode: graphError?.error_subcode,
+    type: graphError?.type,
+    fbtraceId: graphError?.fbtrace_id,
+    isTransient: graphError?.is_transient,
+    responseStatus: error?.response?.status,
+    responseStatusText: error?.response?.statusText,
+    responseData: redactForConsoleLog(responseData),
+  };
 }
 
 async function ensureDefaultOrganization() {
@@ -1297,6 +1315,135 @@ export const getChatMessages = async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     logger.error('❌ WABA: Get chat messages error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+/**
+ * Диагностика WABA конфигурации без отправки сообщения
+ * GET /api/waba/diagnostics?organizationPhoneId=1
+ */
+export const getDiagnostics = async (req: Request, res: Response) => {
+  try {
+    const { organizationPhoneId, apiVersion: requestedApiVersion } = req.query;
+
+    if (!organizationPhoneId) {
+      return res.status(400).json({ error: 'organizationPhoneId is required' });
+    }
+
+    const orgPhone = await prisma.organizationPhone.findFirst({
+      where: {
+        id: Number(organizationPhoneId),
+        organizationId: res.locals.organizationId,
+        connectionType: 'waba',
+      },
+      select: {
+        id: true,
+        phoneJid: true,
+        connectionType: true,
+        wabaAccessToken: true,
+        wabaPhoneNumberId: true,
+        wabaId: true,
+        wabaApiVersion: true,
+      },
+    });
+
+    if (!orgPhone) {
+      return res.status(404).json({ error: 'Organization phone not found or not configured for WABA' });
+    }
+
+    const apiVersion = requestedApiVersion ? String(requestedApiVersion) : orgPhone.wabaApiVersion || 'v21.0';
+    if (!/^v\d+\.\d+$/.test(apiVersion)) {
+      return res.status(400).json({ error: 'apiVersion must look like v21.0' });
+    }
+
+    const baseUrl = `https://graph.facebook.com/${apiVersion}`;
+    const diagnostics: Record<string, any> = {
+      organizationPhoneId: orgPhone.id,
+      config: {
+        phoneJid: orgPhone.phoneJid,
+        connectionType: orgPhone.connectionType,
+        wabaPhoneNumberId: orgPhone.wabaPhoneNumberId,
+        wabaId: orgPhone.wabaId,
+        storedWabaApiVersion: orgPhone.wabaApiVersion || 'v21.0',
+        testedWabaApiVersion: apiVersion,
+        isVersionOverride: Boolean(requestedApiVersion),
+        hasWabaAccessToken: Boolean(orgPhone.wabaAccessToken),
+        wabaAccessTokenLength: orgPhone.wabaAccessToken?.length || 0,
+      },
+      checks: {},
+    };
+
+    if (!orgPhone.wabaAccessToken || !orgPhone.wabaPhoneNumberId) {
+      diagnostics.checks.config = {
+        ok: false,
+        error: 'wabaAccessToken and wabaPhoneNumberId are required',
+      };
+      return res.status(500).json(diagnostics);
+    }
+
+    const authHeaders = {
+      Authorization: `Bearer ${orgPhone.wabaAccessToken}`,
+    };
+
+    const phoneFields = 'id,display_phone_number,verified_name,quality_rating,platform_type';
+    try {
+      const phoneResponse = await axios.get(`${baseUrl}/${orgPhone.wabaPhoneNumberId}`, {
+        headers: authHeaders,
+        params: { fields: phoneFields },
+      });
+      diagnostics.checks.phoneNumber = {
+        ok: true,
+        graphPath: `/${apiVersion}/${orgPhone.wabaPhoneNumberId}`,
+        fields: phoneFields,
+        responseStatus: phoneResponse.status,
+        data: phoneResponse.data,
+      };
+    } catch (error: any) {
+      diagnostics.checks.phoneNumber = {
+        ok: false,
+        graphPath: `/${apiVersion}/${orgPhone.wabaPhoneNumberId}`,
+        fields: phoneFields,
+        error: getGraphErrorSnapshot(error),
+      };
+    }
+
+    if (orgPhone.wabaId) {
+      try {
+        const templatesResponse = await axios.get(`${baseUrl}/${orgPhone.wabaId}/message_templates`, {
+          headers: authHeaders,
+          params: {
+            limit: 1,
+            fields: 'id,name,language,status,category',
+          },
+        });
+        diagnostics.checks.templates = {
+          ok: true,
+          graphPath: `/${apiVersion}/${orgPhone.wabaId}/message_templates`,
+          responseStatus: templatesResponse.status,
+          count: Array.isArray(templatesResponse.data?.data) ? templatesResponse.data.data.length : 0,
+          sample: templatesResponse.data?.data?.[0] || null,
+          paging: templatesResponse.data?.paging || null,
+        };
+      } catch (error: any) {
+        diagnostics.checks.templates = {
+          ok: false,
+          graphPath: `/${apiVersion}/${orgPhone.wabaId}/message_templates`,
+          error: getGraphErrorSnapshot(error),
+        };
+      }
+    } else {
+      diagnostics.checks.templates = {
+        ok: false,
+        skipped: true,
+        reason: 'wabaId is missing',
+      };
+    }
+
+    const hasFailedChecks = Object.values(diagnostics.checks).some((check: any) => check?.ok === false && !check?.skipped);
+    res.status(hasFailedChecks ? 502 : 200).json(diagnostics);
+  } catch (error: any) {
+    logger.error('❌ WABA: Diagnostics error:', error);
     res.status(500).json({ error: error.message });
   }
 };

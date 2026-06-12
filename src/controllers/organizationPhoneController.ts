@@ -13,6 +13,10 @@ function normalizePhoneJid(phoneJid: string): string {
   return `${trimmed}@s.whatsapp.net`;
 }
 
+function getBaileysAuthKey(phoneJid: string): string {
+  return normalizePhoneJid(phoneJid).split('@')[0].split(':')[0];
+}
+
 /**
  * Создает новую запись о WhatsApp-номере для организации.
  * @param req Запрос Express. Ожидает organizationId (из res.locals), phoneJid, displayName в теле.
@@ -212,22 +216,61 @@ export async function disconnectOrganizationPhone(req: Request, res: Response) {
             return res.status(404).json({ error: 'Organization phone not found or does not belong to your organization.' });
         }
 
-        const sock = getBaileysSock(organizationPhoneId);
-        if (sock) {
-          markManualDisconnect(organizationPhoneId, 'API disconnect endpoint');
-            await sock.logout(); // Завершаем сессию WhatsApp
-            // Статус будет обновлен в БД на 'logged_out' через обработчик 'connection.update' в baileys.ts
-            logger.info(`[disconnectOrganizationPhone] WhatsApp сессия для ${phone.phoneJid} запросила выход.`);
-            res.status(200).json({ message: 'WhatsApp session logout initiated.' });
-        } else {
-            // Если сокет не найден, возможно, он уже был отключен или не запущен.
-            // Обновим статус в БД на всякий случай, если он не был обновлен ранее.
+        if (phone.connectionType === 'waba') {
+            logger.warn(`[disconnectOrganizationPhone] Запрос отключения Baileys отклонён: organizationPhoneId=${organizationPhoneId} имеет connectionType='waba'.`);
+            return res.status(400).json({
+                error: 'This phone is configured for WABA and cannot be disconnected via Baileys.',
+                connectionType: phone.connectionType,
+            });
+        }
+
+        const normalizedPhoneJid = normalizePhoneJid(phone.phoneJid);
+        const authKey = getBaileysAuthKey(phone.phoneJid);
+        const clearAuthAndRequireQr = async () => {
+            const deleted = await prisma.baileysAuth.deleteMany({
+                where: {
+                    organizationId,
+                    phoneJid: authKey,
+                },
+            });
+
             await prisma.organizationPhone.update({
                 where: { id: organizationPhoneId },
-                data: { status: 'disconnected', qrCode: null }, // Очищаем QR-код при отключении
+                data: {
+                    phoneJid: normalizedPhoneJid,
+                    status: 'logged_out',
+                    qrCode: null,
+                },
             });
-            logger.warn(`[disconnectOrganizationPhone] Сокет для organizationPhoneId ${organizationPhoneId} не найден, но статус обновлен на 'disconnected'.`);
-            res.status(200).json({ message: 'WhatsApp session already disconnected or not active.' });
+
+            logger.info(`[disconnectOrganizationPhone] Очищено ${deleted.count} auth-записей для ${normalizedPhoneJid}; следующий connect потребует QR.`);
+            return deleted.count;
+        };
+
+        const sock = getBaileysSock(organizationPhoneId);
+        if (sock) {
+            markManualDisconnect(organizationPhoneId, 'API disconnect endpoint');
+            try {
+                await sock.logout(); // Завершаем сессию WhatsApp
+            } catch (logoutError) {
+                logger.warn({ err: logoutError }, `[disconnectOrganizationPhone] logout завершился ошибкой для ${phone.phoneJid}; auth всё равно будет очищен.`);
+            }
+
+            const deletedAuthRows = await clearAuthAndRequireQr();
+            logger.info(`[disconnectOrganizationPhone] WhatsApp сессия для ${phone.phoneJid} отключена вручную.`);
+            res.status(200).json({
+                message: 'WhatsApp session disconnected. Next connect will require QR scan.',
+                status: 'logged_out',
+                deletedAuthRows,
+            });
+        } else {
+            const deletedAuthRows = await clearAuthAndRequireQr();
+            logger.warn(`[disconnectOrganizationPhone] Сокет для organizationPhoneId ${organizationPhoneId} не найден; auth очищен, статус logged_out.`);
+            res.status(200).json({
+                message: 'WhatsApp session already inactive. Stored auth was cleared, next connect will require QR scan.',
+                status: 'logged_out',
+                deletedAuthRows,
+            });
         }
     } catch (error: any) {
         logger.error(`❌ Ошибка при отключении телефона организации ${organizationPhoneId}:`, error);

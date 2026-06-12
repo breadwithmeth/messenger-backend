@@ -891,6 +891,12 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
         // Рекурсивно вызываем startBaileys для создания новой сессии
         void startBaileys(organizationId, organizationPhoneId, phoneJid).catch((err) => {
           logger.error({ err }, `[Connection] Ошибка при переподключении Baileys для ${phoneJid}`);
+          void prisma.organizationPhone.update({
+            where: { id: organizationPhoneId },
+            data: { status: 'disconnected', qrCode: null },
+          }).catch((updateErr) => {
+            logger.error({ err: updateErr, organizationId, organizationPhoneId, phoneJid }, '[Baileys] не удалось сбросить статус после ошибки reconnect');
+          });
         });
       } else {
           if (conflictDisconnect) {
@@ -917,12 +923,20 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
           if (manualDisconnectReason && statusCode !== DisconnectReason.loggedOut) {
             deleteSocketIfCurrent(organizationPhoneId, currentSock);
 
+            const key = phoneJid.split('@')[0].split(':')[0];
+            const deleted = await prisma.baileysAuth.deleteMany({
+              where: {
+                organizationId,
+                phoneJid: key,
+              },
+            });
+
             await prisma.organizationPhone.update({
               where: { id: organizationPhoneId },
-              data: { status: 'disconnected', qrCode: null },
+              data: { status: 'logged_out', lastConnectedAt: new Date(), qrCode: null },
             }).catch(() => undefined);
 
-            logger.warn({ organizationId, organizationPhoneId, phoneJid, manualDisconnectReason }, '[Baileys] ручное отключение без удаления auth-данных');
+            logger.warn({ organizationId, organizationPhoneId, phoneJid, authKey: key, deletedAuthRows: deleted.count, manualDisconnectReason }, '[Baileys] ручное отключение: auth-данные удалены, нужен новый QR');
             return;
           }
 
