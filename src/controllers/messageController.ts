@@ -11,6 +11,8 @@ import * as path from 'path';
 import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const SENSITIVE_LOG_KEY = /(authorization|cookie|password|secret|token)/i;
+const REDACTED_LOG_VALUE = '[REDACTED]';
 
 function consoleSendLog(scope: string, event: string, data: Record<string, unknown> = {}) {
   try {
@@ -22,6 +24,50 @@ function consoleSendLog(scope: string, event: string, data: Record<string, unkno
   } catch (error) {
     console.log(`[${scope} LOG ERROR]`, String(error));
   }
+}
+
+function redactForConsoleLog(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => redactForConsoleLog(item));
+  }
+
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, childValue]) => [
+      key,
+      SENSITIVE_LOG_KEY.test(key) ? REDACTED_LOG_VALUE : redactForConsoleLog(childValue),
+    ])
+  );
+}
+
+function getHttpStatusFromUpstreamError(error: any): number {
+  const upstreamStatus = Number(error?.response?.status);
+
+  if (!Number.isInteger(upstreamStatus)) return 500;
+  if (upstreamStatus >= 500) return 502;
+  if (upstreamStatus >= 400) return upstreamStatus;
+  return 500;
+}
+
+function getAxiosErrorSnapshot(error: any): Record<string, unknown> {
+  const responseData = error?.response?.data;
+  const graphError = responseData?.error;
+
+  return {
+    errorMessage: graphError?.message || error?.message,
+    errorCode: error?.code,
+    responseStatus: error?.response?.status,
+    responseStatusText: error?.response?.statusText,
+    graphErrorCode: graphError?.code,
+    graphErrorSubcode: graphError?.error_subcode,
+    graphErrorType: graphError?.type,
+    graphErrorFbtraceId: graphError?.fbtrace_id,
+    graphErrorIsTransient: graphError?.is_transient,
+    responseData: redactForConsoleLog(responseData),
+  };
 }
 
 function getSocketSnapshot(sock: any) {
@@ -919,67 +965,105 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
         organizationPhoneId: chat.organizationPhone.id,
       });
 
+      consoleSendLog('SEND-BY-CHAT', 'waba-calling-send', {
+        chatId: chat.id,
+        organizationPhoneId: chat.organizationPhone.id,
+        type,
+        recipientPhone,
+        textLength: typeof text === 'string' ? text.length : null,
+        hasMediaUrl: Boolean(mediaUrl),
+        hasCaption: Boolean(caption),
+        templateName: template?.name,
+        templateLanguage: template?.language,
+      });
+
       // Отправляем через WABA в зависимости от типа
-      switch (type) {
-        case 'text':
-          logger.debug(`[sendMessageByChat] Отправка text через WABA`);
-          sentMessage = await wabaService.sendTextMessage(recipientPhone, text);
-          messageContent = text;
-          break;
-        
-        case 'image':
-          logger.debug(`[sendMessageByChat] Отправка image через WABA`, { mediaUrl, caption });
-          sentMessage = await wabaService.sendImage(recipientPhone, mediaUrl, caption);
-          messageContent = caption || '[Image]';
-          break;
-        
-        case 'document':
-          logger.debug(`[sendMessageByChat] Отправка document через WABA`, { mediaUrl, filename, caption });
-          sentMessage = await wabaService.sendDocument(recipientPhone, mediaUrl, filename, caption);
-          messageContent = caption || `[Document: ${filename || 'file'}]`;
-          break;
-        
-        case 'video':
-          logger.debug(`[sendMessageByChat] Отправка video через WABA`, { mediaUrl, caption });
-          sentMessage = await wabaService.sendMessage({
-            to: recipientPhone,
-            type: 'video',
-            video: { link: mediaUrl, caption }
-          });
-          messageContent = caption || '[Video]';
-          break;
-        
-        case 'audio':
-          logger.debug(`[sendMessageByChat] Отправка audio через WABA`, { mediaUrl });
-          sentMessage = await wabaService.sendMessage({
-            to: recipientPhone,
-            type: 'audio',
-            audio: { link: mediaUrl }
-          });
-          messageContent = '[Audio]';
-          break;
-        
-        case 'template':
-          logger.debug(`[sendMessageByChat] Отправка template через WABA`, { 
-            templateName: template.name,
-            language: template.language 
-          });
-          sentMessage = await wabaService.sendTemplateMessage(
-            recipientPhone,
-            template.name,
-            template.language || 'ru',
-            template.components
-          );
-          messageContent = `Template: ${template.name}`;
-          break;
-        
-        default:
-          logger.error(`[sendMessageByChat] ОШИБКА: Неподдерживаемый тип сообщения для WABA`, {
-            requestedType: type,
-            chatId,
-            channel,
-          });
-          return res.status(400).json({ error: `Неподдерживаемый тип сообщения: ${type}` });
+      try {
+        switch (type) {
+          case 'text':
+            logger.debug(`[sendMessageByChat] Отправка text через WABA`);
+            sentMessage = await wabaService.sendTextMessage(recipientPhone, text);
+            messageContent = text;
+            break;
+
+          case 'image':
+            logger.debug(`[sendMessageByChat] Отправка image через WABA`, { mediaUrl, caption });
+            sentMessage = await wabaService.sendImage(recipientPhone, mediaUrl, caption);
+            messageContent = caption || '[Image]';
+            break;
+
+          case 'document':
+            logger.debug(`[sendMessageByChat] Отправка document через WABA`, { mediaUrl, filename, caption });
+            sentMessage = await wabaService.sendDocument(recipientPhone, mediaUrl, filename, caption);
+            messageContent = caption || `[Document: ${filename || 'file'}]`;
+            break;
+
+          case 'video':
+            logger.debug(`[sendMessageByChat] Отправка video через WABA`, { mediaUrl, caption });
+            sentMessage = await wabaService.sendMessage({
+              to: recipientPhone,
+              type: 'video',
+              video: { link: mediaUrl, caption }
+            });
+            messageContent = caption || '[Video]';
+            break;
+
+          case 'audio':
+            logger.debug(`[sendMessageByChat] Отправка audio через WABA`, { mediaUrl });
+            sentMessage = await wabaService.sendMessage({
+              to: recipientPhone,
+              type: 'audio',
+              audio: { link: mediaUrl }
+            });
+            messageContent = '[Audio]';
+            break;
+
+          case 'template':
+            logger.debug(`[sendMessageByChat] Отправка template через WABA`, {
+              templateName: template.name,
+              language: template.language
+            });
+            sentMessage = await wabaService.sendTemplateMessage(
+              recipientPhone,
+              template.name,
+              template.language || 'ru',
+              template.components
+            );
+            messageContent = `Template: ${template.name}`;
+            break;
+
+          default:
+            logger.error(`[sendMessageByChat] ОШИБКА: Неподдерживаемый тип сообщения для WABA`, {
+              requestedType: type,
+              chatId,
+              channel,
+            });
+            return res.status(400).json({ error: `Неподдерживаемый тип сообщения: ${type}` });
+        }
+      } catch (error: any) {
+        const errorSnapshot = getAxiosErrorSnapshot(error);
+
+        logger.error(`[sendMessageByChat] Ошибка отправки WABA сообщения`, {
+          chatId: chat.id,
+          organizationPhoneId: chat.organizationPhone.id,
+          type,
+          recipientPhone,
+          ...errorSnapshot,
+        });
+        consoleSendLog('SEND-BY-CHAT', 'waba-send-error', {
+          chatId: chat.id,
+          organizationPhoneId: chat.organizationPhone.id,
+          type,
+          recipientPhone,
+          ...errorSnapshot,
+        });
+
+        return res.status(getHttpStatusFromUpstreamError(error)).json({
+          error: 'Не удалось отправить сообщение через WABA.',
+          details: errorSnapshot.errorMessage,
+          upstreamStatus: error?.response?.status,
+          upstreamError: errorSnapshot.responseData,
+        });
       }
 
       if (!sentMessage) {
@@ -988,7 +1072,21 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
           chatId,
           recipientPhone,
         });
+        consoleSendLog('SEND-BY-CHAT', 'waba-result-empty', {
+          chatId: chat.id,
+          organizationPhoneId: chat.organizationPhone.id,
+          type,
+          recipientPhone,
+        });
+        return res.status(500).json({ error: 'WABA вернул пустой результат отправки.' });
       }
+
+      consoleSendLog('SEND-BY-CHAT', 'waba-send-success', {
+        chatId: chat.id,
+        organizationPhoneId: chat.organizationPhone.id,
+        type,
+        messageId: sentMessage.messages?.[0]?.id,
+      });
 
       // Сохраняем сообщение в БД
       const savedMessage = await prisma.message.create({
