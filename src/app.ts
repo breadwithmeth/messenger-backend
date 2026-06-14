@@ -122,6 +122,7 @@ app.use('/api/users', userRoutes); // <-- Добавить
 app.use('/api/clients', clientRoutes); // <-- API для клиентов организации
 app.use('/api/workforce', workforceRoutes);
 app.use('/api/waba', wabaRoutes); // <-- ВАЖНО: ПЕРЕД /api, чтобы не перехватывался contactRoutes
+app.use('/api/website-widgets', websiteWidgetRoutes); // Публичное управление виджетами — до общего /api router
 app.use('/api', contactRoutes);
 app.use('/api/chat-assignment', chatAssignmentRoutes); // Новые маршруты для назначения чатов
 app.use('/api/message-read', messageReadRoutes); // Новые маршруты для непрочитанных сообщений
@@ -131,7 +132,6 @@ app.use('/api/tickets', ticketRoutes); // Маршруты для тикет-с�
 app.use('/api/telegram', telegramRoutes); // <-- НОВОЕ: Маршруты для Telegram
 app.use('/api/ai', aiRoutes); // <-- AI предложения ответов
 app.use('/api/analytics', analyticsRoutes);
-app.use('/api/website-widgets', websiteWidgetRoutes);
 
 // 404 JSON для несуществующих маршрутов
 app.use((req, res) => {
