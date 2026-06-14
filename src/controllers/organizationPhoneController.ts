@@ -89,10 +89,39 @@ export async function listOrganizationPhones(req: Request, res: Response) {
                 lastConnectedAt: true,
                 createdAt: true,
                 updatedAt: true,
+                connectionType: true,
             }
         });
+        const phonesWithLiveStatus = phones.map((phone) => {
+            if (phone.connectionType !== 'baileys') {
+                return phone;
+            }
+
+            const sock = getBaileysSock(phone.id);
+            const isLiveConnected = Boolean(sock?.user) && (sock?.ws as unknown as WebSocket | undefined)?.readyState === WebSocket.OPEN;
+
+            if (!isLiveConnected) {
+                return phone;
+            }
+
+            if (phone.status !== 'connected') {
+                void prisma.organizationPhone.update({
+                    where: { id: phone.id },
+                    data: { status: 'connected', lastConnectedAt: new Date(), qrCode: null },
+                }).catch((updateError) => {
+                    logger.error({ err: updateError }, `[listOrganizationPhones] Не удалось синхронизировать live connected статус для phoneId=${phone.id}`);
+                });
+            }
+
+            return {
+                ...phone,
+                status: 'connected',
+                qrCode: null,
+                lastConnectedAt: phone.lastConnectedAt || new Date(),
+            };
+        });
         // logger.info(`✅ Получено ${phones.length} телефонов для организации ${organizationId}.`);
-        res.status(200).json(phones);
+        res.status(200).json(phonesWithLiveStatus);
     } catch (error: any) {
         logger.error(`❌ Ошибка при получении списка телефонов для организации ${organizationId}:`, error);
         res.status(500).json({ error: 'Failed to retrieve organization phones', details: error.message });

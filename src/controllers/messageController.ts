@@ -758,6 +758,11 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
             botName: true,
           },
         },
+        websiteSession: {
+          select: {
+            id: true,
+          },
+        },
         assignedUser: {
           select: {
             id: true,
@@ -798,6 +803,7 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
       receivingPhoneJid: chat.receivingPhoneJid,
       hasTelegramBot: Boolean(chat.telegramBot),
       hasTelegramChatId: Boolean(chat.telegramChatId),
+      hasWebsiteSession: Boolean(chat.websiteSession),
     });
 
     if (!chat.assignedUserId) {
@@ -814,7 +820,84 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
     let messageContent = '';
 
     // Определяем метод отправки в зависимости от канала
-    if (channel === 'telegram') {
+    if (channel === 'website') {
+      if (type !== 'text') {
+        return res.status(400).json({
+          error: 'Для виджета сайта сейчас поддерживаются только текстовые сообщения.',
+        });
+      }
+
+      if (!chat.websiteSession) {
+        return res.status(500).json({ error: 'У чата отсутствует сессия виджета сайта.' });
+      }
+
+      const now = new Date();
+      const savedMessage = await prisma.message.create({
+        data: {
+          organizationId: chat.organizationId,
+          channel: 'website',
+          chatId: chat.id,
+          fromMe: true,
+          content: text.trim(),
+          type: 'text',
+          timestamp: now,
+          status: 'sent',
+          senderUserId: userId,
+          isReadByOperator: true,
+          isHr: chat.isHr,
+        },
+      });
+
+      await prisma.chat.update({
+        where: { id: chat.id },
+        data: {
+          lastMessageAt: now,
+          firstResponseAt: chat.firstResponseAt || now,
+        },
+      });
+
+      const event = {
+        id: savedMessage.id,
+        chatId: savedMessage.chatId,
+        content: savedMessage.content,
+        type: savedMessage.type,
+        fromMe: true,
+        timestamp: savedMessage.timestamp,
+        status: savedMessage.status,
+        senderUserId: userId,
+        channel: 'website',
+      };
+      const { notifyNewMessage, notifyWebsiteVisitor } = await import('../services/socketService');
+      notifyNewMessage(organizationId, event);
+      notifyWebsiteVisitor(chat.websiteSession.id, 'message:new', {
+        id: savedMessage.id,
+        content: savedMessage.content,
+        type: savedMessage.type,
+        fromMe: true,
+        timestamp: savedMessage.timestamp,
+        status: savedMessage.status,
+        senderUser: chat.assignedUser
+          ? { name: chat.assignedUser.name }
+          : null,
+      });
+
+      return res.status(200).json({
+        success: true,
+        messageId: savedMessage.id,
+        chatId: chat.id,
+        ticketNumber: chat.ticketNumber,
+        ticket: chat.ticketNumber
+          ? {
+              number: chat.ticketNumber,
+              status: chat.status,
+              priority: chat.priority,
+            }
+          : null,
+        channel: 'website',
+        type: 'text',
+        message: savedMessage,
+      });
+    } else if (channel === 'telegram') {
       // Используем Telegram Bot API
       logger.info(`[sendMessageByChat] Используем Telegram для чата ${chatId}`);
 

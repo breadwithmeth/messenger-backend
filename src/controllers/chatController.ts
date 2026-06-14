@@ -355,8 +355,8 @@ export async function listChats(req: Request, res: Response) {
       }
     }
 
-    // Фильтрация по каналу (whatsapp или telegram)
-    if (channel && typeof channel === 'string' && (channel === 'whatsapp' || channel === 'telegram')) {
+    // Фильтрация по каналу
+    if (channel && typeof channel === 'string' && ['whatsapp', 'telegram', 'website'].includes(channel)) {
       whereCondition.channel = channel;
     }
 
@@ -436,7 +436,7 @@ export async function listChats(req: Request, res: Response) {
       select: {
         id: true,
         name: true,
-        channel: true, // whatsapp | telegram
+        channel: true, // whatsapp | telegram | website
         remoteJid: true,
         receivingPhoneJid: true,
         isGroup: true,
@@ -484,6 +484,23 @@ export async function listChats(req: Request, res: Response) {
         telegramUsername: true,
         telegramFirstName: true,
         telegramLastName: true,
+        // Website widget specific
+        websiteWidget: {
+          select: {
+            id: true,
+            name: true,
+            publicKey: true,
+          },
+        },
+        websiteSession: {
+          select: {
+            id: true,
+            visitorName: true,
+            visitorEmail: true,
+            visitorPhone: true,
+            lastSeenAt: true,
+          },
+        },
         // Common
         assignedUser: {
           select: {

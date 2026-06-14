@@ -57,6 +57,7 @@ model Organization {
   Chat           Chat[]
   phones         OrganizationPhone[] // WhatsApp номера
   telegramBots   TelegramBot[]       // Telegram боты
+  websiteWidgets WebsiteWidget[]     // Виджеты чата для сайтов
   Message        Message[]
   clients        OrganizationClient[] // Клиенты организации
   clientTags     ClientTag[]          // Теги для клиентов
@@ -111,8 +112,8 @@ model Message {
   organizationId      Int
   organization        Organization      @relation(fields: [organizationId], references: [id])
   
-  // Канал сообщения: whatsapp или telegram
-  channel             String            @default("whatsapp") // whatsapp | telegram
+  // Канал сообщения: whatsapp, telegram или website
+  channel             String            @default("whatsapp") // whatsapp | telegram | website
   
   // WhatsApp-специфичные поля
   organizationPhoneId Int?
@@ -189,8 +190,8 @@ model Chat {
   name                String?
   createdAt           DateTime     @default(now())
   
-  // Канал чата: whatsapp или telegram
-  channel             String       @default("whatsapp") // whatsapp | telegram
+  // Канал чата: whatsapp, telegram или website
+  channel             String       @default("whatsapp") // whatsapp | telegram | website
   
   // WhatsApp-специфичные поля
   receivingPhoneJid   String?
@@ -207,6 +208,11 @@ model Chat {
   telegramUsername    String?      // @username в Telegram
   telegramFirstName   String?      // Имя пользователя в Telegram
   telegramLastName    String?      // Фамилия пользователя в Telegram
+
+  // Website widget
+  websiteWidgetId     Int?
+  websiteWidget       WebsiteWidget? @relation(fields: [websiteWidgetId], references: [id], onDelete: SetNull)
+  websiteSession      WebsiteVisitorSession?
   
   lastMessageAt       DateTime?
 
@@ -274,6 +280,7 @@ model Chat {
   @@index([channel]) // Индекс для поиска по каналу
   @@index([organizationId, receivingPhoneJid, remoteJid]) // Для WhatsApp
   @@index([organizationId, telegramBotId, telegramChatId]) // Для Telegram
+  @@index([organizationId, websiteWidgetId]) // Для виджета сайта
   @@index([organizationId, isHr]) // Для фильтрации HR-чатов
   @@unique([organizationId, channel, remoteJid]) // Уникальное ограничение для предотвращения дубликатов
 }
@@ -382,6 +389,44 @@ model TelegramBot {
   
   @@index([organizationId])
   @@index([status])
+}
+
+// Настройки публичного виджета чата на сайте
+model WebsiteWidget {
+  id              Int          @id @default(autoincrement())
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId  Int
+  publicKey       String       @unique
+  name            String
+  status          String       @default("active") // active | inactive
+  welcomeMessage  String?
+  primaryColor    String       @default("#2563eb")
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  chats           Chat[]
+  sessions        WebsiteVisitorSession[]
+
+  @@index([organizationId])
+  @@index([status])
+}
+
+// Авторизованная сессия посетителя сайта
+model WebsiteVisitorSession {
+  id              String        @id @default(uuid())
+  websiteWidget   WebsiteWidget @relation(fields: [websiteWidgetId], references: [id], onDelete: Restrict)
+  websiteWidgetId Int
+  chat            Chat          @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  chatId          Int           @unique
+  tokenHash       String
+  visitorName     String?
+  visitorEmail    String?
+  visitorPhone    String?
+  lastSeenAt      DateTime      @default(now())
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([websiteWidgetId])
 }
 
 // Клиенты организации (компании и частные лица)

@@ -5,6 +5,7 @@ import { Server as HTTPServer } from 'http';
 import pino from 'pino';
 import { authenticateToken } from '../auth/tokenAuth';
 import prisma from '../config/prisma';
+import { authenticateWebsiteVisitorSession } from './websiteWidgetService';
 
 const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
 
@@ -214,6 +215,40 @@ export function initializeSocketIO(httpServer: HTTPServer): Server {
     });
   });
 
+  const widgetNamespace = io.of('/widget');
+  widgetNamespace.use(async (socket, next) => {
+    try {
+      const { publicKey, sessionId, token } = socket.handshake.auth || {};
+      if (![publicKey, sessionId, token].every((value) => typeof value === 'string' && value)) {
+        return next(new Error('Authentication error: widget credentials are required'));
+      }
+
+      const session = await authenticateWebsiteVisitorSession(publicKey, sessionId, token);
+      if (!session) return next(new Error('Authentication error: invalid widget session'));
+
+      socket.data.websiteSessionId = session.id;
+      socket.data.websiteChatId = session.chatId;
+      next();
+    } catch (error: any) {
+      logger.error('[Socket.IO] Ошибка аутентификации виджета:', error.message);
+      next(new Error('Authentication error: invalid widget session'));
+    }
+  });
+
+  widgetNamespace.on('connection', (socket) => {
+    const sessionId = socket.data.websiteSessionId as string;
+    const room = `widget_session_${sessionId}`;
+    socket.join(room);
+    socket.emit('connected', { sessionId, timestamp: new Date().toISOString() });
+
+    void prisma.websiteVisitorSession.update({
+      where: { id: sessionId },
+      data: { lastSeenAt: new Date() },
+    }).catch((error: any) => {
+      logger.error('[Socket.IO] Не удалось обновить lastSeenAt виджета:', error.message);
+    });
+  });
+
   logger.info('[Socket.IO] ✅ Socket.IO сервер инициализирован');
   return io;
 }
@@ -388,5 +423,20 @@ export function broadcastToOrganization(organizationId: number, event: string, d
     logger.info(`[Socket.IO] 📢 Отправлен broadcast ${event} в организацию ${organizationId}`);
   } catch (error: any) {
     logger.error(`[Socket.IO] Ошибка broadcast ${event}:`, error.message);
+  }
+}
+
+/**
+ * Отправить событие посетителю сайта в рамках его защищённой сессии.
+ */
+export function notifyWebsiteVisitor(sessionId: string, event: string, data: any) {
+  try {
+    const socketServer = getSocketIO();
+    socketServer.of('/widget').to(`widget_session_${sessionId}`).emit(event, {
+      ...data,
+      timestamp: data.timestamp || new Date().toISOString(),
+    });
+  } catch (error: any) {
+    logger.error(`[Socket.IO] Ошибка отправки события ${event} в виджет:`, error.message);
   }
 }

@@ -742,6 +742,14 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
     const isActive = wsState === 0 || wsState === 1; // CONNECTING or OPEN
     if (isActive) {
       logger.info({ organizationId, organizationPhoneId, phoneJid, wsState }, '[Baileys] startBaileys пропущен: сессия уже активна');
+      if (wsState === 1 && existingSock.user) {
+        void prisma.organizationPhone.update({
+          where: { id: organizationPhoneId },
+          data: { status: 'connected', lastConnectedAt: new Date(), qrCode: null },
+        }).catch((err) => {
+          logger.error({ err, organizationId, organizationPhoneId, phoneJid }, '[Baileys] не удалось синхронизировать статус активного сокета');
+        });
+      }
       return existingSock;
     }
 
@@ -804,6 +812,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
   socks.set(organizationPhoneId, currentSock);
 
   let qrResolved = false;
+  let qrIssued = false;
   const qrWatchdog = setTimeout(() => {
     if (qrResolved) return;
 
@@ -839,6 +848,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
     // Если получен QR-код
     if (qr) {
       qrResolved = true;
+      qrIssued = true;
       clearTimeout(qrWatchdog);
 
       logger.info({ organizationId, organizationPhoneId, phoneJid, qrLength: qr.length }, '[Baileys] получен QR-код');
@@ -873,7 +883,31 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
       const conflictDisconnect = isConflictDisconnect(lastDisconnect);
       const shouldReconnect =
         !manualDisconnectReason && !conflictDisconnect && statusCode !== DisconnectReason.loggedOut;
-      logger.warn({ organizationId, organizationPhoneId, phoneJid, shouldReconnect, manualDisconnectReason, conflictDisconnect, ...getDisconnectInfo(lastDisconnect) }, '[Baileys] соединение закрыто');
+      const isQrPairingFlow = qrIssued && state.creds.registered !== true;
+      logger.warn({ organizationId, organizationPhoneId, phoneJid, shouldReconnect, manualDisconnectReason, conflictDisconnect, isQrPairingFlow, registered: state.creds.registered, ...getDisconnectInfo(lastDisconnect) }, '[Baileys] соединение закрыто');
+
+      if (isQrPairingFlow && shouldReconnect) {
+        deleteSocketIfCurrent(organizationPhoneId, currentSock);
+
+        await prisma.organizationPhone.update({
+          where: { id: organizationPhoneId },
+          data: { status: 'loading', qrCode: null },
+        }).catch(() => undefined);
+
+        logger.info({ organizationId, organizationPhoneId, phoneJid }, '[Baileys] QR-flow закрыт до сканирования, запускаем получение нового QR');
+
+        await new Promise(resolve => setTimeout(resolve, BAILEYS_RECONNECT_DELAY_MS));
+        void startBaileys(organizationId, organizationPhoneId, phoneJid).catch((err) => {
+          logger.error({ err }, `[Connection] Ошибка при повторной генерации QR для ${phoneJid}`);
+          void prisma.organizationPhone.update({
+            where: { id: organizationPhoneId },
+            data: { status: 'disconnected', qrCode: null },
+          }).catch((updateErr) => {
+            logger.error({ err: updateErr, organizationId, organizationPhoneId, phoneJid }, '[Baileys] не удалось сбросить статус после ошибки QR-flow');
+          });
+        });
+        return;
+      }
       
       if (shouldReconnect) {
         deleteSocketIfCurrent(organizationPhoneId, currentSock);

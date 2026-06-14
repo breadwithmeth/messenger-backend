@@ -27,7 +27,7 @@ function clampInt(n: number, min: number, max: number): number {
 
 /**
  * Аналитика по чатам (summary) для организации.
- * GET /api/analytics/chats?from=2026-02-01&to=2026-02-11&channel=whatsapp|telegram&organizationPhoneId=123&assignedUserId=45
+ * GET /api/analytics/chats?from=2026-02-01&to=2026-02-11&channel=whatsapp|telegram|website&organizationPhoneId=123&assignedUserId=45
  */
 export const getChatAnalytics = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId as number | undefined;
@@ -411,7 +411,7 @@ export const getChatAnalytics = async (req: Request, res: Response) => {
 
 /**
  * Аналитика по операторам (summary) для организации.
- * GET /api/analytics/operators?from=2026-02-01&to=2026-02-11&channel=whatsapp|telegram&organizationPhoneId=123&operatorId=45&idleMinutes=120
+ * GET /api/analytics/operators?from=2026-02-01&to=2026-02-11&channel=whatsapp|telegram|website&organizationPhoneId=123&operatorId=45&idleMinutes=120
  */
 export const getOperatorAnalytics = async (req: Request, res: Response) => {
   const organizationId = res.locals.organizationId as number | undefined;

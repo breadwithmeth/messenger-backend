@@ -29,6 +29,8 @@ import userRoutes from './routes/userRoutes'; // <-- Добавить
 import contactRoutes from './routes/contactRoutes';
 import clientRoutes from './routes/clientRoutes'; // <-- Клиенты организации
 import workforceRoutes from './routes/workforceRoutes';
+import websiteWidgetRoutes from './routes/websiteWidgetRoutes';
+import websiteWidgetPublicRoutes from './routes/websiteWidgetPublicRoutes';
 
 
 const app = express();
@@ -58,6 +60,9 @@ if ((process.env.APP_LOG_LEVEL || 'silent') === 'silent') {
 }
 
 app.use(express.json());
+
+// Публичный API виджета доступен с любого сайта и сам обрабатывает preflight.
+app.use('/api/widget', websiteWidgetPublicRoutes);
 
 // --- Расширенная настройка CORS ---
 const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -126,6 +131,7 @@ app.use('/api/tickets', ticketRoutes); // Маршруты для тикет-с�
 app.use('/api/telegram', telegramRoutes); // <-- НОВОЕ: Маршруты для Telegram
 app.use('/api/ai', aiRoutes); // <-- AI предложения ответов
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api/website-widgets', websiteWidgetRoutes);
 
 // 404 JSON для несуществующих маршрутов
 app.use((req, res) => {
