@@ -43,13 +43,14 @@ curl -I https://messenger.example.com/widget.js
 
 ## 2. Создание виджета
 
-Административные маршруты требуют обычный JWT сотрудника организации.
+Маршруты управления виджетами не требуют авторизации. При создании необходимо явно
+передать `organizationId`.
 
 ```bash
 curl -X POST https://messenger.example.com/api/website-widgets \
-  -H "Authorization: Bearer OPERATOR_JWT" \
   -H "Content-Type: application/json" \
   -d '{
+    "organizationId": 1,
     "name": "Поддержка сайта",
     "welcomeMessage": "Здравствуйте! Чем можем помочь?",
     "primaryColor": "#2563eb"
@@ -60,6 +61,7 @@ curl -X POST https://messenger.example.com/api/website-widgets \
 
 | Поле | Обязательное | Описание |
 | --- | --- | --- |
+| `organizationId` | да | ID организации, которой принадлежит виджет |
 | `name` | да | Заголовок окна, максимум 160 символов |
 | `welcomeMessage` | нет | Локальное приветствие, максимум 1000 символов |
 | `primaryColor` | нет | Цвет в формате `#RRGGBB`, по умолчанию `#2563eb` |
@@ -128,12 +130,12 @@ curl -X POST https://messenger.example.com/api/chat-assignment/assign \
   -H "Content-Type: application/json" \
   -d '{
     "chatId": 123,
-    "operatorId": 0,
-    "priority": "normal"
+    "operatorId": 0
   }'
 ```
 
 `operatorId: 0` означает текущего авторизованного сотрудника.
+При назначении website-чат сохраняет приоритет `urgent`.
 
 6. Отправьте ответ посетителю:
 
@@ -158,15 +160,13 @@ curl -X POST https://messenger.example.com/api/messages/send-by-chat \
 ### Получить список
 
 ```http
-GET /api/website-widgets
-Authorization: Bearer <operator-jwt>
+GET /api/website-widgets?organizationId=1
 ```
 
 ### Изменить настройки
 
 ```bash
 curl -X PATCH https://messenger.example.com/api/website-widgets/7 \
-  -H "Authorization: Bearer OPERATOR_JWT" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Служба поддержки",
@@ -185,7 +185,6 @@ curl -X PATCH https://messenger.example.com/api/website-widgets/7 \
 
 ```http
 POST /api/website-widgets/:widgetId/rotate-key
-Authorization: Bearer <operator-jwt>
 ```
 
 После ротации обновите `data-widget-key` на сайте. Старый ключ перестанет работать.
@@ -309,6 +308,8 @@ socket.on('message:new', (message) => {
 - Публичные маршруты имеют in-memory rate limit. При запуске нескольких экземпляров
   backend лимит применяется отдельно на каждом экземпляре.
 - Виджет доступен с любого домена; ограничение по origin не применяется.
+- Маршруты `/api/website-widgets` публичны: клиент может создавать, просматривать и
+  изменять виджеты, зная `organizationId` или `widgetId`.
 
 Текущие лимиты:
 

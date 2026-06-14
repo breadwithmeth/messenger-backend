@@ -5,11 +5,9 @@ import {
   rotateWebsiteWidgetKey,
   updateWebsiteWidget,
 } from '../controllers/websiteWidgetController';
-import { authMiddleware } from '../middlewares/authMiddleware';
 
 const router = Router();
 
-router.use(authMiddleware);
 router.get('/', listWebsiteWidgets);
 router.post('/', createWebsiteWidget);
 router.patch('/:widgetId', updateWebsiteWidget);

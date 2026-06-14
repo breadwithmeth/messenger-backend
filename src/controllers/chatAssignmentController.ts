@@ -88,6 +88,7 @@ export const assignChatToOperator = async (req: Request, res: Response) => {
         assignedUserId: operatorId,
         assignedAt: new Date(),
         status: 'open',
+        priority: chat.channel === 'website' ? 'urgent' : priority,
       },
       include: {
         assignedUser: {

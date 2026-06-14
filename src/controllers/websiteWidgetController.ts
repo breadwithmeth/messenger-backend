@@ -24,10 +24,20 @@ function validatePrimaryColor(value: unknown): string | undefined {
   return value.toLowerCase();
 }
 
-export async function listWebsiteWidgets(_req: Request, res: Response) {
+function parseOrganizationId(value: unknown): number | null {
+  const organizationId = Number.parseInt(String(value ?? ''), 10);
+  return Number.isInteger(organizationId) && organizationId > 0 ? organizationId : null;
+}
+
+export async function listWebsiteWidgets(req: Request, res: Response) {
   try {
+    const organizationId = parseOrganizationId(req.query.organizationId);
+    if (!organizationId) {
+      return res.status(400).json({ error: 'organizationId обязателен' });
+    }
+
     const widgets = await prisma.websiteWidget.findMany({
-      where: { organizationId: res.locals.organizationId },
+      where: { organizationId },
       include: {
         _count: {
           select: { chats: true, sessions: true },
@@ -44,6 +54,11 @@ export async function listWebsiteWidgets(_req: Request, res: Response) {
 
 export async function createWebsiteWidget(req: Request, res: Response) {
   try {
+    const organizationId = parseOrganizationId(req.body?.organizationId);
+    if (!organizationId) {
+      return res.status(400).json({ error: 'organizationId обязателен' });
+    }
+
     const name = cleanRequiredName(req.body?.name);
     if (!name) return res.status(400).json({ error: 'name обязателен' });
 
@@ -52,7 +67,7 @@ export async function createWebsiteWidget(req: Request, res: Response) {
 
     const widget = await prisma.websiteWidget.create({
       data: {
-        organizationId: res.locals.organizationId,
+        organizationId,
         publicKey: generateWebsiteWidgetPublicKey(),
         name,
         primaryColor,
@@ -72,7 +87,7 @@ export async function updateWebsiteWidget(req: Request, res: Response) {
     if (!Number.isInteger(widgetId)) return res.status(400).json({ error: 'Некорректный widgetId' });
 
     const existing = await prisma.websiteWidget.findFirst({
-      where: { id: widgetId, organizationId: res.locals.organizationId },
+      where: { id: widgetId },
       select: { id: true },
     });
     if (!existing) return res.status(404).json({ error: 'Виджет не найден' });
@@ -112,7 +127,7 @@ export async function rotateWebsiteWidgetKey(req: Request, res: Response) {
     if (!Number.isInteger(widgetId)) return res.status(400).json({ error: 'Некорректный widgetId' });
 
     const result = await prisma.websiteWidget.updateMany({
-      where: { id: widgetId, organizationId: res.locals.organizationId },
+      where: { id: widgetId },
       data: { publicKey: generateWebsiteWidgetPublicKey() },
     });
     if (result.count === 0) return res.status(404).json({ error: 'Виджет не найден' });
