@@ -514,6 +514,8 @@ export async function listChats(req: Request, res: Response) {
           select: {
             id: true,
             name: true,
+            email: true,
+            phone: true,
             clientType: true,
             segment: true,
             status: true,
@@ -567,6 +569,14 @@ export async function listChats(req: Request, res: Response) {
 
       const base: any = {
         ...chat,
+        websiteVisitor: chat.channel === 'website' && chat.websiteSession
+          ? {
+              name: chat.websiteSession.visitorName,
+              email: chat.websiteSession.visitorEmail,
+              phone: chat.websiteSession.visitorPhone,
+              lastSeenAt: chat.websiteSession.lastSeenAt,
+            }
+          : null,
         unreadCount: chat._count.messages,
         lastMessage: chat.messages.length > 0 ? chat.messages[0] : null,
         ticket: chat.ticketNumber

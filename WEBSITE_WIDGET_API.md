@@ -161,6 +161,29 @@ curl -X PATCH https://messenger.example.com/api/widget/wgt_xxx/sessions/SESSION_
 Endpoint обновляет данные сессии, название чата и связанную карточку клиента. Если
 карточки клиента ещё нет, она будет создана с источником `website`.
 
+После обновления данные доступны операторскому API:
+
+```http
+GET /api/chats?channel=website
+Authorization: Bearer <operator-jwt>
+```
+
+Фрагмент ответа:
+
+```json
+{
+  "id": 123,
+  "channel": "website",
+  "name": "Иван Иванов",
+  "websiteVisitor": {
+    "name": "Иван Иванов",
+    "email": "ivan@example.com",
+    "phone": "+77001234567",
+    "lastSeenAt": "2026-06-15T09:00:00.000Z"
+  }
+}
+```
+
 ## 3. Загрузить историю сообщений
 
 ```http

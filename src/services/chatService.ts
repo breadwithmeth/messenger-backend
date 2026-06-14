@@ -38,11 +38,21 @@ export async function getChatsByOrganizationSortedByLastMessage(organizationId: 
           select: {
             id: true,
             name: true,
+            email: true,
+            phone: true,
             clientType: true,
             segment: true,
             status: true,
             whatsappJid: true,
             telegramUserId: true,
+          },
+        },
+        websiteSession: {
+          select: {
+            visitorName: true,
+            visitorEmail: true,
+            visitorPhone: true,
+            lastSeenAt: true,
           },
         },
         // --- ИЗМЕНЕНИЕ ЗДЕСЬ: Добавляем orderBy для messages, чтобы получить последнее ---
@@ -83,6 +93,14 @@ export async function getChatsByOrganizationSortedByLastMessage(organizationId: 
     // можно слегка преобразовать результат.
     const chatsWithLastMessage = chats.map(chat => ({
       ...chat,
+      websiteVisitor: chat.channel === 'website' && chat.websiteSession
+        ? {
+            name: chat.websiteSession.visitorName,
+            email: chat.websiteSession.visitorEmail,
+            phone: chat.websiteSession.visitorPhone,
+            lastSeenAt: chat.websiteSession.lastSeenAt,
+          }
+        : null,
       unreadCount: chat._count.messages,
       lastMessage: chat.messages.length > 0 ? chat.messages[0] : null,
       messages: undefined, // Удаляем исходный массив messages, чтобы избежать дублирования
