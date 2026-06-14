@@ -254,6 +254,23 @@ Content-Type: application/json
 
 Текст обязателен, максимальная длина — 5000 символов.
 
+### Передать или обновить данные посетителя
+
+```http
+PATCH /api/widget/:publicKey/sessions/:sessionId/profile
+Authorization: Bearer <session-token>
+Content-Type: application/json
+
+{
+  "name": "Иван Иванов",
+  "email": "ivan@example.com",
+  "phone": "+77001234567"
+}
+```
+
+Можно передавать только изменившиеся поля. `null` или пустая строка очищают поле.
+Данные синхронизируются с сессией, названием чата и карточкой клиента.
+
 ### Получить историю
 
 ```http

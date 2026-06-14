@@ -114,6 +114,53 @@ localStorage.setItem('support_chat_session', JSON.stringify({
 Созданный чат получает канал `website`, статус `new`, приоритет `urgent` и отдельный
 номер тикета.
 
+### Передать или обновить данные пользователя позже
+
+Если данные пользователя становятся известны после создания сессии, используйте:
+
+```http
+PATCH /api/widget/:publicKey/sessions/:sessionId/profile
+Authorization: Bearer <session-token>
+Content-Type: application/json
+
+{
+  "name": "Иван Иванов",
+  "email": "ivan@example.com",
+  "phone": "+77001234567"
+}
+```
+
+Пример:
+
+```bash
+curl -X PATCH https://messenger.example.com/api/widget/wgt_xxx/sessions/SESSION_ID/profile \
+  -H "Authorization: Bearer SESSION_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Иван Иванов",
+    "email": "ivan@example.com",
+    "phone": "+77001234567"
+  }'
+```
+
+Можно передать только изменившиеся поля. Чтобы очистить поле, передайте `null` или
+пустую строку.
+
+Ответ:
+
+```json
+{
+  "profile": {
+    "name": "Иван Иванов",
+    "email": "ivan@example.com",
+    "phone": "+77001234567"
+  }
+}
+```
+
+Endpoint обновляет данные сессии, название чата и связанную карточку клиента. Если
+карточки клиента ещё нет, она будет создана с источником `website`.
+
 ## 3. Загрузить историю сообщений
 
 ```http
@@ -285,6 +332,21 @@ async function ensureSession(visitor = {}) {
   return createSession(visitor);
 }
 
+async function updateProfile(profile) {
+  await ensureSession();
+
+  const result = await apiRequest(
+    `/api/widget/${encodeURIComponent(PUBLIC_KEY)}` +
+    `/sessions/${encodeURIComponent(session.id)}/profile`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(profile)
+    }
+  );
+
+  return result.profile;
+}
+
 async function loadMessages() {
   await ensureSession();
 
@@ -437,6 +499,7 @@ socket.on('message:new', (message) => {
 | Создание сессии | 120 запросов в минуту на IP и `publicKey` |
 | Получение сообщений | 120 запросов в минуту на IP и сессию |
 | Отправка сообщения | 30 запросов в минуту на IP и сессию |
+| Обновление профиля | 30 запросов в минуту на IP и сессию |
 
 При ответе `429 Too Many Requests` учитывайте заголовок `Retry-After`.
 

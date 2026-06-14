@@ -10,6 +10,12 @@ export type WebsiteVisitorDetails = {
   phone?: string;
 };
 
+export type WebsiteVisitorProfileUpdate = {
+  name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+};
+
 export function generateWebsiteWidgetPublicKey(): string {
   return `wgt_${randomBytes(18).toString('base64url')}`;
 }
@@ -34,6 +40,131 @@ function cleanOptionalText(value: unknown, maxLength: number): string | undefine
   if (typeof value !== 'string') return undefined;
   const cleaned = value.trim();
   return cleaned ? cleaned.slice(0, maxLength) : undefined;
+}
+
+function profileDisplayName(profile: WebsiteVisitorProfileUpdate): string {
+  return profile.name || profile.email || profile.phone || 'Посетитель сайта';
+}
+
+export function normalizeWebsiteVisitorProfile(value: unknown): WebsiteVisitorProfileUpdate {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Тело запроса должно быть объектом');
+  }
+
+  const input = value as Record<string, unknown>;
+  const result: WebsiteVisitorProfileUpdate = {};
+  const fields: Array<[keyof WebsiteVisitorProfileUpdate, number]> = [
+    ['name', 160],
+    ['email', 320],
+    ['phone', 64],
+  ];
+
+  for (const [field, maxLength] of fields) {
+    if (!(field in input)) continue;
+    const fieldValue = input[field];
+
+    if (fieldValue === null) {
+      result[field] = null;
+      continue;
+    }
+    if (typeof fieldValue !== 'string') {
+      throw new Error(`${field} должен быть строкой или null`);
+    }
+
+    const cleaned = fieldValue.trim();
+    result[field] = cleaned ? cleaned.slice(0, maxLength) : null;
+  }
+
+  if (Object.keys(result).length === 0) {
+    throw new Error('Передайте хотя бы одно поле: name, email или phone');
+  }
+
+  return result;
+}
+
+export async function updateWebsiteVisitorProfile(
+  session: {
+    id: string;
+    chatId: number;
+    visitorName: string | null;
+    visitorEmail: string | null;
+    visitorPhone: string | null;
+    websiteWidget: { organizationId: number };
+  },
+  update: WebsiteVisitorProfileUpdate
+) {
+  return prisma.$transaction(async (tx) => {
+    const profile = {
+      name: update.name !== undefined ? update.name : session.visitorName,
+      email: update.email !== undefined ? update.email : session.visitorEmail,
+      phone: update.phone !== undefined ? update.phone : session.visitorPhone,
+    };
+    const displayName = profileDisplayName(profile);
+
+    const updatedSession = await tx.websiteVisitorSession.update({
+      where: { id: session.id },
+      data: {
+        visitorName: profile.name,
+        visitorEmail: profile.email,
+        visitorPhone: profile.phone,
+        lastSeenAt: new Date(),
+      },
+      select: {
+        id: true,
+        visitorName: true,
+        visitorEmail: true,
+        visitorPhone: true,
+        updatedAt: true,
+      },
+    });
+
+    const chat = await tx.chat.update({
+      where: { id: session.chatId },
+      data: { name: displayName },
+      select: {
+        id: true,
+        organizationId: true,
+        name: true,
+        channel: true,
+        ticketNumber: true,
+        status: true,
+        priority: true,
+      },
+    });
+
+    const existingClient = await tx.organizationClient.findFirst({
+      where: {
+        organizationId: session.websiteWidget.organizationId,
+        source: 'website',
+        chats: { some: { id: session.chatId } },
+      },
+      select: { id: true },
+    });
+
+    const client = existingClient
+      ? await tx.organizationClient.update({
+          where: { id: existingClient.id },
+          data: {
+            name: displayName,
+            email: profile.email,
+            phone: profile.phone,
+          },
+          select: { id: true, name: true, email: true, phone: true },
+        })
+      : await tx.organizationClient.create({
+          data: {
+            organizationId: session.websiteWidget.organizationId,
+            name: displayName,
+            email: profile.email,
+            phone: profile.phone,
+            source: 'website',
+            chats: { connect: { id: session.chatId } },
+          },
+          select: { id: true, name: true, email: true, phone: true },
+        });
+
+    return { session: updatedSession, chat, client };
+  });
 }
 
 export async function createWebsiteVisitorSession(

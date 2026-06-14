@@ -4,6 +4,7 @@ import {
   getWidgetConfig,
   listSessionMessages,
   sendSessionMessage,
+  updateSessionProfile,
 } from '../controllers/websiteWidgetPublicController';
 import {
   authenticateWebsiteSession,
@@ -26,6 +27,12 @@ router.get(
   authenticateWebsiteSession,
   websiteWidgetRateLimit({ scope: 'history', max: 120, windowMs: 60 * 1000 }),
   listSessionMessages
+);
+router.patch(
+  '/:publicKey/sessions/:sessionId/profile',
+  authenticateWebsiteSession,
+  websiteWidgetRateLimit({ scope: 'profile', max: 30, windowMs: 60 * 1000 }),
+  updateSessionProfile
 );
 router.post(
   '/:publicKey/sessions/:sessionId/messages',

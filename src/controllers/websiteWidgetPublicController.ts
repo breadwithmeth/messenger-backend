@@ -2,11 +2,14 @@ import { Request, Response } from 'express';
 import prisma from '../config/prisma';
 import {
   createWebsiteVisitorSession,
+  normalizeWebsiteVisitorProfile,
   reopenWebsiteChatIfNeeded,
+  updateWebsiteVisitorProfile,
 } from '../services/websiteWidgetService';
 import {
   notifyNewChat,
   notifyNewMessage,
+  notifyChatsUpdated,
   notifyWebsiteVisitor,
 } from '../services/socketService';
 
@@ -50,6 +53,42 @@ export async function createSession(req: Request, res: Response) {
     });
   } catch {
     res.status(500).json({ error: 'Не удалось открыть чат' });
+  }
+}
+
+export async function updateSessionProfile(req: Request, res: Response) {
+  try {
+    const session = res.locals.websiteSession;
+    const profile = normalizeWebsiteVisitorProfile(req.body);
+    const result = await updateWebsiteVisitorProfile(session, profile);
+
+    notifyChatsUpdated(result.chat.organizationId, {
+      ...result.chat,
+      websiteSession: {
+        id: result.session.id,
+        visitorName: result.session.visitorName,
+        visitorEmail: result.session.visitorEmail,
+        visitorPhone: result.session.visitorPhone,
+      },
+    });
+
+    res.json({
+      profile: {
+        name: result.session.visitorName,
+        email: result.session.visitorEmail,
+        phone: result.session.visitorPhone,
+      },
+    });
+  } catch (error: any) {
+    const isValidationError = error instanceof Error && (
+      error.message.includes('должен') ||
+      error.message.includes('Передайте') ||
+      error.message.includes('Тело запроса')
+    );
+
+    res.status(isValidationError ? 400 : 500).json({
+      error: isValidationError ? error.message : 'Не удалось обновить данные посетителя',
+    });
   }
 }
 
