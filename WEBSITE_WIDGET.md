@@ -194,6 +194,9 @@ POST /api/website-widgets/:widgetId/rotate-key
 Готовый `widget.js` использует эти маршруты автоматически. Они нужны при разработке
 собственного интерфейса.
 
+Полная инструкция для прямой REST-интеграции без готового `widget.js` находится в
+[`WEBSITE_WIDGET_API.md`](./WEBSITE_WIDGET_API.md).
+
 ### Получить конфигурацию
 
 ```http
