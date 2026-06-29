@@ -8,10 +8,10 @@ import {
   sendTelegramMessage,
   getTelegramBot,
 } from '../services/telegramService';
-import pino from 'pino';
+import { createLogger } from '../config/logging';
 import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
-const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const logger = createLogger();
 
 /**
  * Получить список всех ботов организации

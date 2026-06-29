@@ -23,13 +23,13 @@ import makeWASocket, {
 import { Boom } from '@hapi/boom';
 import { createAuthDBAdapter, prisma, StoredDataType } from './authStorage';
 import qrcode from 'qrcode-terminal';
-import pino from 'pino';
+import { createLogger } from './logging';
 import { Buffer } from 'buffer';
 import * as fs from 'fs/promises'; // Для работы с файловой системой (удаление папок)
 import path from 'path'; // Для работы с путями файлов
 import { notifyNewChat, notifyNewMessage, notifyChatsUpdated } from '../services/socketService'; // Socket.IO
 
-const logger = pino({ level: 'info' });
+const logger = createLogger();
 
 function consoleBaileysSendLog(event: string, data: Record<string, unknown> = {}) {
   try {

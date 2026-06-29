@@ -2,12 +2,12 @@
 
 import { Server, Socket } from 'socket.io';
 import { Server as HTTPServer } from 'http';
-import pino from 'pino';
+import { createLogger } from '../config/logging';
 import { authenticateToken } from '../auth/tokenAuth';
 import prisma from '../config/prisma';
 import { authenticateWebsiteVisitorSession } from './websiteWidgetService';
 
-const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const logger = createLogger();
 
 let io: Server | null = null;
 

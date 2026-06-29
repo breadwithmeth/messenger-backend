@@ -4,9 +4,9 @@ import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } fro
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import fs from 'fs/promises';
 import path from 'path';
-import pino from 'pino';
+import { createLogger } from '../config/logging';
 
-const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const logger = createLogger();
 
 // Конфигурация хранилища
 const STORAGE_TYPE = process.env.STORAGE_TYPE || 'local'; // 'local', 'r2', 's3'

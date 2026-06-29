@@ -2,12 +2,12 @@
 
 import { Request, Response } from 'express';
 import * as chatService from '../services/chatService';
-import pino from 'pino';
+import { createLogger } from '../config/logging';
 import { prisma } from '../config/authStorage'; // Используем единый клиент Prisma
 import { canAccessChat, chatVisibilityWhere, messageVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 import { normalizeAppRole } from '../auth/roleUtils';
 
-const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const logger = createLogger();
 
 type TicketHistoryPoint = {
   oldValue: string | null;

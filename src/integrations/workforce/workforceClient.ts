@@ -1,4 +1,5 @@
-import pino, { Logger } from 'pino';
+import { Logger } from 'pino';
+import { createLogger } from '../../config/logging';
 import {
   mapWorkforceUpstreamError,
   UpstreamUnavailableError,
@@ -49,7 +50,7 @@ export class WorkforceClient {
     };
     this.tokenProvider = args.tokenProvider;
     this.fetchImpl = args.fetchImpl ?? fetch;
-    this.logger = args.logger ?? pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+    this.logger = args.logger ?? createLogger();
   }
 
   syncEmployee(payload: SyncEmployeeRequest, ctx?: RequestContext): Promise<EmployeeDto> {

@@ -4,13 +4,116 @@ import { Request, Response } from 'express';
 import { createWABAService } from '../services/wabaService';
 import { prisma } from '../config/authStorage';
 import { ensureChat } from '../config/baileys';
-import pino from 'pino';
+import { createLogger } from '../config/logging';
 import axios from 'axios';
 import { chatVisibilityWhere, messageVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
-const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const logger = createLogger();
 const SENSITIVE_LOG_KEY = /(authorization|cookie|password|secret|token)/i;
 const REDACTED_LOG_VALUE = '[REDACTED]';
+const WABA_BROADCAST_SYNC_RECIPIENT_LIMIT = getPositiveIntegerEnv('WABA_BROADCAST_SYNC_RECIPIENT_LIMIT', 100);
+const WABA_BROADCAST_JOB_TTL_MS = getPositiveIntegerEnv('WABA_BROADCAST_JOB_TTL_MS', 24 * 60 * 60 * 1000);
+
+type WABAServiceInstance = NonNullable<Awaited<ReturnType<typeof createWABAService>>>;
+
+type BroadcastJobStatus = 'queued' | 'running' | 'completed' | 'failed';
+
+type BroadcastRecipientResult = {
+  to: string;
+  success: boolean;
+  messageId?: string;
+  error?: string;
+};
+
+type BroadcastTotals = {
+  requested: number;
+  normalized: number;
+  processed: number;
+  success: number;
+  fail: number;
+};
+
+type BroadcastPayload = {
+  organizationPhoneId: number;
+  recipients: unknown[];
+  normalizedRecipients: string[];
+  templateName: string;
+  language: string;
+  components: any[];
+  delayMs: number;
+  dryRun: boolean;
+};
+
+type BroadcastContext = {
+  organizationId: number;
+  userId?: number;
+  canAccessHrChats: boolean;
+};
+
+type BroadcastExecutionResult = {
+  success: boolean;
+  dryRun: boolean;
+  organizationPhoneId: number;
+  templateName: string;
+  language: string;
+  delayMs: number;
+  totals: BroadcastTotals;
+  results: BroadcastRecipientResult[];
+};
+
+type BroadcastJob = BroadcastExecutionResult & {
+  id: string;
+  status: BroadcastJobStatus;
+  organizationId: number;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  error?: string;
+};
+
+const broadcastJobs = new Map<string, BroadcastJob>();
+
+function getPositiveIntegerEnv(name: string, fallback: number): number {
+  const parsed = Number.parseInt(String(process.env[name] || ''), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseBoolean(value: unknown, fallback = false): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'y'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'n'].includes(normalized)) return false;
+  }
+  return fallback;
+}
+
+function parseDelayMs(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return 250;
+  return Math.min(Math.floor(parsed), 60_000);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function createBroadcastJobId(): string {
+  return `waba_broadcast_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function cleanupBroadcastJobs() {
+  const now = Date.now();
+
+  for (const [jobId, job] of broadcastJobs.entries()) {
+    if (!['completed', 'failed'].includes(job.status)) continue;
+    if (now - Date.parse(job.updatedAt) > WABA_BROADCAST_JOB_TTL_MS) {
+      broadcastJobs.delete(jobId);
+    }
+  }
+}
 
 function normalizePhone(value: unknown): string | null {
   const digits = String(value ?? '').replace(/\D/g, '');
@@ -40,6 +143,206 @@ async function canAccessExistingWabaChat(
   });
 
   return !existingChat?.isHr || canAccessHrChats;
+}
+
+function getBroadcastErrorMessage(error: any): string {
+  return error?.response?.data?.error?.message || error?.message || 'Unknown error';
+}
+
+async function sendBroadcastTemplateRecipient(args: {
+  to: string;
+  orgPhone: any;
+  payload: BroadcastPayload;
+  context: BroadcastContext;
+  wabaService: WABAServiceInstance | null;
+}): Promise<BroadcastRecipientResult> {
+  const { to, orgPhone, payload, context, wabaService } = args;
+  const remoteJid = `${to}@s.whatsapp.net`;
+
+  try {
+    const canAccessChat = await canAccessExistingWabaChat(
+      orgPhone.organizationId,
+      orgPhone.id,
+      remoteJid,
+      context.canAccessHrChats
+    );
+
+    if (!canAccessChat) {
+      return { to, success: false, error: 'Chat not found' };
+    }
+
+    if (!payload.dryRun && wabaService) {
+      const sendResult = await wabaService.sendTemplateMessage(
+        to,
+        payload.templateName,
+        payload.language,
+        payload.components
+      );
+
+      const messageId = sendResult?.messages?.[0]?.id;
+
+      const chatId = await ensureChat(
+        orgPhone.organizationId,
+        orgPhone.id,
+        orgPhone.phoneJid,
+        remoteJid,
+        undefined,
+        { reopenClosedTicket: false }
+      );
+      const chat = await prisma.chat.findUnique({
+        where: { id: chatId },
+        select: { isHr: true },
+      });
+
+      await prisma.message.create({
+        data: {
+          chatId,
+          organizationPhoneId: orgPhone.id,
+          organizationId: orgPhone.organizationId,
+          channel: 'whatsapp',
+          whatsappMessageId: messageId,
+          receivingPhoneJid: orgPhone.phoneJid,
+          remoteJid,
+          senderJid: orgPhone.phoneJid,
+          fromMe: true,
+          content: `Template: ${payload.templateName}`,
+          type: 'template',
+          timestamp: new Date(),
+          status: 'sent',
+          senderUserId: context.userId,
+          isReadByOperator: true,
+          isHr: chat?.isHr === true,
+        },
+      });
+
+      return { to, success: true, messageId };
+    }
+
+    return { to, success: true };
+  } catch (error: any) {
+    return { to, success: false, error: getBroadcastErrorMessage(error) };
+  }
+}
+
+async function executeBroadcastTemplate(args: {
+  orgPhone: any;
+  payload: BroadcastPayload;
+  context: BroadcastContext;
+  wabaService: WABAServiceInstance | null;
+  onResult?: (result: BroadcastRecipientResult, totals: BroadcastTotals) => void;
+}): Promise<BroadcastExecutionResult> {
+  const { orgPhone, payload, context, wabaService, onResult } = args;
+  const results: BroadcastRecipientResult[] = [];
+  const totals: BroadcastTotals = {
+    requested: payload.recipients.length,
+    normalized: payload.normalizedRecipients.length,
+    processed: 0,
+    success: 0,
+    fail: 0,
+  };
+
+  for (let idx = 0; idx < payload.normalizedRecipients.length; idx++) {
+    const result = await sendBroadcastTemplateRecipient({
+      to: payload.normalizedRecipients[idx],
+      orgPhone,
+      payload,
+      context,
+      wabaService,
+    });
+
+    results.push(result);
+    totals.processed = results.length;
+    if (result.success) {
+      totals.success += 1;
+    } else {
+      totals.fail += 1;
+    }
+    onResult?.(result, { ...totals });
+
+    if (idx < payload.normalizedRecipients.length - 1 && payload.delayMs > 0) {
+      await sleep(payload.delayMs);
+    }
+  }
+
+  return {
+    success: totals.fail === 0,
+    dryRun: payload.dryRun,
+    organizationPhoneId: payload.organizationPhoneId,
+    templateName: payload.templateName,
+    language: payload.language,
+    delayMs: payload.delayMs,
+    totals,
+    results,
+  };
+}
+
+function startBroadcastTemplateJob(args: {
+  orgPhone: any;
+  payload: BroadcastPayload;
+  context: BroadcastContext;
+  wabaService: WABAServiceInstance | null;
+}): BroadcastJob {
+  cleanupBroadcastJobs();
+
+  const { orgPhone, payload, context, wabaService } = args;
+  const now = new Date().toISOString();
+  const job: BroadcastJob = {
+    id: createBroadcastJobId(),
+    status: 'queued',
+    organizationId: context.organizationId,
+    createdAt: now,
+    updatedAt: now,
+    success: false,
+    dryRun: payload.dryRun,
+    organizationPhoneId: payload.organizationPhoneId,
+    templateName: payload.templateName,
+    language: payload.language,
+    delayMs: payload.delayMs,
+    totals: {
+      requested: payload.recipients.length,
+      normalized: payload.normalizedRecipients.length,
+      processed: 0,
+      success: 0,
+      fail: 0,
+    },
+    results: [],
+  };
+
+  broadcastJobs.set(job.id, job);
+
+  void (async () => {
+    job.status = 'running';
+    job.startedAt = new Date().toISOString();
+    job.updatedAt = job.startedAt;
+
+    try {
+      const result = await executeBroadcastTemplate({
+        orgPhone,
+        payload,
+        context,
+        wabaService,
+        onResult: (recipientResult, totals) => {
+          job.results.push(recipientResult);
+          job.totals = totals;
+          job.updatedAt = new Date().toISOString();
+        },
+      });
+
+      job.status = 'completed';
+      job.success = result.success;
+      job.totals = result.totals;
+      job.results = result.results;
+    } catch (error: any) {
+      job.status = 'failed';
+      job.success = false;
+      job.error = getBroadcastErrorMessage(error);
+    } finally {
+      job.completedAt = new Date().toISOString();
+      job.updatedAt = job.completedAt;
+    }
+  })();
+
+  return job;
 }
 
 function redactForConsoleLog(value: unknown): unknown {
@@ -934,9 +1237,14 @@ export const broadcastTemplate = async (req: Request, res: Response) => {
       });
     }
 
+    const parsedOrganizationPhoneId = Number(organizationPhoneId);
+    if (!Number.isInteger(parsedOrganizationPhoneId) || parsedOrganizationPhoneId <= 0) {
+      return res.status(400).json({ error: 'organizationPhoneId must be a positive integer' });
+    }
+
     const orgPhone = await prisma.organizationPhone.findFirst({
       where: {
-        id: Number(organizationPhoneId),
+        id: parsedOrganizationPhoneId,
         organizationId: res.locals.organizationId,
         connectionType: 'waba',
       },
@@ -944,14 +1252,6 @@ export const broadcastTemplate = async (req: Request, res: Response) => {
 
     if (!orgPhone) {
       return res.status(404).json({ error: 'Organization phone not found or not configured for WABA' });
-    }
-
-    const wabaService = await createWABAService(Number(organizationPhoneId));
-    if (!wabaService && !dryRun) {
-      return res.status(500).json({
-        error: 'WABA service not configured',
-        details: 'wabaAccessToken is missing in database. Please update OrganizationPhone with your permanent System User Access Token from Meta.',
-      });
     }
 
     const normalizedRecipients = recipients
@@ -962,102 +1262,111 @@ export const broadcastTemplate = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'No valid recipients after phone normalization' });
     }
 
-    const results: Array<{ to: string; success: boolean; messageId?: string; error?: string }> = [];
+    const payload: BroadcastPayload = {
+      organizationPhoneId: parsedOrganizationPhoneId,
+      recipients,
+      normalizedRecipients,
+      templateName: String(templateName),
+      language: String(language),
+      components: Array.isArray(components) ? components : [],
+      delayMs: parseDelayMs(delayMs),
+      dryRun: parseBoolean(dryRun, false),
+    };
+    const userId = Number(res.locals.userId);
+    const context: BroadcastContext = {
+      organizationId: orgPhone.organizationId,
+      userId: Number.isInteger(userId) ? userId : undefined,
+      canAccessHrChats,
+    };
 
-    for (let idx = 0; idx < normalizedRecipients.length; idx++) {
-      const to = normalizedRecipients[idx];
-      const remoteJid = `${to}@s.whatsapp.net`;
-
-      try {
-        const canAccessChat = await canAccessExistingWabaChat(
-          orgPhone.organizationId,
-          orgPhone.id,
-          remoteJid,
-          canAccessHrChats
-        );
-
-        if (!canAccessChat) {
-          results.push({ to, success: false, error: 'Chat not found' });
-          continue;
-        }
-
-        if (!dryRun && wabaService) {
-          const sendResult = await wabaService.sendTemplateMessage(
-            to,
-            String(templateName),
-            String(language),
-            Array.isArray(components) ? components : []
-          );
-
-          const messageId = sendResult?.messages?.[0]?.id;
-
-          const chatId = await ensureChat(
-            orgPhone.organizationId,
-            orgPhone.id,
-            orgPhone.phoneJid,
-            remoteJid,
-            undefined,
-            { reopenClosedTicket: false }
-          );
-          const chat = await prisma.chat.findUnique({
-            where: { id: chatId },
-            select: { isHr: true },
-          });
-
-          await prisma.message.create({
-            data: {
-              chatId,
-              organizationPhoneId: orgPhone.id,
-              organizationId: orgPhone.organizationId,
-              channel: 'whatsapp',
-              whatsappMessageId: messageId,
-              receivingPhoneJid: orgPhone.phoneJid,
-              remoteJid,
-              senderJid: orgPhone.phoneJid,
-              fromMe: true,
-              content: `Template: ${templateName}`,
-              type: 'template',
-              timestamp: new Date(),
-              status: 'sent',
-              senderUserId: res.locals.userId,
-              isReadByOperator: true,
-              isHr: chat?.isHr === true,
-            },
-          });
-
-          results.push({ to, success: true, messageId });
-        } else {
-          results.push({ to, success: true });
-        }
-      } catch (error: any) {
-        const errorMessage = error?.response?.data?.error?.message || error?.message || 'Unknown error';
-        results.push({ to, success: false, error: errorMessage });
-      }
-
-      if (idx < normalizedRecipients.length - 1 && Number(delayMs) > 0) {
-        await new Promise(resolve => setTimeout(resolve, Number(delayMs)));
-      }
+    const wabaService = await createWABAService(parsedOrganizationPhoneId);
+    if (!wabaService && !payload.dryRun) {
+      return res.status(500).json({
+        error: 'WABA service not configured',
+        details: 'wabaAccessToken is missing in database. Please update OrganizationPhone with your permanent System User Access Token from Meta.',
+      });
     }
 
-    const successCount = results.filter(item => item.success).length;
-    const failCount = results.length - successCount;
+    const asyncRequested = req.body.async ?? req.body.runAsync;
+    const runAsync = asyncRequested === undefined
+      ? normalizedRecipients.length > WABA_BROADCAST_SYNC_RECIPIENT_LIMIT
+      : parseBoolean(asyncRequested, false);
+
+    if (runAsync) {
+      const job = startBroadcastTemplateJob({
+        orgPhone,
+        payload,
+        context,
+        wabaService,
+      });
+
+      return res.status(202).json({
+        success: true,
+        accepted: true,
+        mode: 'async',
+        jobId: job.id,
+        status: job.status,
+        statusUrl: `/api/waba/broadcast-template/jobs/${job.id}`,
+        dryRun: job.dryRun,
+        organizationPhoneId: job.organizationPhoneId,
+        templateName: job.templateName,
+        language: job.language,
+        delayMs: job.delayMs,
+        totals: job.totals,
+      });
+    }
+
+    const result = await executeBroadcastTemplate({
+      orgPhone,
+      payload,
+      context,
+      wabaService,
+    });
 
     res.json({
-      success: failCount === 0,
-      dryRun: Boolean(dryRun),
-      organizationPhoneId: Number(organizationPhoneId),
-      templateName,
-      language,
-      totals: {
-        requested: recipients.length,
-        normalized: normalizedRecipients.length,
-        success: successCount,
-        fail: failCount,
-      },
-      results,
+      mode: 'sync',
+      ...result,
     });
   } catch (error: any) {
     logger.error('❌ WABA: Broadcast template error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+/**
+ * Статус фоновой массовой отправки шаблонного сообщения через WABA
+ * GET /api/waba/broadcast-template/jobs/:jobId
+ */
+export const getBroadcastTemplateJob = async (req: Request, res: Response) => {
+  try {
+    cleanupBroadcastJobs();
+
+    const jobId = String(req.params.jobId || '');
+    const job = broadcastJobs.get(jobId);
+
+    if (!job || job.organizationId !== res.locals.organizationId) {
+      return res.status(404).json({ error: 'Broadcast job not found' });
+    }
+
+    res.json({
+      id: job.id,
+      status: job.status,
+      success: job.success,
+      dryRun: job.dryRun,
+      organizationPhoneId: job.organizationPhoneId,
+      templateName: job.templateName,
+      language: job.language,
+      delayMs: job.delayMs,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+      error: job.error,
+      totals: job.totals,
+      results: job.results,
+    });
+  } catch (error: any) {
+    logger.error('❌ WABA: Broadcast template job status error:', error);
     res.status(500).json({ error: error.message });
   }
 };

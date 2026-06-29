@@ -1,9 +1,9 @@
 // src/controllers/accountController.ts
 import { Request, Response } from 'express';
 import { prisma } from '../config/authStorage';
-import pino from 'pino';
+import { createLogger } from '../config/logging';
 
-const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const logger = createLogger();
 
 /**
  * Создает новую запись о WhatsApp-номере (аккаунте) для организации.

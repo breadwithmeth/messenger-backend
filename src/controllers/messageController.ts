@@ -3,14 +3,14 @@
 import { Request, Response } from 'express';
 import { getBaileysSock, sendMessage } from '../config/baileys';
 import { jidNormalizedUser } from '@whiskeysockets/baileys';
-import pino from 'pino';
+import { createLogger } from '../config/logging';
 import { prisma } from '../config/authStorage'; // Для получения phoneJid
 import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
 import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
-const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const logger = createLogger();
 const SENSITIVE_LOG_KEY = /(authorization|cookie|password|secret|token)/i;
 const REDACTED_LOG_VALUE = '[REDACTED]';
 const WABA_SEND_RETRY_DELAYS_MS = [750, 2000];

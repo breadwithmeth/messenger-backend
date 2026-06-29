@@ -1,4 +1,5 @@
 // src/config/authStorage.ts
+import './logging';
 import { Buffer } from 'buffer';
 import prisma from './prisma';
 

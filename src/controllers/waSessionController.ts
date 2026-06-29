@@ -1,5 +1,6 @@
 // 📁 src/controllers/waSessionController.ts
 
+import '../config/logging';
 import { Request, Response } from 'express';
 import { startWaSession } from '../services/waService';
 // import { getQrCodeForSession } from '../config/baileys'; // <-- УДАЛИТЬ ЭТУ СТРОКУ, т.к. она больше не нужна

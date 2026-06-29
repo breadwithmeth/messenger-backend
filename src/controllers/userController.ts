@@ -1,3 +1,4 @@
+import '../config/logging';
 import { Request, Response } from 'express';
 import bcrypt from 'bcrypt';
 import { AuthRequest } from '../middlewares/authMiddleware'; // Импортируем AuthRequest

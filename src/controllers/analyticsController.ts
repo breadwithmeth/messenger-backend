@@ -3,10 +3,10 @@
 import { Request, Response } from 'express';
 import { prisma } from '../config/authStorage';
 import { Prisma } from '@prisma/client';
-import pino from 'pino';
+import { createLogger } from '../config/logging';
 import { chatVisibilityWhere, messageVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
-const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const logger = createLogger();
 
 function parseDateParam(raw: unknown): Date | null {
   if (!raw || typeof raw !== 'string') return null;

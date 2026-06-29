@@ -1,7 +1,7 @@
-import pino from 'pino';
+import { createLogger } from '../config/logging';
 import prisma from '../config/prisma';
 
-const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const logger = createLogger();
 
 interface CreateTagInput {
   name: string;

@@ -3,9 +3,9 @@
 import { Request, Response } from 'express';
 import { getBaileysSock } from '../config/baileys';
 import { jidNormalizedUser } from '@whiskeysockets/baileys';
-import pino from 'pino';
+import { createLogger } from '../config/logging';
 
-const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const logger = createLogger();
 
 // GET /api/chats/:remoteJid/profile
 export async function getContactProfile(req: Request, res: Response) {

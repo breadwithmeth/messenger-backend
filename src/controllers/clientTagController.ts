@@ -1,9 +1,9 @@
 import { Response } from 'express';
 import { AuthRequest } from '../middlewares/authMiddleware';
-import pino from 'pino';
+import { createLogger } from '../config/logging';
 import * as tagService from '../services/clientTagService';
 
-const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const logger = createLogger();
 
 /**
  * 🏷️ GET /api/clients/tags - Получить все теги организации

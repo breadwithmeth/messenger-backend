@@ -2,10 +2,10 @@
 
 import axios from 'axios';
 import { prisma } from '../config/authStorage';
-import pino from 'pino';
+import { createLogger } from '../config/logging';
 import { saveMedia } from './storageService';
 
-const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const logger = createLogger();
 
 interface WABAConfig {
   accessToken: string;

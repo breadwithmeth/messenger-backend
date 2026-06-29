@@ -1,15 +1,15 @@
+import { createLogger } from './config/logging';
 import http from 'http';
 import app from './app';
 import { startWaSession } from './services/waService'; // Импортируйте startWaSession
 import { startAllTelegramBots, stopAllTelegramBots } from './services/telegramService'; // <-- НОВОЕ
 import { initializeSocketIO } from './services/socketService'; // <-- Socket.IO
-import pino from 'pino'; // Добавьте импорт pino
 import { prisma } from './config/authStorage'; // Импортируйте prisma
 
 const PORT = process.env.PORT || 3000;
 
 const server = http.createServer(app);
-const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' }); // Инициализируйте logger
+const logger = createLogger(); // Инициализируйте logger
 
 // Инициализируем Socket.IO
 initializeSocketIO(server);

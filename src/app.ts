@@ -1,6 +1,4 @@
-import dotenv from 'dotenv';
-dotenv.config(); // Загружаем переменные окружения из .env
-
+import { createLogger } from './config/logging';
 import express from 'express';
 import authRoutes from './routes/authRoutes';
 import organizationRoutes from './routes/organizationRoutes';
@@ -21,7 +19,6 @@ import cors, { CorsOptions } from 'cors';
 import path from 'path'; // <--- ДОБАВИТЬ
 import { startBaileys } from './config/baileys';
 import prisma from './config/prisma';
-import pino from 'pino'; // Добавьте импорт pino
 import { startWaSession } from './services/waService'; // Импортируйте startWaSession
 import organizationPhoneRoutes from './routes/organizationPhoneRoutes';
 import accountRoutes from './routes/accountRoutes';
@@ -34,7 +31,7 @@ import websiteWidgetPublicRoutes from './routes/websiteWidgetPublicRoutes';
 
 
 const app = express();
-const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' }); // Инициализируйте logger
+const logger = createLogger(); // Инициализируйте logger
 const SENSITIVE_LOG_KEY = /(authorization|cookie|password|secret|token)/i;
 const REDACTED_LOG_VALUE = '[REDACTED]';
 
@@ -53,10 +50,6 @@ function redactForRequestLog(value: unknown): unknown {
       SENSITIVE_LOG_KEY.test(key) ? REDACTED_LOG_VALUE : redactForRequestLog(childValue),
     ])
   );
-}
-
-if ((process.env.APP_LOG_LEVEL || 'silent') === 'silent') {
-  console.error = () => undefined;
 }
 
 app.use(express.json());

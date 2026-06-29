@@ -2,10 +2,10 @@
 
 import OpenAI from 'openai';
 import { prisma } from '../config/authStorage';
-import pino from 'pino';
+import { createLogger } from '../config/logging';
 import { chatVisibilityWhere, messageVisibilityWhere } from '../auth/hrAccess';
 
-const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const logger = createLogger();
 
 // DeepSeek API configuration
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';

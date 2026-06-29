@@ -1,11 +1,11 @@
 // src/middlewares/authMiddleware.ts
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import pino from 'pino';
+import { createLogger } from '../config/logging';
 import { syncEmployeeFromClaims } from '../integrations/workforce/workforceIntegration';
 import { authenticateToken } from '../auth/tokenAuth';
 
-const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const logger = createLogger();
 const AUTH_DEBUG_RESPONSE = process.env.AUTH_DEBUG_RESPONSE === 'true' || process.env.NODE_ENV !== 'production';
 
 export interface AuthRequest extends Request {

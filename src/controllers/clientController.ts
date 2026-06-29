@@ -1,3 +1,4 @@
+import '../config/logging';
 import { Response } from 'express';
 import { AuthRequest } from '../middlewares/authMiddleware';
 import prisma from '../config/prisma';

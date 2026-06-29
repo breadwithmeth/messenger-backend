@@ -2,10 +2,10 @@
 
 import { Request, Response } from 'express';
 import { getSuggestedResponses, checkAIServiceHealth } from '../services/aiService';
-import pino from 'pino';
+import { createLogger } from '../config/logging';
 import { userCanAccessHrChats } from '../auth/hrAccess';
 
-const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const logger = createLogger();
 
 /**
  * GET /api/ai/suggestions/:chatId

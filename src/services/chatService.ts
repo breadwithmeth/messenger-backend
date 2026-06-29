@@ -1,9 +1,9 @@
 // src/services/chatService.ts
 import { prisma } from '../config/authStorage';
-import pino from 'pino';
+import { createLogger } from '../config/logging';
 import { chatVisibilityWhere, messageVisibilityWhere } from '../auth/hrAccess';
 
-const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const logger = createLogger();
 
 export async function getChatsByOrganizationSortedByLastMessage(organizationId: number, canAccessHrChats = false) {
   try {

@@ -6,10 +6,10 @@ import { saveUploadedMedia, validateMediaFile } from '../services/mediaService';
 import { sendMessage, getBaileysSock } from '../config/baileys';
 import { jidNormalizedUser } from '@whiskeysockets/baileys';
 import { prisma } from '../config/authStorage';
-import pino from 'pino';
+import { createLogger } from '../config/logging';
 import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
-const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const logger = createLogger();
 
 function consoleMediaSendLog(event: string, data: Record<string, unknown> = {}) {
   try {

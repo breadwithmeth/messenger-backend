@@ -1,4 +1,5 @@
-import pino, { Logger } from 'pino';
+import { Logger } from 'pino';
+import { createLogger } from '../../config/logging';
 import { getWorkforceConfig } from '../../config/workforceConfig';
 import { KeycloakClientCredentialsTokenProvider } from './tokenProvider';
 import { WorkforceClient } from './workforceClient';
@@ -13,7 +14,7 @@ export type AuthClaims = {
 };
 
 let singleton: WorkforceClient | null = null;
-const baseLogger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const baseLogger = createLogger();
 
 export function getWorkforceClient(): WorkforceClient {
   if (singleton) return singleton;

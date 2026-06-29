@@ -1,4 +1,5 @@
-import pino, { Logger } from 'pino';
+import { Logger } from 'pino';
+import { createLogger } from '../../config/logging';
 
 export type ServiceTokenProviderConfig = {
   keycloakBaseUrl: string;
@@ -21,7 +22,7 @@ export class KeycloakClientCredentialsTokenProvider {
 
   constructor(config: ServiceTokenProviderConfig, logger?: Logger) {
     this.config = config;
-    this.logger = logger ?? pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+    this.logger = logger ?? createLogger();
   }
 
   async getToken(): Promise<string> {

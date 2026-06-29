@@ -3,10 +3,10 @@
 import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
-import pino from 'pino';
+import { createLogger } from '../config/logging';
 import { saveMedia } from './storageService'; // Импорт универсального storage
 
-const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const logger = createLogger();
 const writeFile = promisify(fs.writeFile);
 const mkdir = promisify(fs.mkdir);
 

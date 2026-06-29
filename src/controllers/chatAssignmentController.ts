@@ -3,10 +3,10 @@
 import { Request, Response } from 'express';
 import { prisma } from '../config/authStorage';
 import { notifyNewMessage } from '../services/socketService';
-import pino from 'pino';
+import { createLogger } from '../config/logging';
 import { chatVisibilityWhere, messageVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
 
-const logger = pino({ level: process.env.APP_LOG_LEVEL || 'silent' });
+const logger = createLogger();
 
 /**
  * Назначает чат определенному оператору

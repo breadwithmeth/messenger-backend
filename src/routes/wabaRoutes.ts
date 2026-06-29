@@ -7,6 +7,7 @@ import {
   handleWebhook,
   sendMessage,
   broadcastTemplate,
+  getBroadcastTemplateJob,
   getDiagnostics,
   getTemplates,
   getWabaLogs,
@@ -24,6 +25,7 @@ router.post('/webhook', handleWebhook);
 // Protected endpoints (требуют авторизации)
 router.post('/send', authMiddleware, sendMessage);
 router.post('/broadcast-template', authMiddleware, broadcastTemplate);
+router.get('/broadcast-template/jobs/:jobId', authMiddleware, getBroadcastTemplateJob);
 router.get('/diagnostics', authMiddleware, getDiagnostics);
 router.get('/templates', authMiddleware, getTemplates);
 router.get('/logs', authMiddleware, getWabaLogs);
