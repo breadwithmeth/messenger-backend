@@ -959,8 +959,11 @@ async function handleIncomingMessage(orgPhone: any, message: any, contact?: any)
           quotedContent = quotedDbMsg.content || '[Документ]';
         } else if (quotedDbMsg.type === 'audio') {
           quotedContent = '[Аудио]';
+        } else if (quotedDbMsg.type === 'interactive_flow') {
+          // Цитата на Flow-форму: показываем текст карточки вместо [тип]
+          quotedContent = quotedDbMsg.content || '[Форма]';
         } else {
-          quotedContent = `[${quotedDbMsg.type}]`;
+          quotedContent = quotedDbMsg.content || `[${quotedDbMsg.type}]`;
         }
       } else {
         quotedContent = '[Сообщение не найдено]';

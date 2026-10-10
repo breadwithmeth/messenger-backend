@@ -206,10 +206,11 @@ export class WABAService {
           flow_token: options.flowToken,
           flow_id: options.flowId,
           flow_cta: options.ctaText || 'Заполнить форму',
+          // mode (published|draft) находится на уровне parameters, а не внутри flow_action_payload
+          mode: options.mode || 'published',
           flow_action: 'navigate',
           flow_action_payload: {
             screen: options.screen || 'COLLECT_DATA',
-            mode: options.mode || 'published',
           },
         },
       },

@@ -88,7 +88,14 @@ export const COLLECTION_FLOW_JSON = {
                 label: 'Отправить',
                 'on-click-action': {
                   name: 'complete',
-                  payload: {},
+                  // ВАЖНО: для Meta-hosted flow в payload нужно явно прокинуть значения
+                  // полей через ${form.<name>} — иначе в ответе придёт только flow_token
+                  payload: {
+                    name: '${form.NameInput}',
+                    city: '${form.CityInput}',
+                    address: '${form.AddressInput}',
+                    paymentType: '${form.PaymentType}',
+                  },
                 },
               },
             ],
@@ -222,14 +229,22 @@ export interface ParsedFlowResponse {
 
 /**
  * Маппинг ключей response_json на поля формы.
- * Meta генерирует ключи вида screen_0_NameInput_0, screen_0_CityInput_1 и т.д.
- * Ищем по подстроке имени компонента, чтобы не зависеть от индексов.
+ *
+ * Поддерживаются два формата:
+ * 1. Точные ключи из payload Footer-а: name, city, address, paymentType (текущая форма).
+ * 2. Автогенерированные ключи Meta вида screen_0_NameInput_0, screen_0_CityInput_1 и т.д.
+ *    (поиск по подстроке имени компонента — устойчив к смещению индексов).
  */
 function findValueByComponent(raw: Record<string, any>, componentName: string): string | null {
   const key = Object.keys(raw).find(
     (k) => k.toLowerCase().includes(componentName.toLowerCase())
   );
   if (key === undefined) return null;
+  const value = raw[key];
+  return value === undefined || value === null ? null : String(value).trim() || null;
+}
+
+function readString(raw: Record<string, any>, key: string): string | null {
   const value = raw[key];
   return value === undefined || value === null ? null : String(value).trim() || null;
 }
@@ -249,19 +264,18 @@ export function parseFlowResponse(responseJson: string): ParsedFlowResponse | nu
   if (!raw || typeof raw !== 'object') return null;
 
   const flowToken = typeof raw.flow_token === 'string' ? raw.flow_token : null;
-  const name = findValueByComponent(raw, 'NameInput');
-  const city = findValueByComponent(raw, 'CityInput');
-  const address = findValueByComponent(raw, 'AddressInput');
-  const paymentTypeRaw = findValueByComponent(raw, 'PaymentType');
+  const name = readString(raw, 'name') ?? findValueByComponent(raw, 'NameInput');
+  const city = readString(raw, 'city') ?? findValueByComponent(raw, 'CityInput');
+  const address = readString(raw, 'address') ?? findValueByComponent(raw, 'AddressInput');
   // RadioButtons возвращает id опции (cash/halyk/kaspi); если значение кастомное — оставляем как есть
-  const paymentType = paymentTypeRaw;
+  const paymentType = readString(raw, 'paymentType') ?? findValueByComponent(raw, 'PaymentType');
 
   const lines: string[] = [];
   if (name) lines.push(`Имя: ${name}`);
   if (city) lines.push(`Город: ${city}`);
   if (address) lines.push(`Адрес: ${address}`);
-  if (paymentTypeRaw) {
-    lines.push(`Тип оплаты: ${PAYMENT_TYPE_OPTIONS[paymentTypeRaw] || paymentTypeRaw}`);
+  if (paymentType) {
+    lines.push(`Тип оплаты: ${PAYMENT_TYPE_OPTIONS[paymentType] || paymentType}`);
   }
   const displayText = lines.join('\n') || '📋 Ответ из формы (данные не распознаны)';
 
