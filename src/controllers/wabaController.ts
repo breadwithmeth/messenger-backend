@@ -7,6 +7,17 @@ import { ensureChat } from '../config/baileys';
 import { createLogger } from '../config/logging';
 import axios from 'axios';
 import { chatVisibilityWhere, messageVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
+import {
+  COLLECTION_FLOW_JSON,
+  FLOW_COLLECTION_SCREEN,
+  createFlow,
+  generateFlowToken,
+  getFlowStatus,
+  parseFlowResponse,
+  publishFlow,
+  uploadFlowJson,
+  type ParsedFlowResponse,
+} from '../services/whatsappFlowService';
 
 const logger = createLogger();
 const SENSITIVE_LOG_KEY = /(authorization|cookie|password|secret|token)/i;
@@ -143,6 +154,121 @@ async function canAccessExistingWabaChat(
   });
 
   return !existingChat?.isHr || canAccessHrChats;
+}
+
+/**
+ * Отправка Flow-формы в чат с сохранением сообщения в БД.
+ * Используется для ручной отправки (POST /api/waba/flow/send)
+ * и для автоотправки при создании нового чата / переоткрытии закрытого.
+ */
+async function sendFlowToChat(args: {
+  orgPhone: any;
+  to: string;
+  remoteJid: string;
+  chatId: number;
+  flowId: string;
+  mode?: 'published' | 'draft';
+  headerText?: string;
+  bodyText?: string;
+  footerText?: string;
+  ctaText?: string;
+  senderUserId?: number | null;
+}): Promise<{ messageId?: string; flowToken: string; data: any }> {
+  const wabaService = await createWABAService(args.orgPhone.id);
+  if (!wabaService) {
+    throw new Error('WABA service not configured');
+  }
+
+  const flowToken = generateFlowToken(args.chatId, args.remoteJid);
+  const bodyText = args.bodyText || 'Заполните данные: Имя, Город, Адрес и Тип оплаты.';
+
+  const result = await wabaService.sendFlowMessage(args.to, {
+    flowId: String(args.flowId),
+    flowToken,
+    ctaText: args.ctaText,
+    headerText: args.headerText || 'Оформление заказа',
+    bodyText,
+    footerText: args.footerText,
+    screen: FLOW_COLLECTION_SCREEN,
+    mode: args.mode === 'draft' ? 'draft' : 'published',
+  });
+
+  const chat = await prisma.chat.findUnique({
+    where: { id: args.chatId },
+    select: { isHr: true },
+  });
+
+  const messageId = result.messages?.[0]?.id;
+
+  await prisma.message.create({
+    data: {
+      chatId: args.chatId,
+      organizationPhoneId: args.orgPhone.id,
+      organizationId: args.orgPhone.organizationId,
+      channel: 'whatsapp',
+      whatsappMessageId: messageId,
+      receivingPhoneJid: args.orgPhone.phoneJid,
+      remoteJid: args.remoteJid,
+      senderJid: args.orgPhone.phoneJid,
+      fromMe: true,
+      content: bodyText,
+      type: 'interactive_flow',
+      timestamp: new Date(),
+      status: 'sent',
+      senderUserId: args.senderUserId ?? null,
+      isReadByOperator: true,
+      isHr: chat?.isHr === true,
+    },
+  });
+
+  // Обновляем lastMessageAt, чтобы форма была видна в списке чатов
+  await prisma.chat.update({
+    where: { id: args.chatId },
+    data: { lastMessageAt: new Date() },
+  });
+
+  return { messageId, flowToken, data: result };
+}
+
+/**
+ * Автоотправка Flow-формы сбора данных: при создании нового чата
+ * или переоткрытии закрытого чата (статус сменился на 'new').
+ * Пропускается, если Flow не настроен (wabaFlowId пустой).
+ */
+async function autoSendCollectionFlowIfNeeded(args: {
+  orgPhone: any;
+  to: string;
+  remoteJid: string;
+  chatId: number;
+  isNewChat: boolean;
+  isReopenedClosedChat: boolean;
+}): Promise<void> {
+  const { orgPhone, isNewChat, isReopenedClosedChat, chatId } = args;
+
+  if (!isNewChat && !isReopenedClosedChat) {
+    return;
+  }
+
+  if (!orgPhone.wabaFlowId) {
+    logger.info('📋 WABA Flow: Автоотправка формы пропущена — Flow не настроен (wabaFlowId пустой)');
+    return;
+  }
+
+  try {
+    const sent = await sendFlowToChat({
+      orgPhone,
+      to: args.to,
+      remoteJid: args.remoteJid,
+      chatId,
+      flowId: String(orgPhone.wabaFlowId),
+    });
+    logger.info(
+      `📋 WABA Flow: Форма отправлена автоматически (chatId: ${chatId}, ` +
+      `${isNewChat ? 'новый чат' : 'переоткрытый закрытый чат'}, messageId: ${sent.messageId})`
+    );
+  } catch (error: any) {
+    logger.error('❌ WABA Flow: Ошибка автоотправки формы:', error.response?.data || error.message);
+  }
 }
 
 function getBroadcastErrorMessage(error: any): string {
@@ -804,6 +930,8 @@ async function handleIncomingMessage(orgPhone: any, message: any, contact?: any)
     let mimeType: string | undefined;
     let quotedMessageId: string | undefined;
     let quotedContent: string | undefined;
+    // Распарсенный ответ WhatsApp Flow (заполняется для nfm_reply)
+    let parsedFlow: ParsedFlowResponse | null = null;
 
     // --- ОБРАБОТКА ОТВЕТА В WABA (общая для всех типов) ---
     // В WABA структура реплая: message.context = { from: "...", id: "wamid..." }
@@ -923,6 +1051,12 @@ async function handleIncomingMessage(orgPhone: any, message: any, contact?: any)
       } else if (message.interactive?.type === 'list_reply') {
         content = message.interactive.list_reply.title;
         messageType = 'interactive_list';
+      } else if (message.interactive?.type === 'nfm_reply') {
+        // Ответ из WhatsApp Flow (клиент заполнил форму)
+        messageType = 'flow_response';
+        parsedFlow = parseFlowResponse(message.interactive.nfm_reply?.response_json || '');
+        content = parsedFlow?.displayText || message.interactive.nfm_reply?.body || '📋 Ответ из формы';
+        logger.info(`📋 WABA Flow: Получен ответ формы от ${remoteJid}`);
       }
     } else if (message.type === 'location') {
       // Обработка геолокации
@@ -959,6 +1093,29 @@ async function handleIncomingMessage(orgPhone: any, message: any, contact?: any)
     // Логируем входящее сообщение
     logger.info(`📥 WABA: Входящее [${messageType}]: "${content}" от ${remoteJid} (${contactName || 'Unknown'})`);
 
+    // Смотрим, существовал ли чат до ensureChat — чтобы понять, создан ли новый чат
+    // или переоткрыт закрытый (для автоотправки Flow-формы). Запросы зеркалят поиск в ensureChat.
+    let chatBefore = await prisma.chat.findFirst({
+      where: {
+        organizationId: orgPhone.organizationId,
+        channel: 'whatsapp',
+        receivingPhoneJid: orgPhone.phoneJid,
+        remoteJid,
+      },
+      select: { id: true, status: true },
+    });
+    if (!chatBefore) {
+      chatBefore = await prisma.chat.findFirst({
+        where: {
+          organizationId: orgPhone.organizationId,
+          channel: 'whatsapp',
+          organizationPhoneId: orgPhone.id,
+          remoteJid,
+        },
+        select: { id: true, status: true },
+      });
+    }
+
     // Создаём или находим чат
     const chatId = await ensureChat(
       orgPhone.organizationId,
@@ -970,9 +1127,17 @@ async function handleIncomingMessage(orgPhone: any, message: any, contact?: any)
 
     const chatAssignment = await prisma.chat.findUnique({
       where: { id: chatId },
-      select: { assignedUserId: true, isHr: true },
+      select: { assignedUserId: true, isHr: true, status: true },
     });
     const hasResponsible = Boolean(chatAssignment?.assignedUserId);
+
+    // Новый чат или переоткрытый закрытый (статус сменился на 'new') → отправить Flow-форму
+    const isNewChat = !chatBefore;
+    const isReopenedClosedChat = Boolean(
+      chatBefore &&
+      (chatBefore.status === 'closed' || chatBefore.status === 'resolved') &&
+      chatAssignment?.status === 'new'
+    );
 
     // Сохраняем сообщение в БД
     const savedMessage = await prisma.message.create({
@@ -1012,6 +1177,31 @@ async function handleIncomingMessage(orgPhone: any, message: any, contact?: any)
 
     logger.info(`💾 WABA: Message saved to DB (chatId: ${chatId})`);
 
+    // Сохраняем ответ WhatsApp Flow (заполненную форму) в отдельную таблицу
+    if (messageType === 'flow_response' && parsedFlow) {
+      try {
+        await prisma.flowSubmission.create({
+          data: {
+            organizationId: orgPhone.organizationId,
+            organizationPhoneId: orgPhone.id,
+            chatId,
+            remoteJid,
+            flowId: orgPhone.wabaFlowId || null,
+            flowToken: parsedFlow.flowToken,
+            name: parsedFlow.name,
+            city: parsedFlow.city,
+            address: parsedFlow.address,
+            paymentType: parsedFlow.paymentType,
+            rawData: parsedFlow.raw as any,
+            whatsappMessageId: wabaMessageId,
+          },
+        });
+        logger.info(`📋 WABA Flow: Ответ формы сохранён (chatId: ${chatId})`);
+      } catch (flowError) {
+        logger.error('❌ WABA Flow: Ошибка сохранения ответа формы:', flowError);
+      }
+    }
+
     // Отправляем Socket.IO уведомление о новом сообщении
     const { notifyNewMessage } = await import('../services/socketService');
     try {
@@ -1031,6 +1221,23 @@ async function handleIncomingMessage(orgPhone: any, message: any, contact?: any)
       });
     } catch (socketError) {
       logger.error('[Socket.IO] Ошибка отправки уведомления WABA:', socketError);
+    }
+
+    // Автоотправка Flow-формы: новый чат или переоткрытый закрытый чат.
+    // Ответ из формы (flow_response) триггером не является — форму не дублируем.
+    if (
+      (isNewChat || isReopenedClosedChat) &&
+      messageType !== 'flow_response' &&
+      chatAssignment?.isHr !== true
+    ) {
+      await autoSendCollectionFlowIfNeeded({
+        orgPhone,
+        to: phoneNumber,
+        remoteJid,
+        chatId,
+        isNewChat,
+        isReopenedClosedChat,
+      });
     }
   } catch (error) {
     logger.error('❌ WABA: Incoming message processing error:', error);
@@ -1842,6 +2049,296 @@ export const getWabaLogs = async (req: Request, res: Response) => {
     res.json({ logs });
   } catch (error: any) {
     logger.error('❌ WABA: Get logs error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// ============================================================
+// WhatsApp Flows: форма сбора данных (Имя, Город, Адрес, Тип оплаты)
+// ============================================================
+
+/**
+ * Создание Flow формы сбора данных через Graph API
+ * POST /api/waba/flow/create
+ * Body: { organizationPhoneId, name?, publish? }
+ */
+export const createCollectionFlow = async (req: Request, res: Response) => {
+  try {
+    const { organizationPhoneId, name = 'Сбор данных заказа', publish = true } = req.body;
+
+    if (!organizationPhoneId) {
+      return res.status(400).json({ error: 'organizationPhoneId is required' });
+    }
+
+    const orgPhone = await prisma.organizationPhone.findFirst({
+      where: {
+        id: Number(organizationPhoneId),
+        organizationId: res.locals.organizationId,
+        connectionType: 'waba',
+      },
+      select: {
+        id: true,
+        wabaAccessToken: true,
+        wabaPhoneNumberId: true,
+        wabaId: true,
+        wabaApiVersion: true,
+      },
+    });
+
+    if (!orgPhone) {
+      return res.status(404).json({ error: 'Organization phone not found or not configured for WABA' });
+    }
+
+    if (!orgPhone.wabaAccessToken || !orgPhone.wabaId) {
+      return res.status(400).json({
+        error: 'WABA is not fully configured',
+        details: 'wabaAccessToken and wabaId are required to create a Flow',
+      });
+    }
+
+    const config = {
+      accessToken: orgPhone.wabaAccessToken,
+      wabaId: orgPhone.wabaId,
+      apiVersion: orgPhone.wabaApiVersion || 'v21.0',
+    };
+
+    // 1. Создаём Flow в Meta
+    const flowId = await createFlow(config, name);
+
+    // 2. Загружаем Flow JSON формы (Имя, Город, Адрес, Тип оплаты)
+    await uploadFlowJson(config, flowId, COLLECTION_FLOW_JSON);
+
+    // 3. Публикуем (ошибка публикации не фейлит запрос — Flow остаётся в черновиках)
+    let publishError: string | null = null;
+    if (publish) {
+      try {
+        await publishFlow(config, flowId);
+      } catch (publishErr: any) {
+        publishError = publishErr.response?.data?.error?.message || publishErr.message;
+        logger.error('❌ WABA Flow: Ошибка публикации:', publishErr.response?.data || publishErr.message);
+      }
+    }
+
+    // 4. Статус и ошибки валидации из Meta
+    let metaStatus: any = null;
+    try {
+      metaStatus = await getFlowStatus(config, flowId);
+    } catch (statusErr: any) {
+      logger.error('❌ WABA Flow: Ошибка получения статуса:', statusErr.response?.data || statusErr.message);
+    }
+
+    // 5. Сохраняем flowId за организацией
+    await prisma.organizationPhone.update({
+      where: { id: orgPhone.id },
+      data: { wabaFlowId: flowId },
+    });
+
+    res.json({
+      success: true,
+      flowId,
+      publishError,
+      status: metaStatus,
+      screen: FLOW_COLLECTION_SCREEN,
+    });
+  } catch (error: any) {
+    logger.error('❌ WABA Flow: Create flow error:', error);
+    res.status(500).json({
+      error: error.response?.data?.error?.message || error.message,
+      details: error.response?.data || {},
+      type: error.response?.data?.error?.type,
+    });
+  }
+};
+
+/**
+ * Отправка Flow формы клиенту
+ * POST /api/waba/flow/send
+ * Body: { organizationPhoneId, to, flowId?, mode?, headerText?, bodyText?, footerText?, ctaText? }
+ */
+export const sendFlow = async (req: Request, res: Response) => {
+  try {
+    const { organizationPhoneId, to, flowId, mode = 'published', headerText, bodyText, footerText, ctaText } = req.body;
+    const canAccessHrChats = userCanAccessHrChats(res.locals);
+
+    if (!organizationPhoneId || !to) {
+      return res.status(400).json({ error: 'organizationPhoneId and to are required' });
+    }
+
+    const orgPhone = await prisma.organizationPhone.findFirst({
+      where: {
+        id: Number(organizationPhoneId),
+        organizationId: res.locals.organizationId,
+        connectionType: 'waba',
+      },
+    });
+
+    if (!orgPhone) {
+      return res.status(404).json({ error: 'Organization phone not found or not configured for WABA' });
+    }
+
+    const resolvedFlowId = flowId || orgPhone.wabaFlowId;
+    if (!resolvedFlowId) {
+      return res.status(400).json({
+        error: 'Flow ID is not configured',
+        details: 'Pass flowId in the request body or create the form first via POST /api/waba/flow/create',
+      });
+    }
+
+    const remoteJid = to.includes('@') ? to : `${to}@s.whatsapp.net`;
+    const canAccessChat = await canAccessExistingWabaChat(
+      orgPhone.organizationId,
+      orgPhone.id,
+      remoteJid,
+      canAccessHrChats
+    );
+
+    if (!canAccessChat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+
+    const wabaService = await createWABAService(orgPhone.id);
+    if (!wabaService) {
+      return res.status(500).json({
+        error: 'WABA service not configured',
+        details: 'wabaAccessToken is missing in database.',
+        organizationPhoneId: orgPhone.id,
+      });
+    }
+
+    // Чат нужен заранее — flow_token привязывается к нему
+    const chatId = await ensureChat(
+      orgPhone.organizationId,
+      orgPhone.id,
+      orgPhone.phoneJid,
+      remoteJid,
+      undefined,
+      { reopenClosedTicket: false }
+    );
+
+    const sent = await sendFlowToChat({
+      orgPhone,
+      to,
+      remoteJid,
+      chatId,
+      flowId: String(resolvedFlowId),
+      mode: mode === 'draft' ? 'draft' : 'published',
+      headerText,
+      bodyText,
+      footerText,
+      ctaText,
+      senderUserId: res.locals.userId,
+    });
+
+    res.json({
+      success: true,
+      messageId: sent.messageId,
+      flowId: resolvedFlowId,
+      flowToken: sent.flowToken,
+      data: sent.data,
+    });
+  } catch (error: any) {
+    logger.error('❌ WABA Flow: Send flow error:', error);
+    res.status(500).json({
+      error: error.response?.data?.error?.message || error.message,
+      details: error.response?.data || {},
+      type: error.response?.data?.error?.type,
+    });
+  }
+};
+
+/**
+ * Информация о Flow: сохранённый flow_id + статус из Meta
+ * GET /api/waba/flow?organizationPhoneId=
+ */
+export const getFlowInfo = async (req: Request, res: Response) => {
+  try {
+    const organizationPhoneId = Number(req.query.organizationPhoneId);
+    if (!organizationPhoneId) {
+      return res.status(400).json({ error: 'organizationPhoneId query param is required' });
+    }
+
+    const orgPhone = await prisma.organizationPhone.findFirst({
+      where: {
+        id: organizationPhoneId,
+        organizationId: res.locals.organizationId,
+        connectionType: 'waba',
+      },
+      select: {
+        id: true,
+        wabaFlowId: true,
+        wabaAccessToken: true,
+        wabaId: true,
+        wabaApiVersion: true,
+      },
+    });
+
+    if (!orgPhone) {
+      return res.status(404).json({ error: 'Organization phone not found or not configured for WABA' });
+    }
+
+    let metaStatus: any = null;
+    let metaError: string | null = null;
+    if (orgPhone.wabaFlowId && orgPhone.wabaAccessToken && orgPhone.wabaId) {
+      try {
+        metaStatus = await getFlowStatus(
+          {
+            accessToken: orgPhone.wabaAccessToken,
+            wabaId: orgPhone.wabaId,
+            apiVersion: orgPhone.wabaApiVersion || 'v21.0',
+          },
+          orgPhone.wabaFlowId
+        );
+      } catch (error: any) {
+        metaError = error.response?.data?.error?.message || error.message;
+        logger.error('❌ WABA Flow: Ошибка получения статуса из Meta:', metaError);
+      }
+    }
+
+    res.json({
+      organizationPhoneId: orgPhone.id,
+      flowId: orgPhone.wabaFlowId,
+      screen: FLOW_COLLECTION_SCREEN,
+      metaStatus,
+      metaError,
+    });
+  } catch (error: any) {
+    logger.error('❌ WABA Flow: Get flow info error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+/**
+ * Список ответов формы (FlowSubmission)
+ * GET /api/waba/flow/submissions?organizationPhoneId=&chatId=&limit=&offset=
+ */
+export const getFlowSubmissions = async (req: Request, res: Response) => {
+  try {
+    const organizationPhoneId = req.query.organizationPhoneId
+      ? Number(req.query.organizationPhoneId)
+      : undefined;
+    const chatId = req.query.chatId ? Number(req.query.chatId) : undefined;
+    const limit = Math.min(Number(req.query.limit) > 0 ? Number(req.query.limit) : 50, 200);
+    const offset = Number(req.query.offset) > 0 ? Number(req.query.offset) : 0;
+
+    const where = {
+      organizationId: res.locals.organizationId,
+      ...(organizationPhoneId ? { organizationPhoneId } : {}),
+      ...(chatId ? { chatId } : {}),
+    };
+
+    const [submissions, total] = await Promise.all([
+      prisma.flowSubmission.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        skip: offset,
+      }),
+      prisma.flowSubmission.count({ where }),
+    ]);
+
+    res.json({ success: true, total, limit, offset, submissions });
+  } catch (error: any) {
+    logger.error('❌ WABA Flow: Get submissions error:', error);
     res.status(500).json({ error: error.message });
   }
 };

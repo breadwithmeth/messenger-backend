@@ -181,6 +181,54 @@ export class WABAService {
   }
 
   /**
+   * Отправка WhatsApp Flow (интерактивная форма)
+   */
+  async sendFlowMessage(
+    to: string,
+    options: {
+      flowId: string;
+      flowToken: string;
+      ctaText?: string;
+      headerText?: string;
+      bodyText: string;
+      footerText?: string;
+      screen?: string;
+      mode?: 'published' | 'draft';
+    }
+  ): Promise<any> {
+    const interactive: any = {
+      type: 'flow',
+      body: { text: options.bodyText },
+      action: {
+        name: 'flow',
+        parameters: {
+          flow_message_version: '3',
+          flow_token: options.flowToken,
+          flow_id: options.flowId,
+          flow_cta: options.ctaText || 'Заполнить форму',
+          flow_action: 'navigate',
+          flow_action_payload: {
+            screen: options.screen || 'COLLECT_DATA',
+            mode: options.mode || 'published',
+          },
+        },
+      },
+    };
+    if (options.headerText) {
+      interactive.header = { type: 'text', text: options.headerText };
+    }
+    if (options.footerText) {
+      interactive.footer = { text: options.footerText };
+    }
+
+    return this.sendMessage({
+      to,
+      type: 'interactive',
+      interactive,
+    });
+  }
+
+  /**
    * Отправка изображения
    */
   async sendImage(to: string, imageUrl: string, caption?: string): Promise<any> {

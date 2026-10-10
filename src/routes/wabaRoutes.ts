@@ -14,6 +14,10 @@ import {
   operatorSendMessage,
   getMessageStatus,
   getChatMessages,
+  createCollectionFlow,
+  sendFlow,
+  getFlowInfo,
+  getFlowSubmissions,
 } from '../controllers/wabaController';
 
 const router = express.Router();
@@ -29,6 +33,12 @@ router.get('/broadcast-template/jobs/:jobId', authMiddleware, getBroadcastTempla
 router.get('/diagnostics', authMiddleware, getDiagnostics);
 router.get('/templates', authMiddleware, getTemplates);
 router.get('/logs', authMiddleware, getWabaLogs);
+
+// WhatsApp Flows (форма сбора данных: Имя, Город, Адрес, Тип оплаты)
+router.post('/flow/create', authMiddleware, createCollectionFlow);
+router.post('/flow/send', authMiddleware, sendFlow);
+router.get('/flow', authMiddleware, getFlowInfo);
+router.get('/flow/submissions', authMiddleware, getFlowSubmissions);
 
 // Operator API (для операторов)
 router.post('/operator/send', authMiddleware, operatorSendMessage);

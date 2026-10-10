@@ -307,10 +307,35 @@ model OrganizationPhone {
   wabaId          String?        // WhatsApp Business Account ID
   wabaApiVersion  String?        @default("v21.0") // Версия API (v21.0, v20.0, etc.)
   wabaVerifyToken String?        // Token для верификации webhook
+  wabaFlowId      String?        // WhatsApp Flow ID (форма сбора данных: Имя, Город, Адрес, Тип оплаты)
 
   chats           Chat[] // Связь с моделью Chat
   messages        Message[] // Связь с моделью Message
   wabaWebhookLogs WabaWebhookLog[]
+  flowSubmissions FlowSubmission[]
+}
+
+/// Ответы WhatsApp Flow (заполненные клиентом формы)
+model FlowSubmission {
+  id                  Int               @id @default(autoincrement())
+  organizationId      Int
+  organizationPhone   OrganizationPhone? @relation(fields: [organizationPhoneId], references: [id])
+  organizationPhoneId Int?
+  chatId              Int
+  remoteJid           String?           // JID клиента, заполнившего форму
+  flowId              String?           // WhatsApp Flow ID
+  flowToken           String?           // flow_token из response_json
+  // Структурированные данные формы сбора (Имя, Город, Адрес, Тип оплаты)
+  name                String?
+  city                String?
+  address             String?
+  paymentType         String?           // cash | halyk | kaspi
+  rawData             Json              // Полный response_json из вебхука
+  whatsappMessageId   String?           // ID сообщения nfm_reply в WhatsApp
+  createdAt           DateTime          @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([chatId])
 }
 
 /// Логи входящих webhook от WABA
