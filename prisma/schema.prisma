@@ -325,11 +325,14 @@ model FlowSubmission {
   remoteJid           String?           // JID клиента, заполнившего форму
   flowId              String?           // WhatsApp Flow ID
   flowToken           String?           // flow_token из response_json
-  // Структурированные данные формы сбора (Имя, Город, Адрес, Тип оплаты)
+  // Структурированные данные формы сбора (Имя, Телефон, Город, Адрес, Тип оплаты, Счёт, Комментарий)
   name                String?
+  contactPhone        String?
   city                String?
   address             String?
   paymentType         String?           // cash | halyk | kaspi
+  invoicePhone        String?           // Номер для выставления счёта (опционально)
+  comment             String?           // Комментарий к заказу (опционально)
   rawData             Json              // Полный response_json из вебхука
   whatsappMessageId   String?           // ID сообщения nfm_reply в WhatsApp
   createdAt           DateTime          @default(now())

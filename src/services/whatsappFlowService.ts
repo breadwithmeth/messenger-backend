@@ -18,19 +18,21 @@ export const FLOW_COLLECTION_SCREEN = 'COLLECT_DATA';
 /** Flow JSON version (см. https://developers.facebook.com/docs/whatsapp/flows/reference/flowjson) */
 const FLOW_JSON_VERSION = '7.0';
 
-/** Опции типа оплаты: id → лейбл */
+/** Опции типа оплаты: id → лейбл (titles совпадают с data-source формы) */
 export const PAYMENT_TYPE_OPTIONS: Record<string, string> = {
-  cash: 'Наличные',
-  halyk: 'Халык',
-  kaspi: 'Каспи',
+  cash: 'Наличными',
+  halyk: 'Halyk',
+  kaspi: 'Kaspi',
 };
 
 /**
  * Flow JSON формы сбора данных: один экран с полями
- * Имя, Город, Адрес и Тип оплаты (наличные / халык / каспи).
+ * Имя, Контактный телефон, Город, Адрес, Тип оплаты (наличные / Halyk / Kaspi),
+ * Номер для выставления счёта (опционально) и Комментарий (опционально).
  *
- * Имена компонентов (NameInput, CityInput, AddressInput, PaymentType) определяют
- * ключи в response_json вебхука: screen_0_NameInput_0, screen_0_CityInput_1 и т.д.
+ * Имена компонентов (NameInput, ContactPhoneInput, CityInput, AddressInput,
+ * PaymentType, InvoicePhoneInput, CommentInput) определяют ключи в response_json
+ * вебхука при автогенерации: screen_0_NameInput_0 и т.д.
  */
 export const COLLECTION_FLOW_JSON = {
   version: FLOW_JSON_VERSION,
@@ -50,13 +52,24 @@ export const COLLECTION_FLOW_JSON = {
             children: [
               {
                 type: 'TextHeading',
-                text: 'Данные для оформления',
+                text: 'Данные для доставки',
+              },
+              {
+                type: 'TextBody',
+                text: 'Заполните данные, чтобы мы могли оформить заказ и организовать доставку.',
               },
               {
                 type: 'TextInput',
                 name: 'NameInput',
-                label: 'Имя',
+                label: 'Ваше имя',
                 'input-type': 'text',
+                required: true,
+              },
+              {
+                type: 'TextInput',
+                name: 'ContactPhoneInput',
+                label: 'Контактный телефон',
+                'input-type': 'phone',
                 required: true,
               },
               {
@@ -69,14 +82,18 @@ export const COLLECTION_FLOW_JSON = {
               {
                 type: 'TextInput',
                 name: 'AddressInput',
-                label: 'Адрес',
+                label: 'Адрес доставки',
                 'input-type': 'text',
                 required: true,
               },
               {
+                type: 'TextHeading',
+                text: 'Оплата заказа',
+              },
+              {
                 type: 'RadioButtonsGroup',
                 name: 'PaymentType',
-                label: 'Тип оплаты',
+                label: 'Способ оплаты',
                 required: true,
                 'data-source': Object.entries(PAYMENT_TYPE_OPTIONS).map(([id, title]) => ({
                   id,
@@ -84,17 +101,33 @@ export const COLLECTION_FLOW_JSON = {
                 })),
               },
               {
+                type: 'TextInput',
+                name: 'InvoicePhoneInput',
+                label: 'Номер для выставления счёта',
+                'input-type': 'phone',
+                required: false,
+              },
+              {
+                type: 'TextArea',
+                name: 'CommentInput',
+                label: 'Комментарий к заказу',
+                required: false,
+              },
+              {
                 type: 'Footer',
-                label: 'Отправить',
+                label: 'Отправить заказ',
                 'on-click-action': {
                   name: 'complete',
                   // ВАЖНО: для Meta-hosted flow в payload нужно явно прокинуть значения
                   // полей через ${form.<name>} — иначе в ответе придёт только flow_token
                   payload: {
                     name: '${form.NameInput}',
+                    contact_phone: '${form.ContactPhoneInput}',
                     city: '${form.CityInput}',
                     address: '${form.AddressInput}',
-                    paymentType: '${form.PaymentType}',
+                    payment_type: '${form.PaymentType}',
+                    invoice_phone: '${form.InvoicePhoneInput}',
+                    comment: '${form.CommentInput}',
                   },
                 },
               },
@@ -219,9 +252,12 @@ export async function getFlowStatus(config: WabaGraphConfig, flowId: string): Pr
 export interface ParsedFlowResponse {
   flowToken: string | null;
   name: string | null;
+  contactPhone: string | null;
   city: string | null;
   address: string | null;
   paymentType: string | null; // cash | halyk | kaspi (или raw значение, если не из списка)
+  invoicePhone: string | null;
+  comment: string | null;
   raw: Record<string, any>;
   /** Человекочитаемый текст для отображения в чате */
   displayText: string;
@@ -231,7 +267,8 @@ export interface ParsedFlowResponse {
  * Маппинг ключей response_json на поля формы.
  *
  * Поддерживаются два формата:
- * 1. Точные ключи из payload Footer-а: name, city, address, paymentType (текущая форма).
+ * 1. Точные ключи из payload Footer-а: name, contact_phone, city, address,
+ *    payment_type, invoice_phone, comment (текущая форма).
  * 2. Автогенерированные ключи Meta вида screen_0_NameInput_0, screen_0_CityInput_1 и т.д.
  *    (поиск по подстроке имени компонента — устойчив к смещению индексов).
  */
@@ -265,21 +302,30 @@ export function parseFlowResponse(responseJson: string): ParsedFlowResponse | nu
 
   const flowToken = typeof raw.flow_token === 'string' ? raw.flow_token : null;
   const name = readString(raw, 'name') ?? findValueByComponent(raw, 'NameInput');
+  const contactPhone =
+    readString(raw, 'contact_phone') ?? readString(raw, 'contactPhone') ?? findValueByComponent(raw, 'ContactPhoneInput');
   const city = readString(raw, 'city') ?? findValueByComponent(raw, 'CityInput');
   const address = readString(raw, 'address') ?? findValueByComponent(raw, 'AddressInput');
   // RadioButtons возвращает id опции (cash/halyk/kaspi); если значение кастомное — оставляем как есть
-  const paymentType = readString(raw, 'paymentType') ?? findValueByComponent(raw, 'PaymentType');
+  const paymentType =
+    readString(raw, 'payment_type') ?? readString(raw, 'paymentType') ?? findValueByComponent(raw, 'PaymentType');
+  const invoicePhone =
+    readString(raw, 'invoice_phone') ?? readString(raw, 'invoicePhone') ?? findValueByComponent(raw, 'InvoicePhoneInput');
+  const comment = readString(raw, 'comment') ?? findValueByComponent(raw, 'CommentInput');
 
   const lines: string[] = [];
   if (name) lines.push(`Имя: ${name}`);
+  if (contactPhone) lines.push(`Телефон: ${contactPhone}`);
   if (city) lines.push(`Город: ${city}`);
   if (address) lines.push(`Адрес: ${address}`);
   if (paymentType) {
     lines.push(`Тип оплаты: ${PAYMENT_TYPE_OPTIONS[paymentType] || paymentType}`);
   }
+  if (invoicePhone) lines.push(`Счёт на номер: ${invoicePhone}`);
+  if (comment) lines.push(`Комментарий: ${comment}`);
   const displayText = lines.join('\n') || '📋 Ответ из формы (данные не распознаны)';
 
-  return { flowToken, name, city, address, paymentType, raw, displayText };
+  return { flowToken, name, contactPhone, city, address, paymentType, invoicePhone, comment, raw, displayText };
 }
 
 /**
