@@ -13,21 +13,23 @@ import makeWASocket, {
   SignalDataSet,
   AuthenticationCreds,
   BufferJSON,
+  Browsers,
+  CacheStore,
   jidNormalizedUser,
   isJidGroup,
   isJidBroadcast,
   ConnectionState,
-  downloadContentFromMessage, // <--- ДОБАВИТЬ
-  MediaType, // <--- ДОБАВИТЬ
+  downloadContentFromMessage,
+  MediaType,
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
-import { createAuthDBAdapter, prisma, StoredDataType } from './authStorage';
+import { createAuthDBAdapter, prisma, StoredDataType } from './authStorage.js';
 import qrcode from 'qrcode-terminal';
-import { createLogger } from './logging';
+import { createLogger } from './logging.js';
 import { Buffer } from 'buffer';
 import * as fs from 'fs/promises'; // Для работы с файловой системой (удаление папок)
 import path from 'path'; // Для работы с путями файлов
-import { notifyNewChat, notifyNewMessage, notifyChatsUpdated } from '../services/socketService'; // Socket.IO
+import { notifyNewChat, notifyNewMessage, notifyChatsUpdated } from '../services/socketService.js'; // Socket.IO
 
 const logger = createLogger();
 
@@ -117,6 +119,49 @@ const MAX_BAD_MAC_ERRORS = 3; // Максимум ошибок перед сбр
 const badDecryptErrorCount = new Map<number, number>();
 const MAX_BAD_DECRYPT_ERRORS = 5; // Максимум ошибок перед сбросом сессии (больше чем MAC, т.к. менее критично)
 
+/**
+ * Простой TTL-кэш, совместимый с типом Baileys CacheStore.
+ * Используется как msgRetryCounterCache: по документации Baileys кэш счётчиков
+ * ретраев должен создаваться вне функции старта сессии, чтобы счётчики
+ * переживали переподключения и не зацикливали retry-запросы.
+ */
+const RETRY_COUNTER_TTL_MS = envInt('BAILEYS_RETRY_COUNTER_TTL_MS', 120_000);
+const RETRY_COUNTER_MAX_ENTRIES = 5000;
+
+class TtlCacheStore implements CacheStore {
+  private readonly store = new Map<string, { value: unknown; expiresAt: number }>();
+
+  get<T>(key: string): T | undefined {
+    const entry = this.store.get(key);
+    if (!entry) return undefined;
+    if (Date.now() > entry.expiresAt) {
+      this.store.delete(key);
+      return undefined;
+    }
+    return entry.value as T;
+  }
+
+  set<T>(key: string, value: T): void {
+    // Защита от неограниченного роста кэша
+    if (this.store.size >= RETRY_COUNTER_MAX_ENTRIES) {
+      const oldestKey = this.store.keys().next().value;
+      if (oldestKey !== undefined) this.store.delete(oldestKey);
+    }
+    this.store.set(key, { value, expiresAt: Date.now() + RETRY_COUNTER_TTL_MS });
+  }
+
+  del(key: string): void {
+    this.store.delete(key);
+  }
+
+  flushAll(): void {
+    this.store.clear();
+  }
+}
+
+// Кэш живёт на уровне модуля: не пересоздаётся при каждом startBaileys/reconnect
+const msgRetryCounterCache: CacheStore = new TtlCacheStore();
+
 export function markManualDisconnect(organizationPhoneId: number, reason = 'manual'): void {
   manualDisconnectReasons.set(organizationPhoneId, reason);
 }
@@ -161,7 +206,7 @@ async function downloadAndSaveMedia(
     const filename = originalFilename || `file-${Date.now()}${extension}`;
 
     // Используем универсальный storage service
-    const { saveMedia } = await import('../services/storageService');
+    const { saveMedia } = await import('../services/storageService.js');
     const mediaUrl = await saveMedia(buffer, filename, mimetype);
 
     // logger.info(`✅ Медиафайл сохранен: ${mediaUrl}`);
@@ -764,47 +809,53 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
   logger.info({ organizationId, organizationPhoneId, phoneJid, version: version.join('.'), connectTimeoutMs: BAILEYS_CONNECT_TIMEOUT_MS, queryTimeoutMs: BAILEYS_DEFAULT_QUERY_TIMEOUT_MS, qrWaitTimeoutMs: BAILEYS_QR_WAIT_TIMEOUT_MS }, '[Baileys] запускаем сессию');
 
   // Создаем новый экземпляр Baileys WASocket
-  const currentSock = makeWASocket({ 
+  const currentSock = makeWASocket({
     version,
     auth: state, // Используем состояние из useDBAuthState
-    browser: ['Ubuntu', 'Chrome', '22.04.4'], // Устанавливаем информацию о браузере
+    // По документации используем константу Browsers вместо ручного кортежа
+    // (эквивалент ['Ubuntu', 'Chrome', '22.04.4'])
+    browser: Browsers.ubuntu('Chrome'),
     logger: logger, // Используем ваш pino logger
     connectTimeoutMs: BAILEYS_CONNECT_TIMEOUT_MS,
     defaultQueryTimeoutMs: BAILEYS_DEFAULT_QUERY_TIMEOUT_MS,
     keepAliveIntervalMs: BAILEYS_KEEP_ALIVE_INTERVAL_MS,
+    // Сессия работает как фоновое устройство: телефон продолжает получать
+    // push-уведомления WhatsApp (по умолчанию true и телефон их теряет).
+    markOnlineOnConnect: false,
     // Не тянем полную историю, но не запрещаем служебные history sync notifications:
     // в Baileys v7 они нужны для initial LID mappings и стабильности сессии.
     syncFullHistory: false,
-    // Функция для получения сообщений из кэша или БД (для Baileys)
+    // Счётчики retry-запросов: общий модульный кэш, переживает реконнекты (см. доки)
+    msgRetryCounterCache,
+    // Функция для получения исходного контента сообщения (для повторного шифрования при retry).
+    // По документации: если сообщение неизвестно, ОБЯЗАТЕЛЬНО возвращаем undefined —
+    // тогда Baileys запросит контент с телефона. Возврат фиктивного контента ломает retry.
     getMessage: async (key) => {
         logger.debug(`Попытка получить сообщение из getMessage: ${key.id} от ${key.remoteJid}`);
+        const normalizedRemoteJid = key.remoteJid ? jidNormalizedUser(key.remoteJid) : undefined;
+        if (!key.id || !normalizedRemoteJid) {
+            return undefined;
+        }
         const msg = await prisma.message.findFirst({
             where: {
               channel: 'whatsapp',
-              whatsappMessageId: key.id || '',
+              whatsappMessageId: key.id,
+              remoteJid: normalizedRemoteJid,
             },
             select: {
                 content: true,
                 type: true,
-                remoteJid: true,
-                senderJid: true,
-                fromMe: true,
-                timestamp: true,
                 mediaUrl: true,
                 mimeType: true,
-                filename: true,
-                size: true
             }
         });
-        if (msg) {
-            if (msg.type === 'text') {
-                return { conversation: msg.content };
-            } else if (msg.type === 'image' && msg.mediaUrl) {
-                return { imageMessage: { caption: msg.content || '', mimetype: msg.mimeType || 'image/jpeg' } };
-            }
-            return { conversation: msg.content || 'Сообщение найдено в БД, но тип не поддержан для getMessage.' };
+        // Возвращаем контент только если он полностью сохранен (текст).
+        // Для медиа caption-подобный контент не является оригинальным сообщением —
+        // возвращаем undefined, чтобы Baileys запросил оригинал с телефона.
+        if (msg?.type === 'text' && msg.content) {
+            return { conversation: msg.content };
         }
-        return { conversation: 'Сообщение не найдено в кэше или БД' };
+        return undefined;
     }
   });
 
@@ -1356,7 +1407,7 @@ export async function startBaileys(organizationId: number, organizationPhoneId: 
             // if (!msg.key.fromMe) {
             //   try {
             //     logger.info(`👤 Проверка клиента для ${senderJid}...`);
-            //     const { ensureWhatsAppClient, linkClientToChat } = await import('../services/clientService');
+            //     const { ensureWhatsAppClient, linkClientToChat } = await import('../services/clientService.js');
             //     const client = await ensureWhatsAppClient(organizationId, senderJid, contactName);
             //     logger.info(`✅ Клиент обработан: ${client.name} (ID: ${client.id})`);
             //     

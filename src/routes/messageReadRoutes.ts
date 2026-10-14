@@ -6,8 +6,8 @@ import {
   getUnreadCount,
   getMessageStats,
   markTicketMessagesAsRead,
-} from '../controllers/messageReadController';
-import { authMiddleware } from '../middlewares/authMiddleware';
+} from '../controllers/messageReadController.js';
+import { authMiddleware } from '../middlewares/authMiddleware.js';
 
 const router = Router();
 

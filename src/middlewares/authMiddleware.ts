@@ -1,9 +1,9 @@
 // src/middlewares/authMiddleware.ts
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { createLogger } from '../config/logging';
-import { syncEmployeeFromClaims } from '../integrations/workforce/workforceIntegration';
-import { authenticateToken } from '../auth/tokenAuth';
+import { createLogger } from '../config/logging.js';
+import { syncEmployeeFromClaims } from '../integrations/workforce/workforceIntegration.js';
+import { authenticateToken } from '../auth/tokenAuth.js';
 
 const logger = createLogger();
 const AUTH_DEBUG_RESPONSE = process.env.AUTH_DEBUG_RESPONSE === 'true' || process.env.NODE_ENV !== 'production';

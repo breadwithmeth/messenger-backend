@@ -1,10 +1,10 @@
-import { createLogger } from './config/logging';
+import { createLogger } from './config/logging.js';
 import http from 'http';
-import app from './app';
-import { startWaSession } from './services/waService'; // Импортируйте startWaSession
-import { startAllTelegramBots, stopAllTelegramBots } from './services/telegramService'; // <-- НОВОЕ
-import { initializeSocketIO } from './services/socketService'; // <-- Socket.IO
-import { prisma } from './config/authStorage'; // Импортируйте prisma
+import app from './app.js';
+import { startWaSession } from './services/waService.js'; // Импортируйте startWaSession
+import { startAllTelegramBots, stopAllTelegramBots } from './services/telegramService.js'; // <-- НОВОЕ
+import { initializeSocketIO } from './services/socketService.js'; // <-- Socket.IO
+import { prisma } from './config/authStorage.js'; // Импортируйте prisma
 
 const PORT = process.env.PORT || 3000;
 

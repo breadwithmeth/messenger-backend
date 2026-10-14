@@ -6,7 +6,7 @@
 // в вебхуке как message.interactive.type = 'nfm_reply'.
 
 import axios from 'axios';
-import { createLogger } from '../config/logging';
+import { createLogger } from '../config/logging.js';
 
 const logger = createLogger();
 

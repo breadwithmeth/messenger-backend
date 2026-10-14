@@ -1,8 +1,8 @@
 // src/controllers/organizationPhoneController.ts
 import { Request, Response } from 'express';
-import { prisma } from '../config/authStorage';
-import { startBaileys, getBaileysSock, markManualDisconnect } from '../config/baileys';
-import { createLogger } from '../config/logging';
+import { prisma } from '../config/authStorage.js';
+import { startBaileys, getBaileysSock, markManualDisconnect } from '../config/baileys.js';
+import { createLogger } from '../config/logging.js';
 import WebSocket from 'ws'; 
 const logger = createLogger();
 

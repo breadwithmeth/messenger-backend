@@ -14,8 +14,8 @@ import {
   addTicketNote,
   getTicketStats,
   getTicketMessages
-} from '../controllers/ticketController';
-import { authMiddleware } from '../middlewares/authMiddleware';
+} from '../controllers/ticketController.js';
+import { authMiddleware } from '../middlewares/authMiddleware.js';
 
 const router = Router();
 

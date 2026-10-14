@@ -1,4 +1,4 @@
-import { KeycloakClientCredentialsTokenProvider } from '../tokenProvider';
+import { KeycloakClientCredentialsTokenProvider } from '../tokenProvider.js';
 
 function makeJsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {

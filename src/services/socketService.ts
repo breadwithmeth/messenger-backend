@@ -2,10 +2,10 @@
 
 import { Server, Socket } from 'socket.io';
 import { Server as HTTPServer } from 'http';
-import { createLogger } from '../config/logging';
-import { authenticateToken } from '../auth/tokenAuth';
-import prisma from '../config/prisma';
-import { authenticateWebsiteVisitorSession } from './websiteWidgetService';
+import { createLogger } from '../config/logging.js';
+import { authenticateToken } from '../auth/tokenAuth.js';
+import prisma from '../config/prisma.js';
+import { authenticateWebsiteVisitorSession } from './websiteWidgetService.js';
 
 const logger = createLogger();
 

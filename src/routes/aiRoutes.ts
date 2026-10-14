@@ -1,8 +1,8 @@
 // src/routes/aiRoutes.ts
 
 import express from 'express';
-import { getSuggestions, healthCheck } from '../controllers/aiController';
-import { authMiddleware } from '../middlewares/authMiddleware';
+import { getSuggestions, healthCheck } from '../controllers/aiController.js';
+import { authMiddleware } from '../middlewares/authMiddleware.js';
 
 const router = express.Router();
 

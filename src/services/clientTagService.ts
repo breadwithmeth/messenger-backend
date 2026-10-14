@@ -1,5 +1,5 @@
-import { createLogger } from '../config/logging';
-import prisma from '../config/prisma';
+import { createLogger } from '../config/logging.js';
+import prisma from '../config/prisma.js';
 
 const logger = createLogger();
 

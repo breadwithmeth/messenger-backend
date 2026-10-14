@@ -1,4 +1,4 @@
-import '../config/logging';
+import '../config/logging.js';
 import { Request, Response, NextFunction } from 'express';
 
 export default function errorHandler(

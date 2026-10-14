@@ -1,16 +1,16 @@
 import { Logger } from 'pino';
-import { createLogger } from '../../config/logging';
+import { createLogger } from '../../config/logging.js';
 import {
   mapWorkforceUpstreamError,
   UpstreamUnavailableError,
-} from './errors';
+} from './errors.js';
 import {
   EmployeeDto,
   PresenceStatus,
   ShiftDto,
   SyncEmployeeRequest,
   PresenceHistoryItem,
-} from './types';
+} from './types.js';
 
 export type FetchLike = (
   input: string,

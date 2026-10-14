@@ -1,8 +1,8 @@
 // src/services/telegramService.ts
 
 import TelegramBot from 'node-telegram-bot-api';
-import { prisma } from '../config/authStorage';
-import { createLogger } from '../config/logging';
+import { prisma } from '../config/authStorage.js';
+import { createLogger } from '../config/logging.js';
 
 const logger = createLogger();
 
@@ -227,7 +227,7 @@ async function handleIncomingMessage(
     // --- АВТОМАТИЧЕСКОЕ СОЗДАНИЕ КЛИЕНТА (ВРЕМЕННО ОТКЛЮЧЕНО) ---
     // try {
     //   logger.info(`👤 Проверка клиента Telegram для UserID: ${userId}...`);
-    //   const { ensureTelegramClient, linkClientToChat } = await import('./clientService');
+    //   const { ensureTelegramClient, linkClientToChat } = await import('./clientService.js');
     //   if (userId) {
     //     const client = await ensureTelegramClient(
     //       organizationId,
@@ -271,7 +271,7 @@ async function handleIncomingMessage(
         const response = await fetch(fileLink);
         const buffer = Buffer.from(await response.arrayBuffer());
         
-        const { saveMedia } = await import('./storageService');
+        const { saveMedia } = await import('./storageService.js');
         mediaUrl = await saveMedia(buffer, `telegram-${photo.file_id}.jpg`, 'image/jpeg');
         mimeType = 'image/jpeg';
       } catch (e) {
@@ -288,7 +288,7 @@ async function handleIncomingMessage(
         const response = await fetch(fileLink);
         const buffer = Buffer.from(await response.arrayBuffer());
         
-        const { saveMedia } = await import('./storageService');
+        const { saveMedia } = await import('./storageService.js');
         mediaUrl = await saveMedia(buffer, filename || `telegram-${msg.document.file_id}`, mimeType || 'application/octet-stream');
       } catch (e) {
         logger.error('[Telegram] Ошибка сохранения документа:', e);
@@ -303,7 +303,7 @@ async function handleIncomingMessage(
         const response = await fetch(fileLink);
         const buffer = Buffer.from(await response.arrayBuffer());
         
-        const { saveMedia } = await import('./storageService');
+        const { saveMedia } = await import('./storageService.js');
         mediaUrl = await saveMedia(buffer, `telegram-${msg.video.file_id}.mp4`, mimeType || 'video/mp4');
       } catch (e) {
         logger.error('[Telegram] Ошибка сохранения видео:', e);
@@ -317,7 +317,7 @@ async function handleIncomingMessage(
         const response = await fetch(fileLink);
         const buffer = Buffer.from(await response.arrayBuffer());
         
-        const { saveMedia } = await import('./storageService');
+        const { saveMedia } = await import('./storageService.js');
         mediaUrl = await saveMedia(buffer, `telegram-${msg.voice.file_id}.ogg`, mimeType || 'audio/ogg');
       } catch (e) {
         logger.error('[Telegram] Ошибка сохранения голосового:', e);
@@ -362,7 +362,7 @@ async function handleIncomingMessage(
     logger.info(`[Telegram] Сохранено входящее сообщение от ${username || userId} в чат #${chat.id}`);
 
     // Отправляем Socket.IO уведомление о новом сообщении
-    const { notifyNewMessage } = await import('./socketService');
+    const { notifyNewMessage } = await import('./socketService.js');
     try {
       notifyNewMessage(organizationId, {
         id: savedMessage.id,

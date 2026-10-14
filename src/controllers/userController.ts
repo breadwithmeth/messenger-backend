@@ -1,9 +1,9 @@
-import '../config/logging';
+import '../config/logging.js';
 import { Request, Response } from 'express';
 import bcrypt from 'bcrypt';
-import { AuthRequest } from '../middlewares/authMiddleware'; // Импортируем AuthRequest
-import { normalizeAppRole } from '../auth/roleUtils';
-import prisma from '../config/prisma';
+import { AuthRequest } from '../middlewares/authMiddleware.js'; // Импортируем AuthRequest
+import { normalizeAppRole } from '../auth/roleUtils.js';
+import prisma from '../config/prisma.js';
 
 /**
  * Создание нового пользователя (оператора или администратора).

@@ -5,7 +5,7 @@ import {
   UpstreamForbiddenError,
   UpstreamNotFoundError,
   UpstreamUnavailableError,
-} from '../errors';
+} from '../errors.js';
 
 describe('mapWorkforceUpstreamError', () => {
   test('maps 401/403/404/409', () => {

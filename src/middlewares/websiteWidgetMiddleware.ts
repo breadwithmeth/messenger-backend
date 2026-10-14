@@ -1,6 +1,6 @@
 import { NextFunction, Request, Response } from 'express';
-import prisma from '../config/prisma';
-import { authenticateWebsiteVisitorSession } from '../services/websiteWidgetService';
+import prisma from '../config/prisma.js';
+import { authenticateWebsiteVisitorSession } from '../services/websiteWidgetService.js';
 
 type RateLimitEntry = { count: number; resetAt: number };
 const rateLimitEntries = new Map<string, RateLimitEntry>();

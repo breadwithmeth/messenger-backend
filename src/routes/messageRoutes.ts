@@ -1,8 +1,8 @@
 // src/routes/messageRoutes.ts
 
 import { Router } from 'express';
-import { sendTextMessage, sendMediaMessage, sendMessageByTicket, sendMessageByChat } from '../controllers/messageController';
-import { authMiddleware } from '../middlewares/authMiddleware'; // Импортируем middleware
+import { sendTextMessage, sendMediaMessage, sendMessageByTicket, sendMessageByChat } from '../controllers/messageController.js';
+import { authMiddleware } from '../middlewares/authMiddleware.js'; // Импортируем middleware
 
 const router = Router();
 

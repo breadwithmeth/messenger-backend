@@ -5,13 +5,13 @@ import {
   listSessionMessages,
   sendSessionMessage,
   updateSessionProfile,
-} from '../controllers/websiteWidgetPublicController';
+} from '../controllers/websiteWidgetPublicController.js';
 import {
   authenticateWebsiteSession,
   loadWebsiteWidget,
   websiteWidgetCors,
   websiteWidgetRateLimit,
-} from '../middlewares/websiteWidgetMiddleware';
+} from '../middlewares/websiteWidgetMiddleware.js';
 
 const router = Router();
 

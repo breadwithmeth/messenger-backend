@@ -1,8 +1,8 @@
 // src/routes/analyticsRoutes.ts
 
 import { Router } from 'express';
-import { authMiddleware } from '../middlewares/authMiddleware';
-import { getChatAnalytics, getOperatorAnalytics, listAnalyticsTickets } from '../controllers/analyticsController';
+import { authMiddleware } from '../middlewares/authMiddleware.js';
+import { getChatAnalytics, getOperatorAnalytics, listAnalyticsTickets } from '../controllers/analyticsController.js';
 
 const router = Router();
 

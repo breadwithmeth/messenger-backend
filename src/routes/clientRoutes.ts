@@ -11,9 +11,9 @@ import {
   updateClientFinancials,
   addClientComment,
   getClientComments
-} from '../controllers/clientController';
-import * as tagController from '../controllers/clientTagController';
-import { authMiddleware } from '../middlewares/authMiddleware';
+} from '../controllers/clientController.js';
+import * as tagController from '../controllers/clientTagController.js';
+import { authMiddleware } from '../middlewares/authMiddleware.js';
 
 const router = express.Router();
 

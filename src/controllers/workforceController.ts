@@ -1,6 +1,6 @@
 import { Response } from 'express';
-import { AuthRequest } from '../middlewares/authMiddleware';
-import { getWorkforceClient } from '../integrations/workforce/workforceIntegration';
+import { AuthRequest } from '../middlewares/authMiddleware.js';
+import { getWorkforceClient } from '../integrations/workforce/workforceIntegration.js';
 import {
   UpstreamAuthError,
   UpstreamBadRequestError,
@@ -8,9 +8,9 @@ import {
   UpstreamForbiddenError,
   UpstreamNotFoundError,
   UpstreamUnavailableError,
-} from '../integrations/workforce/errors';
-import { prisma } from '../config/authStorage';
-import { chatVisibilityWhere, messageVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
+} from '../integrations/workforce/errors.js';
+import { prisma } from '../config/authStorage.js';
+import { chatVisibilityWhere, messageVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess.js';
 
 function getRequestId(req: AuthRequest): string | undefined {
   const raw = req.headers['x-request-id'];

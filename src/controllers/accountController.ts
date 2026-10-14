@@ -1,7 +1,7 @@
 // src/controllers/accountController.ts
 import { Request, Response } from 'express';
-import { prisma } from '../config/authStorage';
-import { createLogger } from '../config/logging';
+import { prisma } from '../config/authStorage.js';
+import { createLogger } from '../config/logging.js';
 
 const logger = createLogger();
 

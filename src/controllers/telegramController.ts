@@ -1,15 +1,15 @@
 // src/controllers/telegramController.ts
 
 import { Request, Response } from 'express';
-import { prisma } from '../config/authStorage';
+import { prisma } from '../config/authStorage.js';
 import {
   startTelegramBot,
   stopTelegramBot,
   sendTelegramMessage,
   getTelegramBot,
-} from '../services/telegramService';
-import { createLogger } from '../config/logging';
-import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
+} from '../services/telegramService.js';
+import { createLogger } from '../config/logging.js';
+import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess.js';
 
 const logger = createLogger();
 

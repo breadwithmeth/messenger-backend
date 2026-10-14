@@ -3,7 +3,7 @@ import {
   hashWebsiteSessionToken,
   normalizeWebsiteVisitorProfile,
   websiteSessionTokenMatches,
-} from '../websiteWidgetService';
+} from '../websiteWidgetService.js';
 
 describe('websiteWidgetService', () => {
   test('hashes and verifies opaque session tokens', () => {

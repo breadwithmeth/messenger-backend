@@ -1,5 +1,5 @@
 import { Logger } from 'pino';
-import { createLogger } from '../../config/logging';
+import { createLogger } from '../../config/logging.js';
 
 export type ServiceTokenProviderConfig = {
   keycloakBaseUrl: string;

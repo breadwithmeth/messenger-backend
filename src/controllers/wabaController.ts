@@ -1,12 +1,12 @@
 // src/controllers/wabaController.ts
 
 import { Request, Response } from 'express';
-import { createWABAService } from '../services/wabaService';
-import { prisma } from '../config/authStorage';
-import { ensureChat } from '../config/baileys';
-import { createLogger } from '../config/logging';
+import { createWABAService } from '../services/wabaService.js';
+import { prisma } from '../config/authStorage.js';
+import { ensureChat } from '../config/baileys.js';
+import { createLogger } from '../config/logging.js';
 import axios from 'axios';
-import { chatVisibilityWhere, messageVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
+import { chatVisibilityWhere, messageVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess.js';
 import {
   COLLECTION_FLOW_JSON,
   FLOW_COLLECTION_SCREEN,
@@ -17,7 +17,7 @@ import {
   publishFlow,
   uploadFlowJson,
   type ParsedFlowResponse,
-} from '../services/whatsappFlowService';
+} from '../services/whatsappFlowService.js';
 
 const logger = createLogger();
 const SENSITIVE_LOG_KEY = /(authorization|cookie|password|secret|token)/i;
@@ -1209,7 +1209,7 @@ async function handleIncomingMessage(orgPhone: any, message: any, contact?: any)
     }
 
     // Отправляем Socket.IO уведомление о новом сообщении
-    const { notifyNewMessage } = await import('../services/socketService');
+    const { notifyNewMessage } = await import('../services/socketService.js');
     try {
       notifyNewMessage(orgPhone.organizationId, {
         id: savedMessage.id,

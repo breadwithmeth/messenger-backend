@@ -1,7 +1,7 @@
 import { NextFunction, Response } from 'express';
-import { AuthRequest } from './authMiddleware';
-import prisma from '../config/prisma';
-import { normalizeAppRole } from '../auth/roleUtils';
+import { AuthRequest } from './authMiddleware.js';
+import prisma from '../config/prisma.js';
+import { normalizeAppRole } from '../auth/roleUtils.js';
 
 export function requireRole(allowed: string[]) {
   return async function (req: AuthRequest, res: Response, next: NextFunction) {

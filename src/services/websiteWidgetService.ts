@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
 import { Chat, Prisma } from '@prisma/client';
-import prisma from '../config/prisma';
+import prisma from '../config/prisma.js';
 
 const MAX_TICKET_CREATE_ATTEMPTS = 5;
 

@@ -1,10 +1,10 @@
 // src/controllers/analyticsController.ts
 
 import { Request, Response } from 'express';
-import { prisma } from '../config/authStorage';
+import { prisma } from '../config/authStorage.js';
 import { Prisma } from '@prisma/client';
-import { createLogger } from '../config/logging';
-import { chatVisibilityWhere, messageVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
+import { createLogger } from '../config/logging.js';
+import { chatVisibilityWhere, messageVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess.js';
 
 const logger = createLogger();
 

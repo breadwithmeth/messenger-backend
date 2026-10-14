@@ -6,8 +6,8 @@ import {
   markChatAsRead,
   getUnreadCounts,
   getChatsWithUnread
-} from '../controllers/unreadController';
-import { authMiddleware } from '../middlewares/authMiddleware';
+} from '../controllers/unreadController.js';
+import { authMiddleware } from '../middlewares/authMiddleware.js';
 
 const router = Router();
 

@@ -1,10 +1,10 @@
 // 📁 src/controllers/waSessionController.ts
 
-import '../config/logging';
+import '../config/logging.js';
 import { Request, Response } from 'express';
-import { startWaSession } from '../services/waService';
-// import { getQrCodeForSession } from '../config/baileys'; // <-- УДАЛИТЬ ЭТУ СТРОКУ, т.к. она больше не нужна
-import { prisma } from '../config/authStorage'; // Импортируем prisma клиент
+import { startWaSession } from '../services/waService.js';
+// import { getQrCodeForSession } from '../config/baileys.js'; // <-- УДАЛИТЬ ЭТУ СТРОКУ, т.к. она больше не нужна
+import { prisma } from '../config/authStorage.js'; // Импортируем prisma клиент
 
 // ... (ваша функция startSessionHandler - она уже была переписана и корректна) ...
 export async function startSessionHandler(req: Request, res: Response) {

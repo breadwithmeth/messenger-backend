@@ -4,7 +4,7 @@ import {
   listWebsiteWidgets,
   rotateWebsiteWidgetKey,
   updateWebsiteWidget,
-} from '../controllers/websiteWidgetController';
+} from '../controllers/websiteWidgetController.js';
 
 const router = Router();
 

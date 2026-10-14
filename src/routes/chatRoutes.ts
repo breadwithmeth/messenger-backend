@@ -1,7 +1,7 @@
 // // src/routes/chatRoutes.ts
 import { Router } from 'express';
-import {  listChats,getChatMessages, getChatComments, addChatComment, setChatHr } from '../controllers/chatController';
-import { authMiddleware } from '../middlewares/authMiddleware';
+import {  listChats,getChatMessages, getChatComments, addChatComment, setChatHr } from '../controllers/chatController.js';
+import { authMiddleware } from '../middlewares/authMiddleware.js';
 
 const router = Router();
 

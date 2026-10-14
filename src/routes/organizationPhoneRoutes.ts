@@ -5,9 +5,9 @@ import {
   listOrganizationPhones,
   connectOrganizationPhone,
   disconnectOrganizationPhone,
-} from '../controllers/organizationPhoneController'; // Путь к вашему контроллеру
-import { authMiddleware } from '../middlewares/authMiddleware'; // Путь к вашему middleware аутентификации
-import { requireRole } from '../middlewares/requireRole';
+} from '../controllers/organizationPhoneController.js'; // Путь к вашему контроллеру
+import { authMiddleware } from '../middlewares/authMiddleware.js'; // Путь к вашему middleware аутентификации
+import { requireRole } from '../middlewares/requireRole.js';
 
 const router = Router();
 

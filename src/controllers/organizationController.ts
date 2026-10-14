@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import prisma from '../config/prisma';
+import prisma from '../config/prisma.js';
 
 export async function createOrganization(req: Request, res: Response) {
   const { name } = req.body;

@@ -1,7 +1,7 @@
 import { Response } from 'express';
-import { AuthRequest } from '../middlewares/authMiddleware';
-import { createLogger } from '../config/logging';
-import * as tagService from '../services/clientTagService';
+import { AuthRequest } from '../middlewares/authMiddleware.js';
+import { createLogger } from '../config/logging.js';
+import * as tagService from '../services/clientTagService.js';
 
 const logger = createLogger();
 

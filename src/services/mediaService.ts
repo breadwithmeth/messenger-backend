@@ -3,8 +3,8 @@
 import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
-import { createLogger } from '../config/logging';
-import { saveMedia } from './storageService'; // Импорт универсального storage
+import { createLogger } from '../config/logging.js';
+import { saveMedia } from './storageService.js'; // Импорт универсального storage
 
 const logger = createLogger();
 const writeFile = promisify(fs.writeFile);

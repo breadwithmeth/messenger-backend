@@ -4,7 +4,7 @@ import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } fro
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import fs from 'fs/promises';
 import path from 'path';
-import { createLogger } from '../config/logging';
+import { createLogger } from '../config/logging.js';
 
 const logger = createLogger();
 

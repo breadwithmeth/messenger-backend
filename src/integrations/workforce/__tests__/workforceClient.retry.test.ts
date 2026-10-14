@@ -1,5 +1,5 @@
-import { WorkforceClient } from '../workforceClient';
-import { UpstreamNotFoundError } from '../errors';
+import { WorkforceClient } from '../workforceClient.js';
+import { UpstreamNotFoundError } from '../errors.js';
 
 function makeJsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {

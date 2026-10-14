@@ -1,7 +1,7 @@
 // src/routes/contactRoutes.ts
 import { Router } from 'express';
-import { authMiddleware } from '../middlewares/authMiddleware';
-import { getContactProfile } from '../controllers/contactController';
+import { authMiddleware } from '../middlewares/authMiddleware.js';
+import { getContactProfile } from '../controllers/contactController.js';
 
 const router = Router();
 router.use(authMiddleware);

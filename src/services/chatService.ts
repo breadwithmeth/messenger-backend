@@ -1,7 +1,7 @@
 // src/services/chatService.ts
-import { prisma } from '../config/authStorage';
-import { createLogger } from '../config/logging';
-import { chatVisibilityWhere, messageVisibilityWhere } from '../auth/hrAccess';
+import { prisma } from '../config/authStorage.js';
+import { createLogger } from '../config/logging.js';
+import { chatVisibilityWhere, messageVisibilityWhere } from '../auth/hrAccess.js';
 
 const logger = createLogger();
 

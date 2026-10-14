@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
-import prisma from '../config/prisma';
-import { generateWebsiteWidgetPublicKey } from '../services/websiteWidgetService';
+import prisma from '../config/prisma.js';
+import { generateWebsiteWidgetPublicKey } from '../services/websiteWidgetService.js';
 
 function cleanRequiredName(value: unknown): string | null {
   if (typeof value !== 'string') return null;

@@ -1,9 +1,9 @@
 // src/controllers/aiController.ts
 
 import { Request, Response } from 'express';
-import { getSuggestedResponses, checkAIServiceHealth } from '../services/aiService';
-import { createLogger } from '../config/logging';
-import { userCanAccessHrChats } from '../auth/hrAccess';
+import { getSuggestedResponses, checkAIServiceHealth } from '../services/aiService.js';
+import { createLogger } from '../config/logging.js';
+import { userCanAccessHrChats } from '../auth/hrAccess.js';
 
 const logger = createLogger();
 

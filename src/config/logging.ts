@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
-import pino, { Logger, LoggerOptions, LevelWithSilent } from 'pino';
+// именованный импорт: под nodenext дефолтный экспорт pino не типизирован как callable
+import { pino, Logger, LoggerOptions, LevelWithSilent } from 'pino';
 
 dotenv.config({ quiet: true });
 

@@ -1,13 +1,15 @@
 // src/controllers/mediaController.ts
 
 import { Request, Response } from 'express';
+import * as fs from 'fs';
+import * as path from 'path';
 import multer from 'multer';
-import { saveUploadedMedia, validateMediaFile } from '../services/mediaService';
-import { sendMessage, getBaileysSock } from '../config/baileys';
+import { saveUploadedMedia, validateMediaFile } from '../services/mediaService.js';
+import { sendMessage, getBaileysSock } from '../config/baileys.js';
 import { jidNormalizedUser } from '@whiskeysockets/baileys';
-import { prisma } from '../config/authStorage';
-import { createLogger } from '../config/logging';
-import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
+import { prisma } from '../config/authStorage.js';
+import { createLogger } from '../config/logging.js';
+import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess.js';
 
 const logger = createLogger();
 
@@ -648,9 +650,6 @@ export const sendMediaByChatId = async (req: Request, res: Response) => {
       }
     } else {
       // Если это локальный путь, читаем файл
-      const fs = require('fs');
-      const path = require('path');
-      
       const fullPath = path.isAbsolute(mediaPath) ? mediaPath : path.join(process.cwd(), mediaPath);
       
       if (!fs.existsSync(fullPath)) {
@@ -724,8 +723,8 @@ export const sendMediaByChatId = async (req: Request, res: Response) => {
       userId,
       {
         mediaUrl: isFullUrl ? mediaPath : (isRelativePath ? `${req.protocol}://${req.get('host')}${mediaPath}` : undefined),
-        filename: filename || (!isFullUrl && !isRelativePath ? require('path').basename(mediaPath) : undefined),
-        size: !isFullUrl && !isRelativePath ? require('fs').statSync(require('path').isAbsolute(mediaPath) ? mediaPath : require('path').join(process.cwd(), mediaPath)).size : undefined
+        filename: filename || (!isFullUrl && !isRelativePath ? path.basename(mediaPath) : undefined),
+        size: !isFullUrl && !isRelativePath ? fs.statSync(path.isAbsolute(mediaPath) ? mediaPath : path.join(process.cwd(), mediaPath)).size : undefined
       }
     );
 

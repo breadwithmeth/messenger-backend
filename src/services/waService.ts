@@ -1,5 +1,5 @@
 // 📁 src/services/waService.ts
-import { startBaileys,  } from '../config/baileys';
+import { startBaileys,  } from '../config/baileys.js';
 
 export async function startWaSession(organizationId: number, phoneJid: string, id: number) {
   await startBaileys(organizationId, id ,phoneJid);

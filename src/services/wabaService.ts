@@ -1,9 +1,9 @@
 // src/services/wabaService.ts
 
 import axios from 'axios';
-import { prisma } from '../config/authStorage';
-import { createLogger } from '../config/logging';
-import { saveMedia } from './storageService';
+import { prisma } from '../config/authStorage.js';
+import { createLogger } from '../config/logging.js';
+import { saveMedia } from './storageService.js';
 
 const logger = createLogger();
 

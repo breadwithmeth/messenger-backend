@@ -1,17 +1,17 @@
 import { Request, Response } from 'express';
-import prisma from '../config/prisma';
+import prisma from '../config/prisma.js';
 import {
   createWebsiteVisitorSession,
   normalizeWebsiteVisitorProfile,
   reopenWebsiteChatIfNeeded,
   updateWebsiteVisitorProfile,
-} from '../services/websiteWidgetService';
+} from '../services/websiteWidgetService.js';
 import {
   notifyNewChat,
   notifyNewMessage,
   notifyChatsUpdated,
   notifyWebsiteVisitor,
-} from '../services/socketService';
+} from '../services/socketService.js';
 
 const MAX_MESSAGE_LENGTH = 5000;
 

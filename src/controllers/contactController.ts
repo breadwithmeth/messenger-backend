@@ -1,9 +1,9 @@
 // src/controllers/contactController.ts
 
 import { Request, Response } from 'express';
-import { getBaileysSock } from '../config/baileys';
+import { getBaileysSock } from '../config/baileys.js';
 import { jidNormalizedUser } from '@whiskeysockets/baileys';
-import { createLogger } from '../config/logging';
+import { createLogger } from '../config/logging.js';
 
 const logger = createLogger();
 

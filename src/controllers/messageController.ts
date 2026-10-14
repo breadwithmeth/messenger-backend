@@ -1,14 +1,14 @@
 // src/controllers/messageController.ts
 
 import { Request, Response } from 'express';
-import { getBaileysSock, sendMessage } from '../config/baileys';
+import { getBaileysSock, sendMessage } from '../config/baileys.js';
 import { jidNormalizedUser } from '@whiskeysockets/baileys';
-import { createLogger } from '../config/logging';
-import { prisma } from '../config/authStorage'; // Для получения phoneJid
+import { createLogger } from '../config/logging.js';
+import { prisma } from '../config/authStorage.js'; // Для получения phoneJid
 import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
-import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
+import { chatVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess.js';
 
 const logger = createLogger();
 const SENSITIVE_LOG_KEY = /(authorization|cookie|password|secret|token)/i;
@@ -380,9 +380,8 @@ export const sendMediaMessage = async (req: Request, res: Response) => {
       }
     } else {
       // Если это локальный путь, читаем файл
-      const fs = require('fs');
-      const path = require('path');
-      
+      // fs и path импортированы в начале файла (ESM)
+
       // Определяем полный путь к файлу
       const fullPath = path.isAbsolute(mediaPath) ? mediaPath : path.join(process.cwd(), mediaPath);
       
@@ -867,7 +866,7 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
         senderUserId: userId,
         channel: 'website',
       };
-      const { notifyNewMessage, notifyWebsiteVisitor } = await import('../services/socketService');
+      const { notifyNewMessage, notifyWebsiteVisitor } = await import('../services/socketService.js');
       notifyNewMessage(organizationId, event);
       notifyWebsiteVisitor(chat.websiteSession.id, 'message:new', {
         id: savedMessage.id,
@@ -917,7 +916,7 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
         sendTelegramDocument,
         sendTelegramVideo,
         sendTelegramAudio,
-      } = await import('../services/telegramService');
+      } = await import('../services/telegramService.js');
 
       try {
         // Обработка разных типов сообщений
@@ -1052,7 +1051,7 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
       // Используем WABA API
       logger.info(`[sendMessageByChat] Используем WABA для чата ${chatId}`);
       
-      const { createWABAService } = await import('../services/wabaService');
+      const { createWABAService } = await import('../services/wabaService.js');
       const wabaService = await createWABAService(chat.organizationPhone.id);
       
       if (!wabaService) {
@@ -1277,7 +1276,7 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
       });
 
       // Отправляем Socket.IO уведомление о новом сообщении от оператора
-      const { notifyNewMessage } = await import('../services/socketService');
+      const { notifyNewMessage } = await import('../services/socketService.js');
       try {
         notifyNewMessage(organizationId, {
           id: savedMessage.id,

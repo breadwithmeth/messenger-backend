@@ -1,11 +1,11 @@
 // src/controllers/chatController.ts
 
 import { Request, Response } from 'express';
-import * as chatService from '../services/chatService';
-import { createLogger } from '../config/logging';
-import { prisma } from '../config/authStorage'; // Используем единый клиент Prisma
-import { canAccessChat, chatVisibilityWhere, messageVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess';
-import { normalizeAppRole } from '../auth/roleUtils';
+import * as chatService from '../services/chatService.js';
+import { createLogger } from '../config/logging.js';
+import { prisma } from '../config/authStorage.js'; // Используем единый клиент Prisma
+import { canAccessChat, chatVisibilityWhere, messageVisibilityWhere, userCanAccessHrChats } from '../auth/hrAccess.js';
+import { normalizeAppRole } from '../auth/roleUtils.js';
 
 const logger = createLogger();
 

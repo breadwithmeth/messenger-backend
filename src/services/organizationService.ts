@@ -1,4 +1,4 @@
-import prisma from '../config/prisma';
+import prisma from '../config/prisma.js';
 
 export async function createOrganization(name: string) {
   return prisma.organization.create({

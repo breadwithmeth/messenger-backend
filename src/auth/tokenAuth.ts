@@ -2,8 +2,8 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import { JWTPayload, createRemoteJWKSet, jwtVerify } from 'jose';
 import { randomUUID } from 'crypto';
-import prisma from '../config/prisma';
-import { normalizeAppRole } from './roleUtils';
+import prisma from '../config/prisma.js';
+import { normalizeAppRole } from './roleUtils.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'secret';
 

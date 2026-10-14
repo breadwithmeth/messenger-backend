@@ -1,33 +1,33 @@
-import { createLogger } from './config/logging';
+import { createLogger } from './config/logging.js';
 import express from 'express';
-import authRoutes from './routes/authRoutes';
-import organizationRoutes from './routes/organizationRoutes';
-import chatRoutes from './routes/chatRoutes';
-import messageRoutes from './routes/messageRoutes';
-import waRoutes from './routes/waRoutes';
-import chatAssignmentRoutes from './routes/chatAssignmentRoutes';
-import messageReadRoutes from './routes/messageReadRoutes';
-import unreadRoutes from './routes/unreadRoutes';
-import mediaRoutes from './routes/mediaRoutes';
-import ticketRoutes from './routes/ticketRoutes';
-import telegramRoutes from './routes/telegramRoutes'; // <-- НОВОЕ
-import wabaRoutes from './routes/wabaRoutes'; // <-- WABA интеграция
-import aiRoutes from './routes/aiRoutes'; // <-- AI предложения ответов
-import analyticsRoutes from './routes/analyticsRoutes';
-import errorHandler from './middlewares/errorHandler'; // Corrected import path
+import authRoutes from './routes/authRoutes.js';
+import organizationRoutes from './routes/organizationRoutes.js';
+import chatRoutes from './routes/chatRoutes.js';
+import messageRoutes from './routes/messageRoutes.js';
+import waRoutes from './routes/waRoutes.js';
+import chatAssignmentRoutes from './routes/chatAssignmentRoutes.js';
+import messageReadRoutes from './routes/messageReadRoutes.js';
+import unreadRoutes from './routes/unreadRoutes.js';
+import mediaRoutes from './routes/mediaRoutes.js';
+import ticketRoutes from './routes/ticketRoutes.js';
+import telegramRoutes from './routes/telegramRoutes.js'; // <-- НОВОЕ
+import wabaRoutes from './routes/wabaRoutes.js'; // <-- WABA интеграция
+import aiRoutes from './routes/aiRoutes.js'; // <-- AI предложения ответов
+import analyticsRoutes from './routes/analyticsRoutes.js';
+import errorHandler from './middlewares/errorHandler.js'; // Corrected import path
 import cors, { CorsOptions } from 'cors';
 import path from 'path'; // <--- ДОБАВИТЬ
-import { startBaileys } from './config/baileys';
-import prisma from './config/prisma';
-import { startWaSession } from './services/waService'; // Импортируйте startWaSession
-import organizationPhoneRoutes from './routes/organizationPhoneRoutes';
-import accountRoutes from './routes/accountRoutes';
-import userRoutes from './routes/userRoutes'; // <-- Добавить
-import contactRoutes from './routes/contactRoutes';
-import clientRoutes from './routes/clientRoutes'; // <-- Клиенты организации
-import workforceRoutes from './routes/workforceRoutes';
-import websiteWidgetRoutes from './routes/websiteWidgetRoutes';
-import websiteWidgetPublicRoutes from './routes/websiteWidgetPublicRoutes';
+import { startBaileys } from './config/baileys.js';
+import prisma from './config/prisma.js';
+import { startWaSession } from './services/waService.js'; // Импортируйте startWaSession
+import organizationPhoneRoutes from './routes/organizationPhoneRoutes.js';
+import accountRoutes from './routes/accountRoutes.js';
+import userRoutes from './routes/userRoutes.js'; // <-- Добавить
+import contactRoutes from './routes/contactRoutes.js';
+import clientRoutes from './routes/clientRoutes.js'; // <-- Клиенты организации
+import workforceRoutes from './routes/workforceRoutes.js';
+import websiteWidgetRoutes from './routes/websiteWidgetRoutes.js';
+import websiteWidgetPublicRoutes from './routes/websiteWidgetPublicRoutes.js';
 
 
 const app = express();

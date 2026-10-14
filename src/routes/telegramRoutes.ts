@@ -1,8 +1,8 @@
 // src/routes/telegramRoutes.ts
 
 import { Router } from 'express';
-import * as telegramController from '../controllers/telegramController';
-import { authMiddleware } from '../middlewares/authMiddleware';
+import * as telegramController from '../controllers/telegramController.js';
+import { authMiddleware } from '../middlewares/authMiddleware.js';
 
 const router = Router();
 

@@ -1,9 +1,9 @@
 import { Logger } from 'pino';
-import { createLogger } from '../../config/logging';
-import { getWorkforceConfig } from '../../config/workforceConfig';
-import { KeycloakClientCredentialsTokenProvider } from './tokenProvider';
-import { WorkforceClient } from './workforceClient';
-import { SyncEmployeeRequest } from './types';
+import { createLogger } from '../../config/logging.js';
+import { getWorkforceConfig } from '../../config/workforceConfig.js';
+import { KeycloakClientCredentialsTokenProvider } from './tokenProvider.js';
+import { WorkforceClient } from './workforceClient.js';
+import { SyncEmployeeRequest } from './types.js';
 
 export type AuthClaims = {
   keycloakId?: string;

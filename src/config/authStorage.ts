@@ -1,7 +1,7 @@
 // src/config/authStorage.ts
-import './logging';
+import './logging.js';
 import { Buffer } from 'buffer';
-import prisma from './prisma';
+import prisma from './prisma.js';
 
 export type StoredDataType = 'json' | 'buffer' | 'base64_json';
 

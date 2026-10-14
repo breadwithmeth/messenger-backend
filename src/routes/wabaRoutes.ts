@@ -1,7 +1,7 @@
 // src/routes/wabaRoutes.ts
 
 import express from 'express';
-import { authMiddleware } from '../middlewares/authMiddleware';
+import { authMiddleware } from '../middlewares/authMiddleware.js';
 import {
   verifyWebhook,
   handleWebhook,
@@ -18,7 +18,7 @@ import {
   sendFlow,
   getFlowInfo,
   getFlowSubmissions,
-} from '../controllers/wabaController';
+} from '../controllers/wabaController.js';
 
 const router = express.Router();
 

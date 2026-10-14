@@ -1,8 +1,8 @@
 // src/routes/accountRoutes.ts
 import { Router } from 'express';
-import { createAccount } from '../controllers/accountController';
-import { authMiddleware } from '../middlewares/authMiddleware';
-import { requireRole } from '../middlewares/requireRole';
+import { createAccount } from '../controllers/accountController.js';
+import { authMiddleware } from '../middlewares/authMiddleware.js';
+import { requireRole } from '../middlewares/requireRole.js';
 
 const router = Router();
 

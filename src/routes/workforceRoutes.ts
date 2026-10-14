@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authMiddleware } from '../middlewares/authMiddleware';
+import { authMiddleware } from '../middlewares/authMiddleware.js';
 import {
   getMyEmployee,
   getMyActivityStats,
@@ -10,9 +10,9 @@ import {
   stopMyShift,
   setEmployeePresenceInternal,
   presenceHeartbeat,
-} from '../controllers/workforceController';
-import { requireRole } from '../middlewares/requireRole';
-import { serviceAuthMiddleware } from '../middlewares/serviceAuthMiddleware';
+} from '../controllers/workforceController.js';
+import { requireRole } from '../middlewares/requireRole.js';
+import { serviceAuthMiddleware } from '../middlewares/serviceAuthMiddleware.js';
 
 const router = Router();
 

@@ -1,4 +1,4 @@
-import { WorkforceClient } from '../workforceClient';
+import { WorkforceClient } from '../workforceClient.js';
 
 function makeJsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {

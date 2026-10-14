@@ -1,7 +1,7 @@
-import '../config/logging';
+import '../config/logging.js';
 import { Response } from 'express';
-import { AuthRequest } from '../middlewares/authMiddleware';
-import prisma from '../config/prisma';
+import { AuthRequest } from '../middlewares/authMiddleware.js';
+import prisma from '../config/prisma.js';
 
 /**
  * Получить список всех клиентов организации
@@ -869,7 +869,7 @@ export const updateClientFinancials = async (req: AuthRequest, res: Response) =>
       return res.status(404).json({ error: 'Client not found' });
     }
 
-    const { updateClientPurchaseStats } = await import('../services/clientService');
+    const { updateClientPurchaseStats } = await import('../services/clientService.js');
     await updateClientPurchaseStats(parseInt(id), parseFloat(purchaseAmount));
 
     const updatedClient = await prisma.organizationClient.findUnique({

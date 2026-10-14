@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { startSessionHandler,  } from '../controllers/waSessionController';
+import { startSessionHandler,  } from '../controllers/waSessionController.js';
 
 const router = Router();
 

@@ -7,8 +7,8 @@ import {
   uploadSingle,
   sendMediaByChatId,
   uploadMediaForWABA
-} from '../controllers/mediaController';
-import { authMiddleware } from '../middlewares/authMiddleware';
+} from '../controllers/mediaController.js';
+import { authMiddleware } from '../middlewares/authMiddleware.js';
 
 const router = Router();
 
