@@ -255,6 +255,56 @@ describe('акции и опции (розлив)', () => {
     const offer2 = buildSearchOffer('корона', [item({ item_id: 111, name: 'Corona Extra 0.45', price: 990 })]);
     expect(offer2.inlineKeyboard.flat()[0].text).toContain('Corona Extra 0.45');
   });
+
+  test('список согласован с кнопками: товары без кнопок не показываются', () => {
+    // 8 розливных товаров × 3 тары = 24 кнопки, бюджет 16 → в списке ~5 товаров
+    const items = Array.from({ length: 8 }, (_, k) =>
+      item({
+        item_id: 500 + k,
+        name: `Пиво розлив Номер ${k} 1л`,
+        price: 1000,
+        unit: 'л.',
+        options: [
+          {
+            option_id: k,
+            name: 'Литраж',
+            required: 1,
+            selection: 'SINGLE',
+            variants: [
+              { item_name: 'Бутылка 1л', relation_id: 900 + k * 3, price_type: 'ADD', price: 50, parent_item_amount: 1 },
+              { item_name: 'Бутылка 2л', relation_id: 901 + k * 3, price_type: 'ADD', price: 60, parent_item_amount: 2 },
+              { item_name: 'Бутылка 3л', relation_id: 902 + k * 3, price_type: 'ADD', price: 70, parent_item_amount: 3 },
+            ],
+          },
+        ],
+      })
+    );
+
+    const offer = buildSearchOffer('розлив', items);
+    const addButtons = offer.inlineKeyboard.flat().filter((b) => b.callbackData.startsWith('add:'));
+    expect(addButtons.length).toBeLessThanOrEqual(16);
+
+    // каждая строка списка соответствует товару с кнопками
+    for (const n of ['Номер 0', 'Номер 1']) {
+      expect(offer.text).toContain(`Номер ${n === 'Номер 0' ? '0' : '1'}`);
+    }
+    // товар, чьи кнопки не влезли, в списке отсутствует
+    expect(offer.text).not.toContain('Номер 7');
+  });
+
+  test('resolveVariant: дефолт — первая обязательная тара (розлив не добавится без тары)', () => {
+    const cart = addToCart([], bavaria, 1); // без выбора тары
+    expect(cart[0].option).toMatchObject({ relationId: 3030, label: 'Пластиковая бутылка 1л' });
+    expect(cart[0].qty).toBe(1);
+
+    const cart2 = setCartQty([], bavaria, 2); // set_qty без тары → тоже с тарой
+    expect(cart2[0].option).toMatchObject({ relationId: 3030 });
+    expect(cart2[0].qty).toBe(2);
+
+    // у товара без опций дефолт не появляется
+    const plain = addToCart([], item({ item_id: 9 }), 1);
+    expect(plain[0].option ?? null).toBeNull();
+  });
 });
 
 describe('форматирование', () => {

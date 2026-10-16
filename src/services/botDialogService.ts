@@ -173,9 +173,20 @@ export function requiredSingleOption(item: NalivItem): NalivOption | null {
 }
 
 /**
+ * Выбор варианта тары: переданный, иначе первая обязательная (защита от
+ * добавления розлива без тары, если какая-то ветка не спросила клиента).
+ */
+export function resolveVariant(item: NalivItem, variant?: NalivOptionVariant | null): NalivOptionVariant | null {
+  if (variant) return variant;
+  const req = requiredSingleOption(item);
+  return req?.variants?.[0] ?? null;
+}
+
+/**
  * Добавляет к корзине `portions` порций товара (с выбранной опцией-тарой, если есть).
  * Размер одной порции: для тары — parent_item_amount (литры розлива), иначе quantity_step.
  * Позиции различаются по паре (товар + тара).
+ * Предохранитель: товар с обязательной тарой без выбора получает первую тару по умолчанию.
  */
 export function addToCart(
   cart: CartItem[],
@@ -183,7 +194,7 @@ export function addToCart(
   portions: number,
   option?: { variant: NalivOptionVariant } | null
 ): CartItem[] {
-  const variant = option?.variant;
+  const variant = resolveVariant(item, option?.variant);
   const portionSize = variant
     ? Math.max(1, Number(variant.parent_item_amount) || 1)
     : item.quantity_step > 0
@@ -239,7 +250,7 @@ export function setCartQty(
   portions: number,
   option?: { variant: NalivOptionVariant } | null
 ): CartItem[] {
-  const variant = option?.variant;
+  const variant = resolveVariant(item, option?.variant);
   const portionSize = variant
     ? Math.max(1, Number(variant.parent_item_amount) || 1)
     : item.quantity_step > 0
@@ -373,11 +384,15 @@ export function shortenItemName(name: string, maxLen = MAX_BUTTON_NAME_LEN): str
   return clean.length <= maxLen ? clean : `${clean.slice(0, maxLen - 1)}…`;
 }
 
+/** Бюджет кнопок в выдаче поиска (товары с тарой занимают несколько кнопок) */
+const MAX_SEARCH_BUTTONS_TOTAL = MAX_SEARCH_BUTTONS * 2;
+
 /**
  * Сообщение с результатами поиска + инлайн-кнопки выбора товара.
  * Выбор позиции — кнопкой (callback `add:<item_id>` или `add:<item_id>:<relation_id>`
  * для товаров с обязательной тарой), не текстом: исключает путаницу
  * «номер из списка = количество». limit — сколько вариантов показать.
+ * Список и кнопки согласованы: в списке только товары, чьи кнопки поместились.
  */
 export function buildSearchOffer(query: string, items: NalivItem[], limit: number = MAX_SEARCH_BUTTONS): {
   text: string;
@@ -385,10 +400,41 @@ export function buildSearchOffer(query: string, items: NalivItem[], limit: numbe
 } {
   const shown = items.slice(0, Math.max(1, Math.min(limit, MAX_SEARCH_BUTTONS)));
 
-  const listText = shown
-    .map((i) => {
+  // Группы кнопок по товарам в рамках бюджета
+  type ButtonGroup = { item: NalivItem; buttons: BotInlineButton[] };
+  const groups: ButtonGroup[] = [];
+  let used = 0;
+
+  for (const i of shown) {
+    const option = requiredSingleOption(i);
+    const badge = promoBadge(i);
+    const group: BotInlineButton[] = [];
+
+    if (option) {
+      const productLabel = shortenItemName(i.name, 22);
+      for (const v of option.variants!) {
+        const pAmount = Math.max(1, Number(v.parent_item_amount) || 1);
+        const portion = effectivePrice(i) * pAmount + (v.price_type === 'ADD' ? Number(v.price) || 0 : 0);
+        group.push({
+          text: `${productLabel} — ${shortenItemName(v.item_name || option.name, 26)} · ${formatMoney(portion)} ₸${badge}`,
+          callbackData: `add:${i.item_id}:${v.relation_id}`,
+        });
+      }
+    } else {
+      group.push({
+        text: `${shortenItemName(i.name)} · ${formatMoney(effectivePrice(i))} ₸${badge}`,
+        callbackData: `add:${i.item_id}`,
+      });
+    }
+
+    if (used + group.length > MAX_SEARCH_BUTTONS_TOTAL && groups.length > 0) break;
+    groups.push({ item: i, buttons: group });
+    used += group.length;
+  }
+
+  const listText = groups
+    .map(({ item: i }) => {
       const option = requiredSingleOption(i);
-      const hint = option ? ` — выберите тару кнопкой (${option.name})` : '';
       const promo = pickPromo(i);
       const promoText =
         promo?.type === 'SUBTRACT'
@@ -396,6 +442,7 @@ export function buildSearchOffer(query: string, items: NalivItem[], limit: numbe
           : Number(promo?.discount) > 0
             ? ` −${Math.round(Number(promo.discount))}%`
             : '';
+      const hint = option ? ` — выберите тару кнопкой (${option.name})` : '';
       return `• ${i.name} — ${formatMoney(effectivePrice(i))} ₸/${i.unit || 'шт'}${promoText}${hint}`;
     })
     .join('\n');
@@ -404,31 +451,7 @@ export function buildSearchOffer(query: string, items: NalivItem[], limit: numbe
     `🔍 Нашёл по запросу «${query}»:\n\n${listText}\n\n` +
     `Выберите товар кнопкой — добавлю в корзину 👇 (нажать можно несколько раз — по одной порции за раз)`;
 
-  // Кнопки: у товаров с обязательной тарой — по кнопке на каждый вариант,
-  // на кнопке указан и товар (при нескольких разливных бутылки неотличимы)
-  const buttons: BotInlineButton[] = [];
-  for (const i of shown) {
-    const option = requiredSingleOption(i);
-    const badge = promoBadge(i);
-    if (option) {
-      const productLabel = shortenItemName(i.name, 22);
-      for (const v of option.variants!) {
-        const pAmount = Math.max(1, Number(v.parent_item_amount) || 1);
-        const portion = effectivePrice(i) * pAmount + (v.price_type === 'ADD' ? Number(v.price) || 0 : 0);
-        buttons.push({
-          text: `${productLabel} — ${shortenItemName(v.item_name || option.name, 26)} · ${formatMoney(portion)} ₸${badge}`,
-          callbackData: `add:${i.item_id}:${v.relation_id}`,
-        });
-      }
-    } else {
-      buttons.push({
-        text: `${shortenItemName(i.name)} · ${formatMoney(effectivePrice(i))} ₸${badge}`,
-        callbackData: `add:${i.item_id}`,
-      });
-    }
-  }
-
-  const rows = chunkRows(buttons.slice(0, MAX_SEARCH_BUTTONS * 2), 2);
+  const rows = chunkRows(groups.flatMap((g) => g.buttons), 2);
   rows.push([
     { text: '🛒 Корзина', callbackData: 'cart' },
     { text: '✅ Оформить', callbackData: 'checkout' },
@@ -675,17 +698,18 @@ ${phoneLine}
 - Магазин: ${ctx.businessName || 'не выбран'} (business_id: ${ctx.businessId || '-'})
 - Стоимость доставки: ${ctx.deliveryFee} ₸
 - Текущая корзина (JSON): ${cartForPrompt(ctx.cart)}
-- Найденные ранее товары (JSON, доступны для add_to_cart): ${JSON.stringify(
-    ctx.searchCache.slice(0, 20).map((i) => ({ item_id: i.item_id, name: i.name, price: i.price, unit: i.unit }))
+- Найденные ранее товары (JSON, свежие в конце; доступны для add_to_cart): ${JSON.stringify(
+    ctx.searchCache.slice(-15).map((i) => ({ item_id: i.item_id, name: i.name, price: i.price, unit: i.unit }))
   )}
 
 ПРАВИЛА:
 1. Ты отвечаешь СТРОГО одним JSON-объектом, без пояснений и markdown.
 2. Цены только из результатов поиска. НИКОГДА не выдумывай товары и цены.
 3. Если клиент называет товар, которого нет в "Найденных ранее товарах" — сначала вызови search_items.
-4. Для добавления в корзину используй item_id из результатов поиска.
-5. Напитки продаются только лицам 18+. Не помогай покупать алкоголь несовершеннолетним.
-6. Когда клиент выбирает товар из списка по номеру, используй item_id соответствующего товара из последнего результата поиска.
+4. КАТЕГОРИИ И ТИПЫ («розлив», «пиво», «вино», «закуски», «на компанию») — ВСЕГДА search_items, даже если похожие товары уже есть в "Найденных ранее товарах". Клиент должен увидеть весь выбор кнопками.
+5. add_to_cart/set_qty — только когда клиент явно просит добавить или изменить КОНКРЕТНЫЙ товар.
+6. Напитки продаются только лицам 18+. Не помогай покупать алкоголь несовершеннолетним.
+7. Когда клиент выбирает товар из списка по номеру, используй item_id соответствующего товара из последнего результата поиска.
 
 Формат ответа (выбери ОДНО действие):
 {"action": "search_items", "query": "<поисковый запрос>", "limit": <сколько показать, опционально>}
@@ -1559,6 +1583,28 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
               content: 'Ошибка: товар не найден среди найденных ранее. Сначала вызови search_items, затем set_qty с item_id из результатов.',
             });
             continue;
+          }
+
+          // Товар с обязательной тарой (розлив) — клиент выбирает вариант кнопкой
+          const reqOptionQty = requiredSingleOption(item);
+          if (reqOptionQty) {
+            const productLabel = shortenItemName(item.name, 22);
+            const variantButtons = chunkRows(
+              (reqOptionQty.variants || []).map((v) => {
+                const pAmount = Math.max(1, Number(v.parent_item_amount) || 1);
+                const portion = effectivePrice(item) * pAmount + (v.price_type === 'ADD' ? Number(v.price) || 0 : 0);
+                return {
+                  text: `${productLabel} — ${shortenItemName(v.item_name || reqOptionQty.name, 26)} · ${formatMoney(portion)} ₸${promoBadge(item)}`,
+                  callbackData: `add:${item.item_id}:${v.relation_id}`,
+                };
+              }),
+              2
+            );
+            await ctx.send(
+              `🫗 «${item.name}» продаётся с выбором тары (${reqOptionQty.name}) — выберите кнопку ниже:`,
+              { inlineKeyboard: variantButtons }
+            );
+            return;
           }
 
           const wantedQty = action.qty && action.qty > 0 ? action.qty : 1;
