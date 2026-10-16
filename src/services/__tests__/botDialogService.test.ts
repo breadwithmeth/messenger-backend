@@ -4,6 +4,8 @@ import {
   addToCart,
   setCartQty,
   removeFromCart,
+  getRecommendationQuery,
+  cartHasPairing,
   cartSubtotal,
   formatCart,
   formatMoney,
@@ -75,7 +77,7 @@ describe('эффективная цена (акции)', () => {
 describe('корзина', () => {
   test('добавляет новый товар', () => {
     const cart = addToCart([], item({ item_id: 5, price: 730 }), 2);
-    expect(cart).toEqual([{ itemId: 5, name: 'Пиво Heineken 0.5', price: 730, qty: 2, unit: 'шт' }]);
+    expect(cart[0]).toMatchObject({ itemId: 5, name: 'Пиво Heineken 0.5', price: 730, qty: 2, unit: 'шт' });
   });
 
   test('увеличивает количество существующего товара', () => {
@@ -84,9 +86,11 @@ describe('корзина', () => {
     expect(cart[0].qty).toBe(3);
   });
 
-  test('округляет количество до quantity_step', () => {
-    const cart = addToCart([], item({ quantity_step: 4 }), 3);
-    expect(cart[0].qty).toBe(4);
+  test('порции: qty — количество порций, 1 порция = quantity_step шт', () => {
+    // 3 порции по 4 шт = 12 шт
+    const cart = addToCart([], item({ item_id: 10, quantity_step: 4, amount: 100 }), 3);
+    expect(cart[0].qty).toBe(12);
+    expect(cart[0].portionSize).toBe(4);
   });
 
   test('использует цену с учётом акции', () => {
@@ -114,6 +118,11 @@ describe('корзина', () => {
     expect(text).toContain('Товары: 2 000 ₸');
     expect(text).toContain('Доставка: 30 ₸');
     expect(text).toContain('Итого: 2 030 ₸');
+  });
+
+  test('показывает порции для товаров с шагом > 1', () => {
+    const text = formatCart([cartItem({ name: 'Шот Ягер 0.04', qty: 8, portionSize: 4 })], 30);
+    expect(text).toContain('× 8 шт (2 порц. × 4 шт)');
   });
 
   test('пустая корзина — подсказка', () => {
@@ -282,17 +291,29 @@ describe('set_qty — точное количество вместо приба�
 
   test('добавляет новую позицию, если товара не было', () => {
     const result = setCartQty([], item({ item_id: 10, price: 1500 }), 3);
-    expect(result).toEqual([{ itemId: 10, name: 'Пиво Heineken 0.5', price: 1500, qty: 3, unit: 'шт' }]);
+    expect(result[0]).toMatchObject({ itemId: 10, name: 'Пиво Heineken 0.5', price: 1500, qty: 3, unit: 'шт' });
   });
 
   test('округляет до quantity_step', () => {
-    const result = setCartQty([], item({ item_id: 10, quantity_step: 4 }), 3);
-    expect(result[0].qty).toBe(4);
+    const result = setCartQty([], item({ item_id: 10, quantity_step: 4, amount: 100 }), 3);
+    expect(result[0].qty).toBe(12);
+  });
+
+  test('порции: «2 порции» при step 4 = 8 шт', () => {
+    const result = setCartQty([], item({ item_id: 10, quantity_step: 4 }), 2);
+    expect(result[0].qty).toBe(8);
+    expect(result[0].portionSize).toBe(4);
   });
 
   test('не превышает остаток на складе', () => {
     const result = setCartQty([], item({ item_id: 10, amount: 3 }), 10);
     expect(result[0].qty).toBe(3);
+  });
+
+  test('остаток в штуках: клампит по целым порциям', () => {
+    // на складе 10 шт, шаг 4 → целых порций 2 → 8 шт, а не 12
+    const result = setCartQty([], item({ item_id: 10, quantity_step: 4, amount: 10 }), 5);
+    expect(result[0].qty).toBe(8);
   });
 
   test('qty 0 или отрицательное — удаляет позицию', () => {
@@ -311,6 +332,36 @@ describe('set_qty — точное количество вместо приба�
   test('add_to_cart по-прежнему прибавляет (кнопки и «ещё»)', () => {
     const cart = addToCart([cartItem({ itemId: 10, qty: 1 })], item({ item_id: 10 }), 2);
     expect(cart[0].qty).toBe(3);
+  });
+});
+
+describe('рекомендации «в пару»', () => {
+  test('пиво -> закуски', () => {
+    for (const name of ['Пиво Heineken 0.5', 'Лагер Светлый 0.45', 'Сидр яблочный', 'IPA Kraut']) {
+      expect(getRecommendationQuery(name)).not.toBeNull();
+    }
+  });
+
+  test('вино -> сыр/шоколад', () => {
+    const rec = getRecommendationQuery('Вино красное полусухое 0.75');
+    expect(['сыр', 'шоколад']).toContain(rec);
+  });
+
+  test('крепкое -> миксеры', () => {
+    const rec = getRecommendationQuery('Виски Jack Daniels 0.5');
+    expect(['кола', 'сок', 'тоник']).toContain(rec);
+  });
+
+  test('снеки и нейтральные товары без пары -> null', () => {
+    expect(getRecommendationQuery('Чипсы Pringles 150г')).toBeNull();
+    expect(getRecommendationQuery('Вода минеральная 1л')).toBeNull();
+  });
+
+  test('cartHasPairing не предлагает пару дважды', () => {
+    const cart = [cartItem({ name: 'Чипсы Lays 150г' })];
+    expect(cartHasPairing(cart, 'чипсы')).toBe(true);
+    expect(cartHasPairing(cart, 'сыр')).toBe(false);
+    expect(cartHasPairing([], 'чипсы')).toBe(false);
   });
 });
 

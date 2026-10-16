@@ -85,20 +85,25 @@ export function effectivePrice(item: NalivItem): number {
   return price;
 }
 
-/** Добавляет товар в корзину (qty округляется вверх до quantity_step) */
-export function addToCart(cart: CartItem[], item: NalivItem, qty: number): CartItem[] {
+/**
+ * Добавляет к корзине `portions` порций товара.
+ * Размер одной порции = quantity_step шт (шаг заказа из API «Налив»),
+ * у большинства товаров порция = 1 шт.
+ */
+export function addToCart(cart: CartItem[], item: NalivItem, portions: number): CartItem[] {
   const step = item.quantity_step > 0 ? item.quantity_step : 1;
-  const normalizedQty = Math.max(step, Math.round(qty / step) * step);
+  const normalizedPortions = Math.max(1, Math.round(portions));
+  const qtyDelta = normalizedPortions * step;
   const price = effectivePrice(item);
 
   const existing = cart.find((c) => c.itemId === item.item_id);
   if (existing) {
-    return cart.map((c) => (c.itemId === item.item_id ? { ...c, qty: c.qty + normalizedQty } : c));
+    return cart.map((c) => (c.itemId === item.item_id ? { ...c, qty: c.qty + qtyDelta, portionSize: step } : c));
   }
 
   return [
     ...cart,
-    { itemId: item.item_id, name: item.name, price, qty: normalizedQty, unit: item.unit || 'шт' },
+    { itemId: item.item_id, name: item.name, price, qty: qtyDelta, unit: item.unit || 'шт', portionSize: step },
   ];
 }
 
@@ -108,31 +113,42 @@ export function removeFromCart(cart: CartItem[], itemId: number): CartItem[] {
 }
 
 /**
- * Устанавливает ТОЧНОЕ количество товара в корзине (не прибавляет):
- * «два ягеря» = 2 шт всего. qty <= 0 — удалить позицию.
- * Количество округляется до quantity_step и ограничивается остатком на складе.
+ * Устанавливает ТОЧНОЕ количество в порциях (не прибавляет):
+ * «два ягеря» = 2 порции = 2 × quantity_step шт. portions <= 0 — удалить позицию.
+ * Ограничивается остатком на складе (amount — в штуках).
  */
-export function setCartQty(cart: CartItem[], item: NalivItem, qty: number): CartItem[] {
+export function setCartQty(cart: CartItem[], item: NalivItem, portions: number): CartItem[] {
   const step = item.quantity_step > 0 ? item.quantity_step : 1;
-  const normalizedQty = Math.round(qty / step) * step;
+  const normalizedPortions = Math.round(portions);
 
-  if (normalizedQty <= 0) {
+  if (normalizedPortions <= 0) {
     return removeFromCart(cart, item.item_id);
   }
 
-  // Не больше остатка (amount > 0), но минимум одна ступень
-  const stock = item.amount > 0 ? item.amount : normalizedQty;
-  const clampedQty = Math.min(normalizedQty, Math.max(stock, step));
+  // Не больше остатка, но минимум одна порция
+  const maxPortions = item.amount > 0 ? Math.floor(item.amount / step) : normalizedPortions;
+  const clampedPortions = Math.min(normalizedPortions, Math.max(maxPortions, 1));
   const price = effectivePrice(item);
 
   const existing = cart.find((c) => c.itemId === item.item_id);
   if (existing) {
-    return cart.map((c) => (c.itemId === item.item_id ? { ...c, qty: clampedQty, price } : c));
+    return cart.map((c) =>
+      c.itemId === item.item_id
+        ? { ...c, qty: clampedPortions * step, price, portionSize: step }
+        : c
+    );
   }
 
   return [
     ...cart,
-    { itemId: item.item_id, name: item.name, price, qty: clampedQty, unit: item.unit || 'шт' },
+    {
+      itemId: item.item_id,
+      name: item.name,
+      price,
+      qty: clampedPortions * step,
+      unit: item.unit || 'шт',
+      portionSize: step,
+    },
   ];
 }
 
@@ -154,9 +170,12 @@ export function formatCart(cart: CartItem[], deliveryFee: number): string {
     return '🛒 Корзина пуста. Напишите название товара — например «пиво Heineken».';
   }
 
-  const lines = cart.map(
-    (c) => `• ${c.name} — ${formatMoney(c.price)} ₸ × ${c.qty} ${c.unit} = ${formatMoney(c.price * c.qty)} ₸`
-  );
+  const lines = cart.map((c) => {
+    // Для порционных товаров (шаг заказа > 1) показываем и порции
+    const portionSuffix =
+      c.portionSize && c.portionSize > 1 ? ` (${Math.round(c.qty / c.portionSize)} порц. × ${c.portionSize} ${c.unit})` : '';
+    return `• ${c.name} — ${formatMoney(c.price)} ₸ × ${c.qty} ${c.unit}${portionSuffix} = ${formatMoney(c.price * c.qty)} ₸`;
+  });
   const subtotal = cartSubtotal(cart);
 
   return [
@@ -173,7 +192,14 @@ export function formatCart(cart: CartItem[], deliveryFee: number): string {
 export function cartForPrompt(cart: CartItem[]): string {
   if (cart.length === 0) return '[]';
   return JSON.stringify(
-    cart.map((c) => ({ item_id: c.itemId, name: c.name, price: c.price, qty: c.qty, unit: c.unit }))
+    cart.map((c) => ({
+      item_id: c.itemId,
+      name: c.name,
+      price: c.price,
+      qty: c.qty,
+      unit: c.unit,
+      ...(c.portionSize && c.portionSize > 1 ? { portion_size: c.portionSize } : {}),
+    }))
   );
 }
 
@@ -339,6 +365,37 @@ export function pick<T>(items: T[]): T {
   return items[Math.floor(Math.random() * items.length)];
 }
 
+// === Рекомендации «в пару к заказу» ===
+
+/** Категория -> поисковые запросы дополнений (выбирается случайный) */
+export const PAIRINGS: { pattern: RegExp; keywords: string[] }[] = [
+  // Пиво/сидр -> снеки
+  { pattern: /пиво|лагер|эль\b|ipa|apa|lager|ale|сидр/i, keywords: ['чипсы', 'снеки', 'сухарики', 'рыбка', 'сырные палочки'] },
+  // Вино -> сыр, шоколад
+  { pattern: /вин[оа]|кагор| просекко|шампан/i, keywords: ['сыр', 'шоколад'] },
+  // Крепкое -> миксеры
+  { pattern: /виски|коньяк|водка|джин|ром|текила|настойка|абсент|бренди|самогон/i, keywords: ['кола', 'сок', 'тоник'] },
+];
+
+/**
+ * Подбирает поисковый запрос для рекомендации «в пару» к товару.
+ * Возвращает null, если для товара нет пары (снеки к снекам не предлагаем).
+ */
+export function getRecommendationQuery(itemName: string): string | null {
+  for (const rule of PAIRINGS) {
+    if (rule.pattern.test(itemName)) {
+      return pick(rule.keywords);
+    }
+  }
+  return null;
+}
+
+/** Есть ли в корзине уже товар этой пары (чтобы не предлагать повторно) */
+export function cartHasPairing(cart: CartItem[], keyword: string): boolean {
+  const root = keyword.toLowerCase().slice(0, 4);
+  return cart.some((c) => c.name.toLowerCase().includes(root));
+}
+
 /** Вариативные «живые» реакции */
 const PHONE_ACKS = [
   'Отлично, номер записал ✅',
@@ -427,6 +484,7 @@ export function buildShoppingSystemPrompt(ctx: {
 - Отвечай коротко: 1–3 предложения. Никаких простыней
 - Реагируй на выбор клиента: «Отличный выбор!», «Классика!», «Хороший кус»
 - Проявляй инициативу как продавец: предложи похожий товар или закуску к напиткам — но одно предложение за раз, не навязывайся
+- После добавления товара бот АВТОМАТИЧЕСКИ покажет кнопки «часто берут в пару» (закуски/миксеры) — не дублируй их списком в reply
 - Если клиент пошутил — поддержи шутку. Если недоволен — разберись и помоги
 
 ВОЗРАСТ: подтверждение возраста 21+ уже пройдено — про возраст не спрашивай.
@@ -458,8 +516,8 @@ ${phoneLine}
 
 Формат ответа (выбери ОДНО действие):
 {"action": "search_items", "query": "<поисковый запрос>", "limit": <сколько показать, опционально>}
-{"action": "add_to_cart", "item_id": <id>, "qty": <количество>} — ДОБАВИТЬ к имеющемуся
-{"action": "set_qty", "item_id": <id>, "qty": <количество>} — УСТАНОВИТЬ точное количество
+{"action": "add_to_cart", "item_id": <id>, "qty": <порции>} — ДОБАВИТЬ к имеющемуся
+{"action": "set_qty", "item_id": <id>, "qty": <порции>} — УСТАНОВИТЬ точное количество
 {"action": "remove_from_cart", "item_id": <id>}
 {"action": "clear_cart"}
 {"action": "show_cart"}
@@ -467,9 +525,11 @@ ${phoneLine}
 {"action": "handoff"} — клиент просит живого оператора
 {"action": "reply", "reply_text": "<текст для клиента>"}
 
+ПОРЦИИ: qty указывается в ПОРЦИЯХ. Размер одной порции — quantity_step шт товара (у большинства товаров 1 порция = 1 шт). Клиент называет порциями: «два ягеря» = 2 порции, «упаковку воды» = 1 порция.
+
 РАЗЛИЧАЙ add_to_cart и set_qty (смотри текущую корзину):
 - add_to_cart («ещё», «плюс», «добавь», «кинь ещё») — прибавить к тому, что уже в корзине: «ещё два ягеря» при 1 шт в корзине = 3 шт
-- set_qty («два ягеря», «хочу 3 короны», «сделай 2», «не 2, а 4») — клиент называет ИТОГОВОЕ количество: «два ягеря» = ровно 2 шт, независимо от того, сколько уже лежит
+- set_qty («два ягеря», «хочу 3 короны», «сделай 2», «не 2, а 4») — клиент называет ИТОГОВОЕ количество: «два ягеря» = ровно 2 порции, независимо от того, сколько уже лежит
 
 search_items — вызывай, когда клиент называет товар, которого нет в "Найденных ранее товарах". Результаты клиент увидит автоматически списком с кнопками выбора — САМ список не пиши и не перечисляй товары в reply.
 add_to_cart/set_qty — только для товаров из "Найденных ранее товаров" (когда выбор однозначен).
@@ -750,7 +810,7 @@ export async function handleBotCallback(ctx: DialogContext, data: string): Promi
 }
 
 /** Добавление товара по кнопке: один тап = +1 шт (с учётом quantity_step) */
-async function handleAddCallback(ctx: DialogContext, dialog: { id: number; businessId: number | null; businessName: string | null; lastSearchItems: unknown; cart: unknown }, itemId: number): Promise<void> {
+async function handleAddCallback(ctx: DialogContext, dialog: AddCallbackDialog, itemId: number): Promise<void> {
   const searchCache = (dialog.lastSearchItems as unknown as NalivItem[] | null) || [];
   const item = searchCache.find((i) => i.item_id === itemId);
 
@@ -764,7 +824,8 @@ async function handleAddCallback(ctx: DialogContext, dialog: { id: number; busin
     return;
   }
 
-  const cart = addToCart((dialog.cart as unknown as CartItem[]) || [], item, item.quantity_step || 1);
+  // Один тап = +1 порция (= quantity_step шт)
+  const cart = addToCart((dialog.cart as unknown as CartItem[]) || [], item, 1);
   await prisma.botDialog.update({
     where: { id: dialog.id },
     data: { cart: cart as unknown as any },
@@ -773,13 +834,84 @@ async function handleAddCallback(ctx: DialogContext, dialog: { id: number; busin
   const business = await findBusinessFee(dialog.businessId);
   const deliveryFee = business?.delivery_service_fee ?? 0;
   const line = cart.find((c) => c.itemId === item.item_id)!;
+  const step = item.quantity_step > 0 ? item.quantity_step : 1;
+  const portionNote = step > 1 ? ` (${Math.round(line.qty / step)} порц. × ${step} ${line.unit})` : '';
 
-  await ctx.send(
-    `✅ ${item.name}\n🛒 В корзине: ${line.qty} ${line.unit} × ${formatMoney(line.price)} ₸\n📦 Итого с доставкой: ${formatMoney(cartSubtotal(cart) + deliveryFee)} ₸\n\nЧто-нибудь ещё?`,
-    { inlineKeyboard: cartActionsKeyboard() }
-  );
+  // Рекомендации «в пару» — в то же сообщение, кнопками
+  const recs = await buildRecommendations(ctx, dialog, item, cart);
+  const text = [
+    `✅ ${item.name}`,
+    `🛒 В корзине: ${line.qty} ${line.unit}${portionNote} × ${formatMoney(line.price)} ₸`,
+    `📦 Итого с доставкой: ${formatMoney(cartSubtotal(cart) + deliveryFee)} ₸`,
+  ].join('\n');
 
-  logger.info(`[BotDialog] Кнопка add:${item.item_id} → корзина чата #${ctx.chatId}: ${cart.length} позиций`);
+  const keyboard: BotInlineButton[][] = [];
+  if (recs) {
+    keyboard.push(...recs.inlineKeyboard);
+  }
+  keyboard.push(...cartActionsKeyboard());
+
+  await ctx.send(recs ? `${text}\n\n${recs.text}` : text, { inlineKeyboard: keyboard });
+
+  logger.info(`[BotDialog] Кнопка add:${item.item_id} → корзина чата #${ctx.chatId}: ${cart.length} позиций${recs ? ' + рекомендации' : ''}`);
+}
+
+type AddCallbackDialog = {
+  id: number;
+  businessId: number | null;
+  businessName: string | null;
+  lastSearchItems: unknown;
+  cart: unknown;
+};
+
+/**
+ * Подбирает 2–3 товара «в пару» из наличия выбранного магазина.
+ * Возвращает null, если пара не подходит / ничего не нашлось.
+ * Найденные товары мержатся в кэш поиска, чтобы кнопки add:<item_id> работали.
+ */
+export async function buildRecommendations(
+  ctx: DialogContext,
+  dialog: { id: number; businessId: number | null; lastSearchItems: unknown; cart: unknown },
+  addedItem: NalivItem,
+  cart: CartItem[]
+): Promise<{ text: string; inlineKeyboard: BotInlineButton[][] } | null> {
+  const keyword = getRecommendationQuery(addedItem.name);
+  if (!keyword || !dialog.businessId) return null;
+
+  // Уже есть пара в корзине — не навязываемся
+  if (cartHasPairing(cart, keyword)) return null;
+
+  let found: NalivItem[];
+  try {
+    const result = await searchItems(keyword, dialog.businessId, 1, 10);
+    const inCart = new Set(cart.map((c) => c.itemId));
+    found = result.items.filter((i) => i.amount > 0 && i.item_id !== addedItem.item_id && !inCart.has(i.item_id)).slice(0, 3);
+  } catch (error) {
+    // Рекомендации не критичны — молча пропускаем
+    logger.warn(`[BotDialog] Не удалось подобрать рекомендации («${keyword}»):`, error);
+    return null;
+  }
+
+  if (found.length === 0) return null;
+
+  // Мержим в кэш поиска, чтобы кнопки добавления работали
+  const searchCache = (dialog.lastSearchItems as unknown as NalivItem[] | null) || [];
+  const merged = mergeSearchCache(searchCache, found);
+  await prisma.botDialog.update({
+    where: { id: dialog.id },
+    data: { lastSearchItems: merged.slice(0, MAX_SEARCH_CACHE) as unknown as any },
+  });
+
+  return {
+    text: `🧀 К «${shortenItemName(addedItem.name, 24)}» часто берут:`,
+    inlineKeyboard: chunkRows(
+      found.map((i) => ({
+        text: `${shortenItemName(i.name, 28)} · ${formatMoney(effectivePrice(i))} ₸`,
+        callbackData: `add:${i.item_id}`,
+      })),
+      2
+    ),
+  };
 }
 
 // === Шаг 1: адрес ===
@@ -1039,6 +1171,7 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
 
   let currentCart = cart;
   let currentSearchCache = searchCache;
+  let lastAddedItem: NalivItem | null = null; // для рекомендаций «в пару»
 
   try {
     for (let round = 0; round < MAX_AI_ROUNDS; round++) {
@@ -1114,11 +1247,16 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
             where: { id: dialog.id },
             data: { cart: currentCart as unknown as any },
           });
+          lastAddedItem = item;
+
+          const step = item.quantity_step > 0 ? item.quantity_step : 1;
+          const lineAfter = currentCart.find((c) => c.itemId === item.item_id)!;
+          const portionInfo = step > 1 ? `${Math.round(lineAfter.qty / step)} порц. × ${step} шт` : `${lineAfter.qty} шт`;
 
           messages.push({ role: 'assistant', content: raw });
           messages.push({
             role: 'user',
-            content: `Корзина обновлена: ${cartForPrompt(currentCart)}. Подтверди добавление через reply (товар, количество, цена) и спроси, что-нибудь ещё.`,
+            content: `Корзина обновлена: «${item.name}» теперь ${portionInfo}. Корзина целиком: ${cartForPrompt(currentCart)}. Подтверди добавление через reply (товар, количество, цена) и спроси, что-нибудь ещё.`,
           });
           break;
         }
@@ -1141,15 +1279,20 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
             where: { id: dialog.id },
             data: { cart: currentCart as unknown as any },
           });
+          lastAddedItem = item;
 
           const afterQty = currentCart.find((c) => c.itemId === item.item_id)?.qty ?? 0;
+          const step = item.quantity_step > 0 ? item.quantity_step : 1;
           const clampedNote =
-            afterQty < wantedQty ? ` Клиент просил ${wantedQty}, но на складе только ${item.amount} — положил ${afterQty}.` : '';
+            afterQty < wantedQty * step
+              ? ` Клиент просил ${wantedQty} порц., но на складе только ${item.amount} шт — положил ${Math.round(afterQty / step)} порц.`
+              : '';
+          const portionInfo = step > 1 ? `${Math.round(afterQty / step)} порц. × ${step} шт` : `${afterQty} шт`;
 
           messages.push({ role: 'assistant', content: raw });
           messages.push({
             role: 'user',
-            content: `Количество установлено: «${item.name}» было ${beforeQty}, стало ${afterQty} ${item.unit}.${clampedNote} Корзина: ${cartForPrompt(currentCart)}. Подтверди через reply и спроси, что-нибудь ещё.`,
+            content: `Количество установлено: «${item.name}» теперь ${portionInfo}.${clampedNote} Корзина: ${cartForPrompt(currentCart)}. Подтверди через reply и спроси, что-нибудь ещё.`,
           });
           break;
         }
@@ -1211,6 +1354,7 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
           } else {
             await ctx.send('🤔 Не совсем понял. Напишите название товара, «корзина» или «оператор».');
           }
+          await sendRecommendationsAfterAi(ctx, dialog, lastAddedItem, currentCart);
           return;
         }
       }
@@ -1218,9 +1362,29 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
 
     // Исчерпали раунды без reply — показываем корзину как ориентир
     await ctx.send(formatCart(currentCart, deliveryFee));
+    await sendRecommendationsAfterAi(ctx, dialog, lastAddedItem, currentCart);
   } catch (error) {
     logger.error(`[BotDialog] Ошибка AI-обработки (chat #${ctx.chatId}):`, error);
     await ctx.send('😔 Техническая ошибка, попробуйте ещё раз. Если повторится — напишите «оператор».');
+  }
+}
+
+/** Рекомендации «в пару» после добавления товара через AI (короткое сообщение с кнопками) */
+async function sendRecommendationsAfterAi(
+  ctx: DialogContext,
+  dialog: { id: number; businessId: number | null; lastSearchItems: unknown; cart: unknown },
+  addedItem: NalivItem | null,
+  cart: CartItem[]
+): Promise<void> {
+  if (!addedItem) return;
+
+  try {
+    const recs = await buildRecommendations(ctx, dialog, addedItem, cart);
+    if (recs) {
+      await ctx.send(recs.text, { inlineKeyboard: [...recs.inlineKeyboard, ...cartActionsKeyboard()] });
+    }
+  } catch (error) {
+    logger.warn('[BotDialog] Ошибка отправки рекомендаций:', error);
   }
 }
 

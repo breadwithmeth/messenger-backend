@@ -63,6 +63,9 @@ export type CartItem = {
   itemId: number;
   name: string;
   price: number;
+  /** Количество в штуках = portions * quantity_step */
   qty: number;
   unit: string;
+  /** Размер одной порции (quantity_step товара на момент добавления) */
+  portionSize?: number;
 };
