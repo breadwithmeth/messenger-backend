@@ -2,6 +2,7 @@
 
 import {
   addToCart,
+  setCartQty,
   removeFromCart,
   cartSubtotal,
   formatCart,
@@ -262,6 +263,47 @@ describe('пропуск вопроса о телефоне', () => {
     expect(isSkipPhoneRequest('не сейчас')).toBe(true);
     expect(isSkipPhoneRequest('+77051234567')).toBe(false);
     expect(isSkipPhoneRequest('хочу пиво')).toBe(false);
+  });
+});
+
+describe('set_qty — точное количество вместо прибавления', () => {
+  test('«два ягеря» при 1 шт в корзине = ровно 2, а не 3', () => {
+    const cart = [cartItem({ itemId: 10, qty: 1 })];
+    const result = setCartQty(cart, item({ item_id: 10 }), 2);
+    expect(result[0].qty).toBe(2);
+  });
+
+  test('добавляет новую позицию, если товара не было', () => {
+    const result = setCartQty([], item({ item_id: 10, price: 1500 }), 3);
+    expect(result).toEqual([{ itemId: 10, name: 'Пиво Heineken 0.5', price: 1500, qty: 3, unit: 'шт' }]);
+  });
+
+  test('округляет до quantity_step', () => {
+    const result = setCartQty([], item({ item_id: 10, quantity_step: 4 }), 3);
+    expect(result[0].qty).toBe(4);
+  });
+
+  test('не превышает остаток на складе', () => {
+    const result = setCartQty([], item({ item_id: 10, amount: 3 }), 10);
+    expect(result[0].qty).toBe(3);
+  });
+
+  test('qty 0 или отрицательное — удаляет позицию', () => {
+    const cart = [cartItem({ itemId: 10, qty: 2 }), cartItem({ itemId: 11, qty: 1 })];
+    expect(setCartQty(cart, item({ item_id: 10 }), 0)).toEqual([cartItem({ itemId: 11, qty: 1 })]);
+    expect(setCartQty(cart, item({ item_id: 10 }), -2)).toEqual([cartItem({ itemId: 11, qty: 1 })]);
+  });
+
+  test('обновляет цену по текущей акции', () => {
+    const cart = [cartItem({ itemId: 10, qty: 2, price: 1000 })];
+    const result = setCartQty(cart, item({ item_id: 10, price: 1000, promotions: [{ type: 'DISCOUNT', discount: 50 }] }), 4);
+    expect(result[0].price).toBe(500);
+    expect(result[0].qty).toBe(4);
+  });
+
+  test('add_to_cart по-прежнему прибавляет (кнопки и «ещё»)', () => {
+    const cart = addToCart([cartItem({ itemId: 10, qty: 1 })], item({ item_id: 10 }), 2);
+    expect(cart[0].qty).toBe(3);
   });
 });
 

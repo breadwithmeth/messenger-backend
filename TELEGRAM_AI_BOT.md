@@ -80,6 +80,7 @@ curl -X POST https://bm.drawbridge.kz/api/telegram/organizations/1/bots \
 ```json
 {"action": "search_items", "query": "хайнекен"}
 {"action": "add_to_cart", "item_id": 31117, "qty": 2}
+{"action": "set_qty", "item_id": 31117, "qty": 2}
 {"action": "remove_from_cart", "item_id": 31117}
 {"action": "clear_cart"}
 {"action": "show_cart"}
@@ -87,6 +88,10 @@ curl -X POST https://bm.drawbridge.kz/api/telegram/organizations/1/bots \
 {"action": "handoff"}
 {"action": "reply", "reply_text": "Что-нибудь ещё?"}
 ```
+
+**`add_to_cart` vs `set_qty`** (частая ошибка, закрыта отдельно):
+- `add_to_cart` — «ещё», «плюс», «добавь» → прибавить к имеющемуся («ещё два ягеря» при 1 шт → 3 шт)
+- `set_qty` — «два ягеря», «хочу 3», «сделай 2» → установить **итоговое** количество («два ягеря» = ровно 2 шт; округление до `quantity_step`, не больше остатка `amount`)
 
 Бэкенд исполняет действия. Список товаров после `search_items` рендерит **сам бэкенд** (кнопки), модель его не описывает. Товар для `add_to_cart` валидируется по кэшу результатов поиска (`BotDialog.lastSearchItems`, до 50 позиций) и остаткам на складе. Если модель ответила не-JSON — текст отправляется клиенту как есть (fallback).
 

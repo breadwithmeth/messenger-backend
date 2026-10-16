@@ -106,6 +106,35 @@ export function removeFromCart(cart: CartItem[], itemId: number): CartItem[] {
   return cart.filter((c) => c.itemId !== itemId);
 }
 
+/**
+ * Устанавливает ТОЧНОЕ количество товара в корзине (не прибавляет):
+ * «два ягеря» = 2 шт всего. qty <= 0 — удалить позицию.
+ * Количество округляется до quantity_step и ограничивается остатком на складе.
+ */
+export function setCartQty(cart: CartItem[], item: NalivItem, qty: number): CartItem[] {
+  const step = item.quantity_step > 0 ? item.quantity_step : 1;
+  const normalizedQty = Math.round(qty / step) * step;
+
+  if (normalizedQty <= 0) {
+    return removeFromCart(cart, item.item_id);
+  }
+
+  // Не больше остатка (amount > 0), но минимум одна ступень
+  const stock = item.amount > 0 ? item.amount : normalizedQty;
+  const clampedQty = Math.min(normalizedQty, Math.max(stock, step));
+  const price = effectivePrice(item);
+
+  const existing = cart.find((c) => c.itemId === item.item_id);
+  if (existing) {
+    return cart.map((c) => (c.itemId === item.item_id ? { ...c, qty: clampedQty, price } : c));
+  }
+
+  return [
+    ...cart,
+    { itemId: item.item_id, name: item.name, price, qty: clampedQty, unit: item.unit || 'шт' },
+  ];
+}
+
 /** Сумма позиций без доставки */
 export function cartSubtotal(cart: CartItem[]): number {
   return cart.reduce((sum, c) => sum + c.price * c.qty, 0);
@@ -413,7 +442,8 @@ ${phoneLine}
 
 Формат ответа (выбери ОДНО действие):
 {"action": "search_items", "query": "<поисковый запрос>"}
-{"action": "add_to_cart", "item_id": <id>, "qty": <количество>}
+{"action": "add_to_cart", "item_id": <id>, "qty": <количество>} — ДОБАВИТЬ к имеющемуся
+{"action": "set_qty", "item_id": <id>, "qty": <количество>} — УСТАНОВИТЬ точное количество
 {"action": "remove_from_cart", "item_id": <id>}
 {"action": "clear_cart"}
 {"action": "show_cart"}
@@ -421,9 +451,13 @@ ${phoneLine}
 {"action": "handoff"} — клиент просит живого оператора
 {"action": "reply", "reply_text": "<текст для клиента>"}
 
+РАЗЛИЧАЙ add_to_cart и set_qty (смотри текущую корзину):
+- add_to_cart («ещё», «плюс», «добавь», «кинь ещё») — прибавить к тому, что уже в корзине: «ещё два ягеря» при 1 шт в корзине = 3 шт
+- set_qty («два ягеря», «хочу 3 короны», «сделай 2», «не 2, а 4») — клиент называет ИТОГОВОЕ количество: «два ягеря» = ровно 2 шт, независимо от того, сколько уже лежит
+
 search_items — вызывай, когда клиент называет товар, которого нет в "Найденных ранее товарах". Результаты клиент увидит автоматически списком с кнопками выбора — САМ список не пиши и не перечисляй товары в reply.
-add_to_cart — только для товаров из "Найденных ранее товаров" (когда выбор однозначен и клиент явно назвал количество или «ещё одну/такую же»).
-После add_to_cart/remove_from_cart/clear_cart ты получишь обновлённую корзину — подтверди через reply живой фразой и предложи, что-нибудь ещё.
+add_to_cart/set_qty — только для товаров из "Найденных ранее товаров" (когда выбор однозначен).
+После add_to_cart/set_qty/remove_from_cart/clear_cart ты получишь обновлённую корзину — подтверди через reply живой фразой и предложи, что-нибудь ещё.
 Если клиент пишет «корзина» — вызови show_cart. Если готов заказывать — checkout. Если просто болтает — поддержи беседу через reply и мягко верни к выбору.`;
 
   return ctx.customPrompt ? `${base}\n\nДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ ВЛАДЕЛЬЦА БОТА:\n${ctx.customPrompt}` : base;
@@ -993,6 +1027,37 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
           messages.push({
             role: 'user',
             content: `Корзина обновлена: ${cartForPrompt(currentCart)}. Подтверди добавление через reply (товар, количество, цена) и спроси, что-нибудь ещё.`,
+          });
+          break;
+        }
+
+        case 'set_qty': {
+          const item = currentSearchCache.find((i) => i.item_id === action.item_id);
+          if (!item) {
+            messages.push({ role: 'assistant', content: raw });
+            messages.push({
+              role: 'user',
+              content: 'Ошибка: товар не найден среди найденных ранее. Сначала вызови search_items, затем set_qty с item_id из результатов.',
+            });
+            continue;
+          }
+
+          const wantedQty = action.qty && action.qty > 0 ? action.qty : 1;
+          const beforeQty = currentCart.find((c) => c.itemId === item.item_id)?.qty ?? 0;
+          currentCart = setCartQty(currentCart, item, wantedQty);
+          await prisma.botDialog.update({
+            where: { id: dialog.id },
+            data: { cart: currentCart as unknown as any },
+          });
+
+          const afterQty = currentCart.find((c) => c.itemId === item.item_id)?.qty ?? 0;
+          const clampedNote =
+            afterQty < wantedQty ? ` Клиент просил ${wantedQty}, но на складе только ${item.amount} — положил ${afterQty}.` : '';
+
+          messages.push({ role: 'assistant', content: raw });
+          messages.push({
+            role: 'user',
+            content: `Количество установлено: «${item.name}» было ${beforeQty}, стало ${afterQty} ${item.unit}.${clampedNote} Корзина: ${cartForPrompt(currentCart)}. Подтверди через reply и спроси, что-нибудь ещё.`,
           });
           break;
         }
