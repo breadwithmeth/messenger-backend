@@ -242,6 +242,19 @@ describe('акции и опции (розлив)', () => {
       options: [{ option_item_relation_id: 3031 }],
     });
   });
+
+  test('кнопки тары содержат название товара и цену порции', () => {
+    const offer = buildSearchOffer('бавария', [bavaria]);
+    const flat = offer.inlineKeyboard.flat();
+    const btn2 = flat.find((b) => b.callbackData === 'add:31150:3031');
+    expect(btn2?.text).toContain('Бавария');
+    expect(btn2?.text).toContain('Пластиковая бутылка 2л');
+    expect(btn2?.text).toContain('3 720 ₸');
+    expect(btn2?.text).toContain('🔥2+1');
+    // у обычных товаров кнопка без тары остаётся как была
+    const offer2 = buildSearchOffer('корона', [item({ item_id: 111, name: 'Corona Extra 0.45', price: 990 })]);
+    expect(offer2.inlineKeyboard.flat()[0].text).toContain('Corona Extra 0.45');
+  });
 });
 
 describe('форматирование', () => {

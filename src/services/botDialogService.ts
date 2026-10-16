@@ -404,17 +404,19 @@ export function buildSearchOffer(query: string, items: NalivItem[], limit: numbe
     `🔍 Нашёл по запросу «${query}»:\n\n${listText}\n\n` +
     `Выберите товар кнопкой — добавлю в корзину 👇 (нажать можно несколько раз — по одной порции за раз)`;
 
-  // Кнопки: у товаров с обязательной тарой — по кнопке на каждый вариант
+  // Кнопки: у товаров с обязательной тарой — по кнопке на каждый вариант,
+  // на кнопке указан и товар (при нескольких разливных бутылки неотличимы)
   const buttons: BotInlineButton[] = [];
   for (const i of shown) {
     const option = requiredSingleOption(i);
     const badge = promoBadge(i);
     if (option) {
+      const productLabel = shortenItemName(i.name, 22);
       for (const v of option.variants!) {
         const pAmount = Math.max(1, Number(v.parent_item_amount) || 1);
         const portion = effectivePrice(i) * pAmount + (v.price_type === 'ADD' ? Number(v.price) || 0 : 0);
         buttons.push({
-          text: `${shortenItemName(v.item_name || option.name)} · ${formatMoney(portion)} ₸${badge}`,
+          text: `${productLabel} — ${shortenItemName(v.item_name || option.name, 26)} · ${formatMoney(portion)} ₸${badge}`,
           callbackData: `add:${i.item_id}:${v.relation_id}`,
         });
       }
@@ -1509,12 +1511,13 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
           // Товар с обязательной тарой (розлив) — клиент выбирает вариант кнопкой
           const reqOption = requiredSingleOption(item);
           if (reqOption) {
+            const productLabel = shortenItemName(item.name, 22);
             const variantButtons = chunkRows(
               (reqOption.variants || []).map((v) => {
                 const pAmount = Math.max(1, Number(v.parent_item_amount) || 1);
                 const portion = effectivePrice(item) * pAmount + (v.price_type === 'ADD' ? Number(v.price) || 0 : 0);
                 return {
-                  text: `${shortenItemName(v.item_name || reqOption.name)} · ${formatMoney(portion)} ₸${promoBadge(item)}`,
+                  text: `${productLabel} — ${shortenItemName(v.item_name || reqOption.name, 26)} · ${formatMoney(portion)} ₸${promoBadge(item)}`,
                   callbackData: `add:${item.item_id}:${v.relation_id}`,
                 };
               }),
