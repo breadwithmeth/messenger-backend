@@ -122,10 +122,21 @@ curl -X POST https://bm.drawbridge.kz/api/telegram/organizations/1/bots \
 
 ## Интеграция с аккаунтами «Налив» (/api/telegram-bot/*)
 
-Когда клиент делится телефоном, бот **привязывает его Telegram к аккаунту «Налив»** (`POST /api/telegram-bot/auth/link` — по `login`-телефону; если пользователь не найден, создаётся вместе с картой лояльности). JWT и `session_token` сохраняются в `BotUser` — они пригодятся для пользовательских эндпоинтов (создание заказа — по мере появления документации).
+Когда клиент делится телефоном, бот **привязывает его Telegram к аккаунту «Налив»** (`POST /api/telegram-bot/auth/link` — по `login`-телефону; если пользователь не найден, создаётся вместе с картой лояльности). JWT и `session_token` сохраняются в `BotUser`.
 
-- Привязка идёт параллельно диалогу и не блокирует сценарий; 409 (Telegram уже у другого аккаунта) — клиенту подсказка, заказ всё равно сохраняется в БД.
-- **Отслеживание статусов** (`botOrderTracker.ts`): каждые 60 сек (`BOT_ORDER_POLL_INTERVAL_MS`) опрашивается `/orders/active` для всех привязанных клиентов; при смене статуса (`UNPAID(66) → NEW(0) → ACCEPTED(1) → READY(2) → ON_THE_WAY(3)`) клиенту приходит сообщение в Telegram («📦 Обновление по заказу #123: 🚗 В пути») + событие операторам `bot_order_status_changed`. Первое обнаружение заказа — без уведомления. Трекер стартует с сервером, останавливается на SIGINT/SIGTERM.
+- Привязка идёт параллельно диалогу и не блокирует сценарий; 409 (Telegram уже у другого аккаунта) — клиенту подсказка.
+- **Отслеживание статусов** (`botOrderTracker.ts`): каждые 60 сек (`BOT_ORDER_POLL_INTERVAL_MS`) опрашивается `/orders/active` для всех привязанных клиентов; при смене статуса клиенту приходит сообщение в Telegram + событие операторам `bot_order_status_changed`. Трекер стартует с сервером.
+
+### Отправка заказа в «Налив» (`POST /api/telegram-bot/orders/create`)
+
+Полный цикл оформления без онлайн-оплаты:
+
+1. **Чекаут**: `POST /api/delivery/check {lat, lon, business_id}` — проверка зоны и **реальная цена доставки** (`data.price`, например 1040 ₸ вместо базовых 30 ₸). Вне зоны → предложение сменить адрес.
+2. Если геокодер не вернул номер дома — бот просит написать его сообщением.
+3. Подтверждение («✅ Да, оформляем») → `orders/create`: `user_id` из `BotUser`, позиции в штуках (`amount = qty`), адрес (street/house/lat/lon — сохраняется в адресах пользователя). Цены берёт сервер — акции применяются автоматически.
+4. **Успех (201)**: `BotOrder.status = 'sent'` + `nalivOrderId/Uuid`, клиенту — реальная сумма к оплате (`total_sum` с доставкой) и статусный трекинг: `66 ⏳ → 0 🆕 → 1 ✅ → 2 📦 → 3 🚗 → 4 доставлен`.
+5. **Fallback**: «Налив» недоступен / клиент не привязан → заказ сохраняется локально (`status = 'new'`), операторам уходит `bot_order_created` с пометкой «НЕ отправлен в „Налив"». Заказы не теряются.
+6. Оплата: заказ создаётся без `payment_type_id` → статус 66 (AWAITING_PAYMENT); оплата при получении или оператором (ботовские платёжные эндпоинты — по мере появления документации).
 
 | Метод клиента (`telegramBotClient.ts`) | Эндпоинт |
 |---|---|
@@ -135,18 +146,16 @@ curl -X POST https://bm.drawbridge.kz/api/telegram/organizations/1/bots \
 | `getUserByPhone` | `GET /users/by-phone/:phone` |
 | `getActiveOrders` | `GET /orders/active?telegram_id=` |
 | `getOrderDetails` | `GET /orders/:id?telegram_id=` |
+| `checkDelivery` | `POST /api/delivery/check` |
+| `createNalivOrder` | `POST /api/telegram-bot/orders/create` |
 
-Авторизация — заголовок `X-Bot-Key: <TELEGRAM_BOT_API_KEY>` (env). Модели: `BotUser` (telegramUserId ↔ nalivUserId, token, чат для уведомлений), `BotOrderTracking` (последний известный статус по заказу, `@@unique([botUserId, orderId])`).
+Авторизация — заголовок `X-Bot-Key: <TELEGRAM_BOT_API_KEY>` (env). Модели: `BotUser` (telegramUserId ↔ nalivUserId, token, чат для уведомлений), `BotOrderTracking` (последний известный статус), `BotOrder.nalivOrderId/Uuid` (связь с заказом в «Налив»), `BotDialog.addressStreet/addressHouse/deliveryPrice`.
 
 ## Модель данных
 
 - **`TelegramBot`**: `aiEnabled`, `aiModel` (переопределение модели для бота), `aiSystemPrompt` (кастомный промт).
-- **`BotDialog`** (1:1 с `Chat`): состояние сценария, подтверждение возраста (`ageConfirmed`), адрес (`addressLabel/Lat/Lon`), телефон (`phone`), магазин (`businessId/Name`), кандидаты для выбора, кэш поиска, корзина (`cart` JSON), `handedOff`.
-- **`BotOrder`**: организация, чат, магазин, адрес, телефон клиента (`phone`), позиции (`items` JSON), `totalPrice`, `deliveryFee`, `status` (`new` → `sent` → `confirmed`/`cancelled`), `telegramChatId`.
-
-## Отправка заказов наружу (TODO)
-
-Сейчас заказ хранится в БД (`BotOrder.status = 'new'`) и операторы получают уведомление `bot_order_created` по Socket.IO. Когда будет известен целевой сервис «Налив» для передачи заказов — добавить форвардер: статус `new` → `sent` с ретраями.
+- **`BotDialog`** (1:1 с `Chat`): состояние сценария, подтверждение возраста (`ageConfirmed`), адрес (`addressLabel/Lat/Lon/Street/House`), телефон (`phone`), цена доставки (`deliveryPrice`), магазин (`businessId/Name`), кандидаты для выбора, кэш поиска, корзина (`cart` JSON), `handedOff`.
+- **`BotOrder`**: организация, чат, магазин, адрес, телефон клиента (`phone`), позиции (`items` JSON), `totalPrice`, `deliveryFee`, `status` (`new` → `sent` → `confirmed`/`cancelled`), `nalivOrderId/Uuid` (ID заказа в «Налив»), `telegramChatId`.
 
 ## Структура кода
 

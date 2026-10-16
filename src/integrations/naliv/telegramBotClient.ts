@@ -190,6 +190,104 @@ export async function getOrderDetails(orderId: number, telegramId: string): Prom
   }
 }
 
+// === Доставка и создание заказа ===
+
+/** Результат проверки зоны доставки */
+export type NalivDeliveryCheck = {
+  inZone: boolean;
+  deliveryPrice?: number;
+  message?: string;
+};
+
+/**
+ * Проверка зоны и цены доставки (POST /api/delivery/check).
+ * Рекомендуется перед созданием заказа: data.in_zone + data.price.
+ */
+export async function checkDelivery(lat: number, lon: number, businessId: number): Promise<NalivDeliveryCheck> {
+  try {
+    const { data } = await botRequest('post', '/api/delivery/check', {
+      data: { lat, lon, business_id: businessId },
+    });
+    const d = data?.data ?? data ?? {};
+    const inZone = d.in_zone !== undefined ? Boolean(d.in_zone) : Boolean(data?.success);
+    const price = Number(d.price ?? d.delivery_price);
+    return {
+      inZone,
+      deliveryPrice: Number.isFinite(price) ? price : undefined,
+      message: d.message || data?.message,
+    };
+  } catch (error) {
+    // Вне зоны сервис может отвечать 400 с сообщением
+    if (error instanceof NalivBotApiError && error.status === 400) {
+      const msg = (error.message.match(/Доставка[^:]*:.*|не в зоне.*/i) || [])[0];
+      return { inZone: false, message: msg || undefined };
+    }
+    throw error;
+  }
+}
+
+/** Позиция для создания заказа */
+export type NalivOrderItemPayload = {
+  item_id: number;
+  amount: number;
+};
+
+/** Тело POST /api/telegram-bot/orders/create */
+export type NalivCreateOrderPayload = {
+  user_id: number;
+  business_id: number;
+  items: NalivOrderItemPayload[];
+  // Адрес (обязателен для DELIVERY)
+  street: string;
+  house: string;
+  lat: number;
+  lon: number;
+  apartment?: string;
+  entrance?: string;
+  floor?: string;
+  comment?: string;
+  // Опциональные
+  delivery_type?: 'DELIVERY' | 'PICKUP' | 'SCHEDULED';
+  delivery_date?: string;
+  bonus_amount?: number;
+  promo_code?: string;
+  payment_type_id?: number;
+  courier_tips?: number;
+  extra?: string;
+};
+
+/** Ответ создания заказа (201) */
+export type NalivCreatedOrder = {
+  order_id: number;
+  order_uuid?: string;
+  total_sum: number;
+  delivery_price: number;
+  payment_required: boolean;
+  address_id?: number;
+  delivery_type?: string;
+};
+
+/**
+ * Создаёт заказ без онлайн-оплаты от имени пользователя.
+ * Цены берутся с сервера (акции применяются автоматически), amount — в штуках.
+ */
+export async function createNalivOrder(payload: NalivCreateOrderPayload): Promise<NalivCreatedOrder> {
+  const { data } = await botRequest('post', '/api/telegram-bot/orders/create', { data: payload });
+  const d = data?.data;
+  if (!d?.order_id) {
+    throw new NalivBotApiError('Неожиданный ответ /orders/create', undefined, '/api/telegram-bot/orders/create');
+  }
+  return {
+    order_id: Number(d.order_id),
+    order_uuid: d.order_uuid,
+    total_sum: Number(d.total_sum ?? 0),
+    delivery_price: Number(d.delivery_price ?? 0),
+    payment_required: Boolean(d.payment_required),
+    address_id: d.address_id,
+    delivery_type: d.delivery_type,
+  };
+}
+
 // === Статусы ===
 
 /** Человекочитаемые названия статусов активных заказов */

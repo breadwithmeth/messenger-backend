@@ -440,6 +440,11 @@ model BotDialog {
   addressLabel   String?
   addressLat     Float?
   addressLon     Float?
+  addressStreet  String?  // улица (для создания заказа в «Налив»)
+  addressHouse   String?  // дом (для создания заказа в «Налив»)
+
+  // Цена доставки из проверки зоны (POST /api/delivery/check)
+  deliveryPrice  Float?
 
   // Телефон клиента (из contact-кнопки Telegram или текстом)
   phone          String?
@@ -500,8 +505,12 @@ model BotOrder {
   totalPrice     Float
   deliveryFee    Float    @default(0)
 
-  // Статус: new (создан) -> sent (отправлен наружу) -> confirmed / cancelled
+  // Статус: new (создан) -> sent (отправлен в «Налив») -> confirmed / cancelled
   status         String   @default("new")
+
+  // Заказ в системе «Налив» (заполняется при отправке через /api/telegram-bot/orders/create)
+  nalivOrderId   Int?
+  nalivOrderUuid String?
 
   // Контакт клиента из Telegram
   telegramChatId String?

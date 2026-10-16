@@ -6,6 +6,7 @@ import {
   removeFromCart,
   getRecommendationQuery,
   cartHasPairing,
+  buildOrderCreatePayload,
   cartSubtotal,
   formatCart,
   formatMoney,
@@ -362,6 +363,35 @@ describe('рекомендации «в пару»', () => {
     expect(cartHasPairing(cart, 'чипсы')).toBe(true);
     expect(cartHasPairing(cart, 'сыр')).toBe(false);
     expect(cartHasPairing([], 'чипсы')).toBe(false);
+  });
+});
+
+describe('отправка заказа в «Налив»', () => {
+  const dialog = {
+    businessId: 11,
+    addressLat: 49.799416,
+    addressLon: 73.090596,
+    addressStreet: 'проспект Бухар-жырау',
+    addressHouse: '70',
+  };
+
+  test('собирает payload: user, магазин, адрес, позиции в штуках', () => {
+    const payload = buildOrderCreatePayload(42, dialog, [cartItem({ itemId: 132763, qty: 2 })]);
+    expect(payload).toMatchObject({
+      user_id: 42,
+      business_id: 11,
+      street: 'проспект Бухар-жырау',
+      house: '70',
+      lat: 49.799416,
+      lon: 73.090596,
+      items: [{ item_id: 132763, amount: 2 }],
+    });
+  });
+
+  test('null при нехватке данных', () => {
+    expect(buildOrderCreatePayload(42, { ...dialog, addressHouse: null }, [cartItem()])).toBeNull();
+    expect(buildOrderCreatePayload(42, { ...dialog, businessId: null }, [cartItem()])).toBeNull();
+    expect(buildOrderCreatePayload(42, dialog, [])).toBeNull();
   });
 });
 

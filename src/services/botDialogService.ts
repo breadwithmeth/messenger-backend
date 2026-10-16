@@ -19,7 +19,13 @@ import {
   searchItems,
   getBusinesses,
 } from '../integrations/naliv/nalivClient.js';
-import { linkTelegramAccount } from '../integrations/naliv/telegramBotClient.js';
+import {
+  linkTelegramAccount,
+  checkDelivery,
+  createNalivOrder,
+  NalivCreateOrderPayload,
+  NalivCreatedOrder,
+} from '../integrations/naliv/telegramBotClient.js';
 import { CartItem, NalivAddress, NalivBusinessWithDistance, NalivItem } from '../integrations/naliv/types.js';
 import { aiChat, AiChatMessage } from './aiChatClient.js';
 
@@ -1065,6 +1071,9 @@ async function confirmAddressAndFindStore(ctx: DialogContext, dialogId: number, 
       addressLabel: address.label,
       addressLat: address.lat,
       addressLon: address.lon,
+      addressStreet: address.street || address.label,
+      addressHouse: address.housenumber || '',
+      deliveryPrice: null,
       candidateAddresses: null,
       candidateBusinesses: nearest as unknown as any,
       businessId: top.id,
@@ -1473,6 +1482,39 @@ export function mergeSearchCache(cache: NalivItem[], fresh: NalivItem[]): NalivI
   return Array.from(map.values()).slice(-MAX_SEARCH_CACHE);
 }
 
+/**
+ * Тело POST /api/telegram-bot/orders/create из диалога и корзины.
+ * amount — штуки из корзины; цены берутся сервером.
+ * null — данных недостаточно (нет пользователя/магазина/адреса).
+ */
+export function buildOrderCreatePayload(
+  nalivUserId: number,
+  dialog: {
+    businessId: number | null;
+    addressLat: number | null;
+    addressLon: number | null;
+    addressStreet: string | null;
+    addressHouse: string | null;
+  },
+  cart: CartItem[]
+): NalivCreateOrderPayload | null {
+  if (!dialog.businessId || !dialog.addressLat || !dialog.addressLon || !dialog.addressStreet || !dialog.addressHouse) {
+    return null;
+  }
+  if (cart.length === 0) return null;
+
+  return {
+    user_id: nalivUserId,
+    business_id: dialog.businessId,
+    items: cart.map((c) => ({ item_id: c.itemId, amount: c.qty })),
+    street: dialog.addressStreet,
+    house: dialog.addressHouse,
+    lat: dialog.addressLat,
+    lon: dialog.addressLon,
+    extra: 'Заказ из Telegram-бота',
+  };
+}
+
 // === Шаг 4: подтверждение заказа ===
 
 async function findBusinessFee(businessId: number | null) {
@@ -1493,7 +1535,7 @@ async function beginOrderConfirmationWithCart(
   ctx: DialogContext,
   dialogId: number,
   cart: CartItem[],
-  opts: { skipPhoneGate?: boolean } = {}
+  opts: { skipPhoneGate?: boolean; skipDeliveryCheck?: boolean } = {}
 ): Promise<void> {
   let dialog = await prisma.botDialog.findUnique({ where: { id: dialogId } });
 
@@ -1521,14 +1563,39 @@ async function beginOrderConfirmationWithCart(
   }
 
   const business = await findBusinessFee(dialog?.businessId ?? null);
-  const deliveryFee = business?.delivery_service_fee ?? 0;
+  let deliveryFee = dialog?.deliveryPrice ?? business?.delivery_service_fee ?? 0;
+
+  // Проверяем зону и реальную цену доставки (POST /api/delivery/check),
+  // чтобы клиент не ждал заказ, который не примут
+  if (!opts.skipDeliveryCheck && dialog?.addressLat && dialog.addressLon && dialog.businessId) {
+    try {
+      const check = await checkDelivery(dialog.addressLat, dialog.addressLon, dialog.businessId);
+      if (!check.inZone) {
+        await prisma.botDialog.update({
+          where: { id: dialogId },
+          data: { state: DIALOG_STATES.AWAITING_ADDRESS, deliveryPrice: null },
+        });
+        await ctx.send(
+          `😔 Доставка из «${dialog.businessName || 'магазина'}» на этот адрес, к сожалению, недоступна.${check.message ? `\n\n${check.message}` : ''}\n\nПопробуем другой адрес? Напишите новый — найду ближайший магазин 🔍`
+        );
+        return;
+      }
+      if (check.deliveryPrice !== undefined) {
+        deliveryFee = check.deliveryPrice;
+      }
+    } catch (error) {
+      // Проверка не удалась — оставляем базовую стоимость, зону перепроверит создание заказа
+      logger.warn('[BotDialog] Не удалось проверить зону доставки:', error);
+    }
+  }
 
   await prisma.botDialog.update({
     where: { id: dialogId },
-    data: { state: DIALOG_STATES.CONFIRMING_ORDER, cart: cart as unknown as any },
+    data: { state: DIALOG_STATES.CONFIRMING_ORDER, cart: cart as unknown as any, deliveryPrice: deliveryFee },
   });
 
   const phoneLine = dialog?.phone ? `📞 Телефон: ${dialog.phone}` : '📞 Телефон: не указан';
+  const houseLine = dialog?.addressHouse ? '' : '\n\n🏠 Уточните номер дома — напишите его сообщением (например «45» или «45а»).';
   const summary = [
     '📋 Проверьте заказ:',
     '',
@@ -1541,7 +1608,7 @@ async function beginOrderConfirmationWithCart(
     'Всё верно, оформляем?',
   ].join('\n');
 
-  await ctx.send(summary, { inlineKeyboard: confirmOrderKeyboard() });
+  await ctx.send(`${summary}${houseLine}`, { inlineKeyboard: confirmOrderKeyboard() });
 }
 
 async function handleConfirmingOrder(ctx: DialogContext, dialog: any, text: string): Promise<void> {
@@ -1553,6 +1620,19 @@ async function handleConfirmingOrder(ctx: DialogContext, dialog: any, text: stri
       data: { state: DIALOG_STATES.SHOPPING },
     });
     await ctx.send('👌 Хорошо, продолжаем собирать заказ. Напишите название товара или «корзина».');
+    return;
+  }
+
+  // Уточнение номера дома, если геокодер его не вернул
+  if (!dialog.addressHouse && yn === null && /^[\dа-яa-z\/\-\.]{1,7}$/i.test(text.trim())) {
+    await prisma.botDialog.update({
+      where: { id: dialog.id },
+      data: { addressHouse: text.trim() },
+    });
+    const cart = (dialog.cart as unknown as CartItem[]) || [];
+    if (cart.length > 0) {
+      await beginOrderConfirmationWithCart(ctx, dialog.id, cart, { skipPhoneGate: true, skipDeliveryCheck: true });
+    }
     return;
   }
 
@@ -1596,8 +1676,49 @@ async function handleConfirmingOrder(ctx: DialogContext, dialog: any, text: stri
   }
 
   const business = await findBusinessFee(dialog.businessId);
-  const deliveryFee = business?.delivery_service_fee ?? 0;
+  const deliveryFee = dialog.deliveryPrice ?? business?.delivery_service_fee ?? 0;
   const subtotal = cartSubtotal(cart);
+
+  // === Отправка заказа в «Налив» (POST /api/telegram-bot/orders/create) ===
+  let telegramUserId = ctx.telegramUserId || null;
+  if (!telegramUserId) {
+    const chat = await prisma.chat.findUnique({ where: { id: ctx.chatId }, select: { telegramUserId: true } });
+    telegramUserId = chat?.telegramUserId ?? null;
+  }
+  const botUser = telegramUserId
+    ? await prisma.botUser.findUnique({ where: { telegramUserId } })
+    : null;
+
+  let nalivOrder: NalivCreatedOrder | null = null;
+  if (botUser?.nalivUserId) {
+    const payload = buildOrderCreatePayload(botUser.nalivUserId, dialog, cart);
+
+    if (!payload && !dialog.addressHouse) {
+      await ctx.send('🏠 Для оформления нужен номер дома — напишите его сообщением (например «45» или «45а»).');
+      return;
+    }
+
+    if (payload) {
+      try {
+        nalivOrder = await createNalivOrder(payload);
+        logger.info(`[BotDialog] Заказ отправлен в «Налив»: naliv_order_id=${nalivOrder.order_id} (${formatMoney(nalivOrder.total_sum)} ₸)`);
+      } catch (error: any) {
+        const msg: string = error?.message || '';
+        if (/Доставка недоступна/i.test(msg)) {
+          // Вне зоны доставки — просим другой адрес
+          const reason = msg.replace(/^.*Доставка недоступна:? */i, '').replace(/\(HTTP \d+\).*/s, '').trim();
+          await prisma.botDialog.update({
+            where: { id: dialog.id },
+            data: { state: DIALOG_STATES.AWAITING_ADDRESS, deliveryPrice: null },
+          });
+          await ctx.send(`😔 Доставка на этот адрес недоступна${reason ? `: ${reason}` : ''}.\n\nНапишите другой адрес — найду ближайший магазин 🔍`);
+          return;
+        }
+        // Прочие ошибки — не теряем заказ, сохраняем локально для оператора
+        logger.warn(`[BotDialog] Не удалось создать заказ в «Налив», сохраняем локально:`, error);
+      }
+    }
+  }
 
   const order = await prisma.botOrder.create({
     data: {
@@ -1611,12 +1732,17 @@ async function handleConfirmingOrder(ctx: DialogContext, dialog: any, text: stri
       addressLon: dialog.addressLon,
       phone: dialog.phone,
       items: cart as unknown as any,
-      totalPrice: subtotal + deliveryFee,
-      deliveryFee,
-      status: 'new',
+      totalPrice: nalivOrder ? nalivOrder.total_sum : subtotal + deliveryFee,
+      deliveryFee: nalivOrder ? nalivOrder.delivery_price : deliveryFee,
+      status: nalivOrder ? 'sent' : 'new',
+      nalivOrderId: nalivOrder?.order_id ?? null,
+      nalivOrderUuid: nalivOrder?.order_uuid ?? null,
       telegramChatId: ctx.telegramChatId,
     },
   });
+
+  const orderRef = nalivOrder ? `№${nalivOrder.order_id} в «Налив»` : `#${order.id} (локально)`;
+  logger.info(`[BotDialog] Создан заказ ${orderRef} (${formatMoney(order.totalPrice)} ₸) из чата #${ctx.chatId}`);
 
   // Фиксируем заказ в истории тикета, чтобы операторы видели событие
   await prisma.ticketHistory.create({
@@ -1624,7 +1750,9 @@ async function handleConfirmingOrder(ctx: DialogContext, dialog: any, text: stri
       chatId: ctx.chatId,
       changeType: 'bot_order_created',
       newValue: String(order.id),
-      description: `AI-бот оформил заказ #${order.id} («${order.businessName}», на сумму ${formatMoney(order.totalPrice)} ₸${order.phone ? `, тел. ${order.phone}` : ', без телефона'})`,
+      description: nalivOrder
+        ? `AI-бот оформил заказ «Налив» #${nalivOrder.order_id} («${order.businessName}», ${formatMoney(order.totalPrice)} ₸${order.phone ? `, тел. ${order.phone}` : ''})`
+        : `AI-бот оформил заказ #${order.id} («${order.businessName}», на сумму ${formatMoney(order.totalPrice)} ₸${order.phone ? `, тел. ${order.phone}` : ', без телефона'}) — НЕ отправлен в «Налив», нужен оператор`,
     },
   });
 
@@ -1633,6 +1761,8 @@ async function handleConfirmingOrder(ctx: DialogContext, dialog: any, text: stri
   try {
     broadcastToOrganization(ctx.organizationId, 'bot_order_created', {
       orderId: order.id,
+      nalivOrderId: nalivOrder?.order_id ?? null,
+      sentToNaliv: Boolean(nalivOrder),
       chatId: ctx.chatId,
       businessName: order.businessName,
       address: order.address,
@@ -1645,8 +1775,6 @@ async function handleConfirmingOrder(ctx: DialogContext, dialog: any, text: stri
     logger.error('[BotDialog] Ошибка уведомления о заказе:', socketError);
   }
 
-  logger.info(`[BotDialog] Создан заказ #${order.id} (${formatMoney(order.totalPrice)} ₸) из чата #${ctx.chatId}`);
-
   // Новый заказ — начинаем новую корзину
   await prisma.botDialog.update({
     where: { id: dialog.id },
@@ -1657,9 +1785,18 @@ async function handleConfirmingOrder(ctx: DialogContext, dialog: any, text: stri
     },
   });
 
-  await ctx.send(
-    `🎉 Заказ #${order.id} оформлен!\n\n${formatCart(cart, deliveryFee)}\n\n${order.phone ? `Курьер позвонит на ${order.phone} 📞 ` : 'Оператор свяжется с вами здесь '}— всё привезём 🚗\n\nЗахотите что-то ещё — просто напишите!`
-  );
+  if (nalivOrder) {
+    await ctx.send(
+      `🎉 Заказ №${nalivOrder.order_id} передан в «${order.businessName}»!\n\n` +
+      `💳 К оплате: ${formatMoney(nalivOrder.total_sum)} ₸ (вкл. доставку ${formatMoney(nalivOrder.delivery_price)} ₸)\n` +
+      `💵 Оплата при получении — курьер примет наличные или карту.\n\n` +
+      `Следить за статусом буду прямо здесь: 🆕 принят → 📦 готов → 🚗 в пути\n\nЗахотите что-то ещё — просто напишите!`
+    );
+  } else {
+    await ctx.send(
+      `🎉 Заказ #${order.id} оформлен!\n\n${formatCart(cart, deliveryFee)}\n\n${order.phone ? `Курьер позвонит на ${order.phone} 📞 ` : 'Оператор свяжется с вами здесь '}— всё привезём 🚗\n\nЗахотите что-то ещё — просто напишите!`
+    );
+  }
 }
 
 // === Переход на оператора ===
