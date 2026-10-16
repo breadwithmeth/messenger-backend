@@ -444,6 +444,9 @@ model BotDialog {
   // Телефон клиента (из contact-кнопки Telegram или текстом)
   phone          String?
 
+  // Возраст подтверждён (21+) — без этого заказ не принимается
+  ageConfirmed   Boolean  @default(false)
+
   // Выбранный магазин
   businessId     Int?
   businessName   String?

@@ -443,13 +443,19 @@ async function handleIncomingMessage(
           send: makeBotReplySender(botId, chatId),
         };
 
-        if (messageType === 'contact' && content.trim()) {
+        if (msg.voice || messageType === 'audio') {
+          // Голосовые не обрабатываем — просим написать текстом
+          await telegram.sendMessage(
+            chatId,
+            '🎙 Голосовые сообщения, к сожалению, не понимаю — так можно что-нибудь упустить.\n\nНапишите заказ текстом, и я всё найду и оформлю 😉'
+          );
+        } else if (messageType === 'contact' && content.trim()) {
           // Клиент поделился номером через кнопку Telegram
           await botDialogService.handleBotContact(botCtx, content);
         } else if (messageType === 'text' && content.trim()) {
           await botDialogService.handleBotUserMessage(botCtx, content);
         } else {
-          // AI-бот работает только с текстом и контактами
+          // Остальные вложения (фото, видео, документы) — просим текст
           await telegram.sendMessage(
             chatId,
             '🤖 Я понимаю текстовые сообщения и кнопку «Поделиться номером». Напишите ваш запрос текстом.'

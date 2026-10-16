@@ -26,6 +26,7 @@ const logger = createLogger();
 
 // === Состояния ===
 export const DIALOG_STATES = {
+  AWAITING_AGE_CONFIRM: 'awaiting_age_confirm',
   AWAITING_ADDRESS: 'awaiting_address',
   AWAITING_STORE_CONFIRM: 'awaiting_store_confirm',
   AWAITING_PHONE: 'awaiting_phone',
@@ -206,12 +207,13 @@ export function shortenItemName(name: string, maxLen = MAX_BUTTON_NAME_LEN): str
  * Сообщение с результатами поиска + инлайн-кнопки выбора товара.
  * Выбор позиции — кнопкой (callback `add:<item_id>`), не текстом:
  * исключает путаницу «номер из списка = количество».
+ * limit — сколько вариантов показать (по умолчанию до 8, для общих запросов 2–3).
  */
-export function buildSearchOffer(query: string, items: NalivItem[]): {
+export function buildSearchOffer(query: string, items: NalivItem[], limit: number = MAX_SEARCH_BUTTONS): {
   text: string;
   inlineKeyboard: BotInlineButton[][];
 } {
-  const shown = items.slice(0, MAX_SEARCH_BUTTONS);
+  const shown = items.slice(0, Math.max(1, Math.min(limit, MAX_SEARCH_BUTTONS)));
 
   const listText = shown
     .map((i, idx) => `${idx + 1}. ${i.name} — ${formatMoney(effectivePrice(i))} ₸`)
@@ -249,6 +251,11 @@ export function confirmOrderKeyboard(): BotInlineButton[][] {
 /** Кнопки под пустой корзиной */
 export function emptyCartKeyboard(): BotInlineButton[][] {
   return [[{ text: '✅ Оформить', callbackData: 'checkout' }]];
+}
+
+/** Кнопки подтверждения возраста 21+ */
+export function ageConfirmKeyboard(): BotInlineButton[][] {
+  return [[{ text: '✅ Да, мне 21+', callbackData: 'age_yes' }, { text: '❌ Нет', callbackData: 'age_no' }]];
 }
 
 /**
@@ -358,6 +365,7 @@ export type AiAction = {
   query?: string;
   item_id?: number;
   qty?: number;
+  limit?: number;
   reply_text?: string;
 };
 
@@ -384,6 +392,7 @@ export function parseAiAction(raw: string): AiAction | null {
       query: typeof parsed.query === 'string' ? parsed.query : undefined,
       item_id: Number.isFinite(Number(parsed.item_id)) ? Number(parsed.item_id) : undefined,
       qty: Number.isFinite(Number(parsed.qty)) ? Number(parsed.qty) : undefined,
+      limit: Number.isFinite(Number(parsed.limit)) ? Number(parsed.limit) : undefined,
       reply_text: typeof parsed.reply_text === 'string' ? parsed.reply_text : undefined,
     };
   } catch {
@@ -420,6 +429,13 @@ export function buildShoppingSystemPrompt(ctx: {
 - Проявляй инициативу как продавец: предложи похожий товар или закуску к напиткам — но одно предложение за раз, не навязывайся
 - Если клиент пошутил — поддержи шутку. Если недоволен — разберись и помоги
 
+ВОЗРАСТ: подтверждение возраста 21+ уже пройдено — про возраст не спрашивай.
+
+ОБЩИЕ ЗАПРОСЫ («красное вино к ужину», «что-нибудь лёгкое», «на компанию»):
+- Задай НЕ БОЛЬШЕ 2–3 коротких уточняющих вопросов, по ОДНОМУ за раз через reply (например: сухое или полусладкое? какой бюджет? какая страна?)
+- Ответы клиент набирает текстом — не предлагай кнопки для этого, только текстом
+- После ответов вызови search_items с уточнённым запросом и "limit": 3 — клиент получит 2–3 подходящих варианта кнопками выбора
+
 ${nameLine}
 ${phoneLine}
 
@@ -441,7 +457,7 @@ ${phoneLine}
 6. Когда клиент выбирает товар из списка по номеру, используй item_id соответствующего товара из последнего результата поиска.
 
 Формат ответа (выбери ОДНО действие):
-{"action": "search_items", "query": "<поисковый запрос>"}
+{"action": "search_items", "query": "<поисковый запрос>", "limit": <сколько показать, опционально>}
 {"action": "add_to_cart", "item_id": <id>, "qty": <количество>} — ДОБАВИТЬ к имеющемуся
 {"action": "set_qty", "item_id": <id>, "qty": <количество>} — УСТАНОВИТЬ точное количество
 {"action": "remove_from_cart", "item_id": <id>}
@@ -469,11 +485,18 @@ add_to_cart/set_qty — только для товаров из "Найденн�
 
 /** Обработка /start у AI-бота: сброс диалога и приветствие */
 export async function handleBotStart(ctx: DialogContext): Promise<void> {
+  const existing = await prisma.botDialog.findUnique({ where: { chatId: ctx.chatId } });
+  const ageConfirmed = existing?.ageConfirmed ?? false;
+
   await prisma.botDialog.upsert({
     where: { chatId: ctx.chatId },
-    create: { chatId: ctx.chatId, state: DIALOG_STATES.AWAITING_ADDRESS },
+    create: {
+      chatId: ctx.chatId,
+      state: ageConfirmed ? DIALOG_STATES.AWAITING_ADDRESS : DIALOG_STATES.AWAITING_AGE_CONFIRM,
+      ageConfirmed,
+    },
     update: {
-      state: DIALOG_STATES.AWAITING_ADDRESS,
+      state: ageConfirmed ? DIALOG_STATES.AWAITING_ADDRESS : DIALOG_STATES.AWAITING_AGE_CONFIRM,
       addressLabel: null,
       addressLat: null,
       addressLon: null,
@@ -483,7 +506,7 @@ export async function handleBotStart(ctx: DialogContext): Promise<void> {
       candidateBusinesses: null,
       lastSearchItems: null,
       cart: null,
-      // Телефон сохраняем между сессиями — спрашивать повторно не нужно
+      // Телефон и подтверждение возраста сохраняем между сессиями
       handedOff: false,
       handedOffAt: null,
     },
@@ -492,9 +515,60 @@ export async function handleBotStart(ctx: DialogContext): Promise<void> {
   const name = ctx.clientName ? `, ${ctx.clientName}` : '';
   const greeting =
     ctx.botWelcomeMessage?.trim() ||
-    `Привет${name}! 👋 Я Гоша — ассистент доставки Градусы24 🍻\n\nНайду ближайший магазин, помогу выбрать и оформлю доставку прямо здесь, в чате.\n\n📍 С какого адреса привезти? Напишите улицу, дом и город.`;
+    `Привет${name}! 👋 Я Гоша — ассистент доставки Градусы24 🍻\n\nНайду ближайший магазин, помогу выбрать и оформлю доставку прямо здесь, в чате.`;
 
-  await ctx.send(greeting);
+  if (!ageConfirmed) {
+    // Первый диалог: сначала подтверждение возраста 21+, без него заказ не принимается
+    await ctx.send(`${greeting}\n\nПрежде чем начнём — проверка возраста 🪪 Вам уже есть 21 год?`, {
+      inlineKeyboard: ageConfirmKeyboard(),
+    });
+    return;
+  }
+
+  await ctx.send(`${greeting}\n\n📍 С какого адреса привезти? Напишите улицу, дом и город.`);
+}
+
+// === Шаг 0: подтверждение возраста 21+ ===
+
+/** Обработка ответа на вопрос о возрасте (текст или кнопка) */
+async function handleAgeConfirm(ctx: DialogContext, dialog: { id: number; ageConfirmed: boolean; addressLabel: string | null; cart: unknown }, text: string): Promise<void> {
+  const yn = parseYesNo(text);
+
+  if (yn === 'no') {
+    await ctx.send(
+      'Понял 🙏 К сожалению, заказы можно принимать только от лиц 21+.\n\nЕсли нажали нечаянно — нажмите «✅ Да, мне 21+» выше или напишите «да».',
+      { inlineKeyboard: ageConfirmKeyboard() }
+    );
+    return;
+  }
+
+  if (yn === 'yes') {
+    await saveAgeAndContinue(ctx, dialog);
+    return;
+  }
+
+  await ctx.send('🪪 Подтвердите, пожалуйста: вам есть 21 год? Нажмите кнопку или напишите «да» / «нет».', {
+    inlineKeyboard: ageConfirmKeyboard(),
+  });
+}
+
+/** Возраст подтверждён — ведём клиента дальше по сценарию */
+async function saveAgeAndContinue(ctx: DialogContext, dialog: { id: number; addressLabel: string | null; cart: unknown }): Promise<void> {
+  await prisma.botDialog.update({
+    where: { id: dialog.id },
+    data: { ageConfirmed: true, state: DIALOG_STATES.AWAITING_ADDRESS },
+  });
+
+  await ctx.send('Отлично, спасибо! 🤝');
+
+  const cart = (dialog.cart as unknown as CartItem[]) || [];
+  if (cart.length > 0) {
+    // Возраст спросили при оформлении — возвращаемся к подтверждению заказа
+    await beginOrderConfirmationWithCart(ctx, dialog.id, cart);
+    return;
+  }
+
+  await ctx.send('📍 С какого адреса привезти? Напишите улицу, дом и город — найду ближайший магазин.');
 }
 
 /** Обработка текстового сообщения от клиента AI-бота */
@@ -519,6 +593,9 @@ export async function handleBotUserMessage(ctx: DialogContext, text: string): Pr
   }
 
   switch (dialog.state) {
+    case DIALOG_STATES.AWAITING_AGE_CONFIRM:
+      await handleAgeConfirm(ctx, dialog, text);
+      break;
     case DIALOG_STATES.AWAITING_ADDRESS:
       await handleAwaitingAddress(ctx, dialog, text);
       break;
@@ -656,6 +733,16 @@ export async function handleBotCallback(ctx: DialogContext, data: string): Promi
       return;
     case 'cancel_order':
       await handleConfirmingOrder(ctx, dialog, 'нет');
+      return;
+    case 'age_yes':
+      if (!dialog.ageConfirmed) {
+        await saveAgeAndContinue(ctx, dialog);
+      }
+      return;
+    case 'age_no':
+      if (!dialog.ageConfirmed) {
+        await handleAgeConfirm(ctx, dialog, 'нет');
+      }
       return;
     default:
       logger.warn(`[BotDialog] Неизвестный callback: ${data} (chat #${ctx.chatId})`);
@@ -987,7 +1074,8 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
 
           // Результаты показываем детерминированно: список + инлайн-кнопки выбора.
           // Клиент выбирает позицию кнопкой (add:<item_id>) — исключаем путаницу
-          // «номер из списка = количество».
+          // «номер из списка = количество». Модель может ограничить выдачу (limit) —
+          // для общих запросов («красное вино к ужину») показываем 2–3 варианта.
           if (result.items.length === 0) {
             await ctx.send(
               `😔 По запросу «${query}» ничего не нашлось в «${dialog.businessName || 'магазине'}».\n\nПопробуем другое название? Например «пиво светлое» или бренд без размера.`
@@ -995,7 +1083,11 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
             return;
           }
 
-          const offer = buildSearchOffer(query, result.items);
+          const limit =
+            action.limit && action.limit >= 1
+              ? Math.min(Math.floor(action.limit), MAX_SEARCH_BUTTONS)
+              : undefined;
+          const offer = buildSearchOffer(query, result.items, limit);
           await ctx.send(offer.text, { inlineKeyboard: offer.inlineKeyboard });
           return;
         }
@@ -1163,6 +1255,19 @@ async function beginOrderConfirmationWithCart(
   opts: { skipPhoneGate?: boolean } = {}
 ): Promise<void> {
   let dialog = await prisma.botDialog.findUnique({ where: { id: dialogId } });
+
+  // Без подтверждения возраста 21+ заказ не принимается
+  if (dialog && !dialog.ageConfirmed) {
+    await prisma.botDialog.update({
+      where: { id: dialogId },
+      data: { state: DIALOG_STATES.AWAITING_AGE_CONFIRM, cart: cart as unknown as any },
+    });
+    await ctx.send(
+      'Прежде чем оформим заказ — проверка возраста 🪪 Вам уже есть 21 год?',
+      { inlineKeyboard: ageConfirmKeyboard() }
+    );
+    return;
+  }
 
   // Телефона нет — сначала спрашиваем его (корзина уже сохранена)
   if (!opts.skipPhoneGate && dialog && !dialog.phone && cart.length > 0) {

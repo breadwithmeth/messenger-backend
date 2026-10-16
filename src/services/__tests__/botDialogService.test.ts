@@ -211,6 +211,13 @@ describe('parseAiAction (JSON-протокол модели)', () => {
     expect(parseAiAction('{"foo": "bar"}')).toBeNull();
   });
 
+  test('парсит limit для общих запросов', () => {
+    expect(parseAiAction('{"action": "search_items", "query": "красное вино", "limit": 3}'))
+      .toMatchObject({ action: 'search_items', limit: 3 });
+    expect(parseAiAction('{"action": "search_items", "query": "вино", "limit": "2"}')?.limit).toBe(2);
+    expect(parseAiAction('{"action": "reply"}')?.limit).toBeUndefined();
+  });
+
   test('приводит action к нижнему регистру', () => {
     expect(parseAiAction('{"action": "SHOW_CART"}')?.action).toBe('show_cart');
   });
@@ -354,6 +361,26 @@ describe('инлайн-кнопки выбора товара', () => {
     const items = Array.from({ length: 12 }, (_, i) => item({ item_id: i, name: `Пиво ${i}` }));
     const offer = buildSearchOffer('пиво', items);
     expect(offer.inlineKeyboard.flat().filter((b) => b.callbackData.startsWith('add:'))).toHaveLength(8);
+  });
+
+  test('buildSearchOffer с limit: 2–3 варианта для общих запросов', () => {
+    const items = Array.from({ length: 12 }, (_, i) => item({ item_id: i, name: `Вино ${i}` }));
+    const offer3 = buildSearchOffer('красное вино', items, 3);
+    expect(offer3.inlineKeyboard.flat().filter((b) => b.callbackData.startsWith('add:'))).toHaveLength(3);
+
+    const offer2 = buildSearchOffer('белое сухое', items, 2);
+    expect(offer2.inlineKeyboard.flat().filter((b) => b.callbackData.startsWith('add:'))).toHaveLength(2);
+
+    // limit больше 8 обрезается до 8, меньше 1 — до 1
+    expect(buildSearchOffer('пиво', items, 50).inlineKeyboard.flat().filter((b) => b.callbackData.startsWith('add:'))).toHaveLength(8);
+    expect(buildSearchOffer('пиво', items, 0).inlineKeyboard.flat().filter((b) => b.callbackData.startsWith('add:'))).toHaveLength(1);
+  });
+
+  test('промт требует максимум 2–3 уточняющих вопроса и limit 3', () => {
+    const prompt = buildShoppingSystemPrompt({ cart: [], searchCache: [], deliveryFee: 30 });
+    expect(prompt).toContain('НЕ БОЛЬШЕ 2–3 коротких уточняющих');
+    expect(prompt).toContain('"limit": 3');
+    expect(prompt).toContain('возраста 21+ уже пройдено');
   });
 
   test('клавиатуры корзины и подтверждения', () => {
