@@ -7,6 +7,7 @@ import {
   getRecommendationQuery,
   cartHasPairing,
   buildOrderCreatePayload,
+  normalizeStreet,
   cartSubtotal,
   formatCart,
   formatMoney,
@@ -221,6 +222,11 @@ describe('parseAiAction (JSON-протокол модели)', () => {
     expect(parseAiAction('{"foo": "bar"}')).toBeNull();
   });
 
+  test('пустой JSON {} -> null (не отправляется клиенту, идёт переспрос)', () => {
+    expect(parseAiAction('{}')).toBeNull();
+    expect(parseAiAction('{ }')).toBeNull();
+  });
+
   test('парсит limit для общих запросов', () => {
     expect(parseAiAction('{"action": "search_items", "query": "красное вино", "limit": 3}'))
       .toMatchObject({ action: 'search_items', limit: 3 });
@@ -374,6 +380,22 @@ describe('отправка заказа в «Налив»', () => {
     addressStreet: 'проспект Бухар-жырау',
     addressHouse: '70',
   };
+
+  test('normalizeStreet берёт первый сегмент метки геокодера', () => {
+    expect(normalizeStreet('улица Толстого, Восточный, Павлодар, Казахстан')).toBe('улица Толстого');
+    expect(normalizeStreet('проспект Бухар-жырау')).toBe('проспект Бухар-жырау');
+    expect(normalizeStreet(null)).toBeNull();
+    expect(normalizeStreet('  ')).toBeNull();
+  });
+
+  test('payload нормализует улицу из полного label', () => {
+    const payload = buildOrderCreatePayload(
+      42,
+      { ...dialog, addressStreet: 'улица Толстого, Восточный, Павлодар, Казахстан' },
+      [cartItem({ itemId: 132763, qty: 1 })]
+    );
+    expect(payload?.street).toBe('улица Толстого');
+  });
 
   test('собирает payload: user, магазин, адрес, позиции в штуках', () => {
     const payload = buildOrderCreatePayload(42, dialog, [cartItem({ itemId: 132763, qty: 2 })]);

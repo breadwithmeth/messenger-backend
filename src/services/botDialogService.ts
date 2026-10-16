@@ -1071,7 +1071,7 @@ async function confirmAddressAndFindStore(ctx: DialogContext, dialogId: number, 
       addressLabel: address.label,
       addressLat: address.lat,
       addressLon: address.lon,
-      addressStreet: address.street || address.label,
+      addressStreet: normalizeStreet(address.street) || normalizeStreet(address.label) || address.label,
       addressHouse: address.housenumber || '',
       deliveryPrice: null,
       candidateAddresses: null,
@@ -1265,10 +1265,16 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
       const action = parseAiAction(raw);
 
       if (!action) {
-        // Модель ответила не по протоколу — отправляем как есть
-        const fallback = raw.trim();
-        if (fallback) await ctx.send(fallback.slice(0, 4000));
-        return;
+        // Модель ответила вне протокола (например {}). Сырой JSON клиенту НЕ отправляем —
+        // переспрашиваем с явной ошибкой (лимит раундов защищает от цикла)
+        logger.warn(`[BotDialog] AI ответил вне протокола (chat #${ctx.chatId}): ${raw.slice(0, 200)}`);
+        messages.push({ role: 'assistant', content: raw.slice(0, 500) });
+        messages.push({
+          role: 'user',
+          content:
+            'Ошибка: ответ должен быть СТРОГО JSON-объектом с полем "action". Если хочешь что-то сказать клиенту — используй {"action": "reply", "reply_text": "<текст>"}. Ответь сейчас одним JSON-объектом.',
+        });
+        continue;
       }
 
       logger.info(`[BotDialog] AI action: ${action.action} (chat #${ctx.chatId}, раунд ${round + 1})`);
@@ -1446,8 +1452,12 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
       }
     }
 
-    // Исчерпали раунды без reply — показываем корзину как ориентир
-    await ctx.send(formatCart(currentCart, deliveryFee));
+    // Исчерпали раунды без валидного ответа — не оставляем клиента без ответа
+    const confusion =
+      '🙈 Что-то я запутался. Напишите ещё раз: название товара, «корзина» или «оформить» — а я всё сделаю.';
+    await ctx.send(
+      currentCart.length > 0 ? `${formatCart(currentCart, deliveryFee)}\n\n${confusion}` : confusion
+    );
     await sendRecommendationsAfterAi(ctx, dialog, lastAddedItem, currentCart);
   } catch (error) {
     logger.error(`[BotDialog] Ошибка AI-обработки (chat #${ctx.chatId}):`, error);
@@ -1482,6 +1492,15 @@ export function mergeSearchCache(cache: NalivItem[], fresh: NalivItem[]): NalivI
   return Array.from(map.values()).slice(-MAX_SEARCH_CACHE);
 }
 
+/** Улица из метки геокодера: первый сегмент до запятой («улица Толстого, ...» -> «улица Толстого») */
+export function normalizeStreet(street: string | null | undefined): string | null {
+  if (!street) return null;
+  const trimmed = street.trim();
+  if (!trimmed) return null;
+  const first = trimmed.split(',')[0].trim();
+  return first || trimmed;
+}
+
 /**
  * Тело POST /api/telegram-bot/orders/create из диалога и корзины.
  * amount — штуки из корзины; цены берутся сервером.
@@ -1498,7 +1517,8 @@ export function buildOrderCreatePayload(
   },
   cart: CartItem[]
 ): NalivCreateOrderPayload | null {
-  if (!dialog.businessId || !dialog.addressLat || !dialog.addressLon || !dialog.addressStreet || !dialog.addressHouse) {
+  const street = normalizeStreet(dialog.addressStreet);
+  if (!dialog.businessId || !dialog.addressLat || !dialog.addressLon || !street || !dialog.addressHouse) {
     return null;
   }
   if (cart.length === 0) return null;
@@ -1507,7 +1527,7 @@ export function buildOrderCreatePayload(
     user_id: nalivUserId,
     business_id: dialog.businessId,
     items: cart.map((c) => ({ item_id: c.itemId, amount: c.qty })),
-    street: dialog.addressStreet,
+    street,
     house: dialog.addressHouse,
     lat: dialog.addressLat,
     lon: dialog.addressLon,
@@ -1685,18 +1705,25 @@ async function handleConfirmingOrder(ctx: DialogContext, dialog: any, text: stri
     const chat = await prisma.chat.findUnique({ where: { id: ctx.chatId }, select: { telegramUserId: true } });
     telegramUserId = chat?.telegramUserId ?? null;
   }
-  const botUser = telegramUserId
-    ? await prisma.botUser.findUnique({ where: { telegramUserId } })
-    : null;
+  let botUser = telegramUserId ? await prisma.botUser.findUnique({ where: { telegramUserId } }) : null;
+
+  // Клиент мог поделиться телефоном ДО выката привязки — привязываем сейчас,
+  // чтобы заказ ушёл в «Налив», а не в локальный fallback
+  if ((!botUser || !botUser.nalivUserId) && dialog.phone && telegramUserId) {
+    logger.info(`[BotDialog] Привязка аккаунта «Налив» при оформлении заказа (telegram_id=${telegramUserId})`);
+    await linkNalivAccount(ctx, dialog.phone);
+    botUser = await prisma.botUser.findUnique({ where: { telegramUserId } });
+  }
+
+  // Дом обязателен для создания заказа — запрашиваем независимо от привязки
+  if (!dialog.addressHouse) {
+    await ctx.send('🏠 Для оформления нужен номер дома — напишите его сообщением (например «45» или «45а»).');
+    return;
+  }
 
   let nalivOrder: NalivCreatedOrder | null = null;
   if (botUser?.nalivUserId) {
     const payload = buildOrderCreatePayload(botUser.nalivUserId, dialog, cart);
-
-    if (!payload && !dialog.addressHouse) {
-      await ctx.send('🏠 Для оформления нужен номер дома — напишите его сообщением (например «45» или «45а»).');
-      return;
-    }
 
     if (payload) {
       try {
