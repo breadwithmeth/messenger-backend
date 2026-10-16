@@ -19,6 +19,7 @@ import {
   searchItems,
   getBusinesses,
 } from '../integrations/naliv/nalivClient.js';
+import { linkTelegramAccount } from '../integrations/naliv/telegramBotClient.js';
 import { CartItem, NalivAddress, NalivBusinessWithDistance, NalivItem } from '../integrations/naliv/types.js';
 import { aiChat, AiChatMessage } from './aiChatClient.js';
 
@@ -63,7 +64,11 @@ export type DialogContext = {
   organizationId: number;
   chatId: number;
   telegramChatId: string;
+  /** Telegram user_id (для привязки аккаунта «Налив») */
+  telegramUserId?: string | null;
+  telegramUsername?: string | null;
   clientName?: string | null;
+  telegramLastName?: string | null;
   send: BotReplySender;
   answerCallback?: BotCallbackAcker;
 };
@@ -721,6 +726,12 @@ async function savePhoneAndContinue(
   const ack = pick(PHONE_ACKS);
   await ctx.send(`${ack}\n📞 ${phone}`);
 
+  // Параллельно привязываем аккаунт «Налив» (не блокирует сценарий):
+  // клиент получит JWT и уведомления о статусах заказов
+  if (ctx.telegramUserId) {
+    void linkNalivAccount(ctx, phone).catch(() => {});
+  }
+
   if (dialog.state !== DIALOG_STATES.AWAITING_PHONE) {
     // Контакт прислали не по запросу — продолжаем текущий шаг сценария
     return;
@@ -732,6 +743,72 @@ async function savePhoneAndContinue(
     await beginOrderConfirmationWithCart(ctx, dialog.id, cart);
   } else {
     await startShopping(ctx, dialog.id);
+  }
+}
+
+/**
+ * Привязывает Telegram-клиента к аккаунту «Налив» по номеру телефона
+ * (POST /api/telegram-bot/auth/link) и сохраняет JWT в BotUser.
+ * Ошибки не ломают диалог — только логируются.
+ */
+export async function linkNalivAccount(ctx: DialogContext, phone: string): Promise<void> {
+  if (!ctx.telegramUserId) return;
+
+  try {
+    const linked = await linkTelegramAccount({
+      telegram_id: ctx.telegramUserId,
+      phone,
+      telegram_username: ctx.telegramUsername || undefined,
+      first_name: ctx.clientName || undefined,
+      last_name: ctx.telegramLastName || undefined,
+    });
+
+    const user = linked.user;
+    await prisma.botUser.upsert({
+      where: { telegramUserId: ctx.telegramUserId },
+      create: {
+        organizationId: ctx.organizationId,
+        telegramUserId: ctx.telegramUserId,
+        telegramBotId: ctx.botId,
+        telegramChatId: ctx.telegramChatId,
+        nalivUserId: user.user_id ?? null,
+        name: user.name ?? null,
+        login: user.login ?? phone,
+        token: linked.token,
+        sessionToken: linked.sessionToken ?? null,
+        linkedAt: new Date(),
+      },
+      update: {
+        telegramBotId: ctx.botId,
+        telegramChatId: ctx.telegramChatId,
+        nalivUserId: user.user_id ?? null,
+        name: user.name ?? null,
+        login: user.login ?? phone,
+        token: linked.token,
+        sessionToken: linked.sessionToken ?? null,
+        linkedAt: new Date(),
+      },
+    });
+
+    logger.info(
+      `[BotDialog] Аккаунт «Налив» привязан: telegram_id=${ctx.telegramUserId} → user_id=${user.user_id}${linked.created ? ' (создан)' : ''}`
+    );
+
+    await ctx.send(
+      linked.created
+        ? '🎁 Бонус: заводим карту лояльности «Налив» — скидки и бонусы будут копиться здесь!'
+        : '🔗 Ваш Telegram связан с аккаунтом «Налив» — о статусе заказа сообщу прямо сюда.'
+    );
+  } catch (error: any) {
+    if (error?.status === 409) {
+      logger.warn(`[BotDialog] telegram_id=${ctx.telegramUserId} уже привязан к другому аккаунту «Налив»`);
+      await ctx.send(
+        'ℹ️ Этот Telegram уже привязан к другому номеру «Налив». Если нужно перевязать — напишите оператору.'
+      );
+      return;
+    }
+
+    logger.error(`[BotDialog] Ошибка привязки аккаунта «Налив» (telegram_id=${ctx.telegramUserId}):`, error);
   }
 }
 

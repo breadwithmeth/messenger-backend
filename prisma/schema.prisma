@@ -513,6 +513,43 @@ model BotOrder {
   @@index([chatId])
 }
 
+// === Аккаунт «Налив», привязанный к Telegram-клиенту AI-бота ===
+model BotUser {
+  id             Int      @id @default(autoincrement())
+  organizationId Int
+  telegramUserId String   @unique // telegram_id
+  telegramBotId  Int?     // бот, через который пришла привязка (для отправки уведомлений)
+  telegramChatId String?  // чат для уведомлений о статусах заказов
+  nalivUserId    Int?     // user_id из «Налив»
+  name           String?
+  login          String?  // +77077707600
+  token          String?  // JWT для пользовательских эндпоинтов «Налив»
+  sessionToken   String?
+  linkedAt       DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  orderTracking  BotOrderTracking[]
+
+  @@index([organizationId])
+}
+
+// === Отслеживание статусов заказов для уведомлений клиенту ===
+model BotOrderTracking {
+  id             Int      @id @default(autoincrement())
+  botUser        BotUser  @relation(fields: [botUserId], references: [id], onDelete: Cascade)
+  botUserId      Int
+  orderId        Int
+  lastStatus     String?
+  lastStatusAt   DateTime?
+  lastNotifiedAt DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([botUserId, orderId])
+  @@index([botUserId])
+}
+
 // Настройки публичного виджета чата на сайте
 model WebsiteWidget {
   id              Int          @id @default(autoincrement())

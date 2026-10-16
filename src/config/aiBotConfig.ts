@@ -9,6 +9,10 @@ export type AiBotConfig = {
   aiApiKey: string;
   aiModel: string;
   nalivBaseUrl: string;
+  /** API-ключ бота для эндпоинтов /api/telegram-bot/* (X-Bot-Key) */
+  nalivBotApiKey: string;
+  /** Интервал опроса активных заказов для уведомлений о статусах, мс */
+  orderPollIntervalMs: number;
   httpTimeoutMs: number;
   httpRetryCount: number;
   httpRetryBaseDelayMs: number;
@@ -34,6 +38,8 @@ export function getAiBotConfig(): AiBotConfig {
     aiApiKey: process.env.AI_BOT_API_KEY || '',
     aiModel: process.env.AI_BOT_MODEL || 'qwen2.5:7b',
     nalivBaseUrl: (process.env.NALIV_API_BASE_URL || 'https://njt25.naliv.kz').replace(/\/$/, ''),
+    nalivBotApiKey: process.env.TELEGRAM_BOT_API_KEY || '',
+    orderPollIntervalMs: parsePositiveIntEnv('BOT_ORDER_POLL_INTERVAL_MS', 60000),
     httpTimeoutMs: parsePositiveIntEnv('AI_BOT_HTTP_TIMEOUT_MS', 60000),
     httpRetryCount: parsePositiveIntEnv('AI_BOT_HTTP_RETRY_COUNT', 2),
     httpRetryBaseDelayMs: parsePositiveIntEnv('AI_BOT_HTTP_RETRY_BASE_DELAY_MS', 300),

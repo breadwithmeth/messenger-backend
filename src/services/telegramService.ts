@@ -219,7 +219,10 @@ async function handleStartCommand(
         organizationId,
         chatId: chat.id,
         telegramChatId: chatId,
+        telegramUserId: userId,
+        telegramUsername: username,
         clientName: firstName,
+        telegramLastName: lastName,
         send: makeBotReplySender(botId, chatId),
       });
       return;
@@ -439,7 +442,10 @@ async function handleIncomingMessage(
           organizationId,
           chatId: chat.id,
           telegramChatId: chatId,
+          telegramUserId: userId,
+          telegramUsername: username,
           clientName: firstName,
+          telegramLastName: lastName,
           send: makeBotReplySender(botId, chatId),
         };
 
@@ -514,7 +520,10 @@ async function handleCallbackQuery(
         organizationId,
         chatId: chat.id,
         telegramChatId: chatId,
+        telegramUserId: query.from?.id.toString(),
+        telegramUsername: query.from?.username,
         clientName: query.from?.first_name,
+        telegramLastName: query.from?.last_name,
         send: makeBotReplySender(botId, chatId),
         answerCallback: (text?: string) =>
           telegram.answerCallbackQuery(query.id, text ? { text } : undefined),

@@ -120,6 +120,24 @@ curl -X POST https://bm.drawbridge.kz/api/telegram/organizations/1/bots \
 | `POST /api/telegram/organizations/:orgId/bots` | Создать бота (принимает `aiEnabled`, `aiModel`, `aiSystemPrompt`) |
 | `PUT /api/telegram/bots/:botId` | Обновить бота (в т.ч. AI-поля) |
 
+## Интеграция с аккаунтами «Налив» (/api/telegram-bot/*)
+
+Когда клиент делится телефоном, бот **привязывает его Telegram к аккаунту «Налив»** (`POST /api/telegram-bot/auth/link` — по `login`-телефону; если пользователь не найден, создаётся вместе с картой лояльности). JWT и `session_token` сохраняются в `BotUser` — они пригодятся для пользовательских эндпоинтов (создание заказа — по мере появления документации).
+
+- Привязка идёт параллельно диалогу и не блокирует сценарий; 409 (Telegram уже у другого аккаунта) — клиенту подсказка, заказ всё равно сохраняется в БД.
+- **Отслеживание статусов** (`botOrderTracker.ts`): каждые 60 сек (`BOT_ORDER_POLL_INTERVAL_MS`) опрашивается `/orders/active` для всех привязанных клиентов; при смене статуса (`UNPAID(66) → NEW(0) → ACCEPTED(1) → READY(2) → ON_THE_WAY(3)`) клиенту приходит сообщение в Telegram («📦 Обновление по заказу #123: 🚗 В пути») + событие операторам `bot_order_status_changed`. Первое обнаружение заказа — без уведомления. Трекер стартует с сервером, останавливается на SIGINT/SIGTERM.
+
+| Метод клиента (`telegramBotClient.ts`) | Эндпоинт |
+|---|---|
+| `linkTelegramAccount` | `POST /api/telegram-bot/auth/link` |
+| `unlinkTelegramAccount` | `POST /api/telegram-bot/auth/unlink` |
+| `getUserByTelegram` | `GET /users/by-telegram/:id` |
+| `getUserByPhone` | `GET /users/by-phone/:phone` |
+| `getActiveOrders` | `GET /orders/active?telegram_id=` |
+| `getOrderDetails` | `GET /orders/:id?telegram_id=` |
+
+Авторизация — заголовок `X-Bot-Key: <TELEGRAM_BOT_API_KEY>` (env). Модели: `BotUser` (telegramUserId ↔ nalivUserId, token, чат для уведомлений), `BotOrderTracking` (последний известный статус по заказу, `@@unique([botUserId, orderId])`).
+
 ## Модель данных
 
 - **`TelegramBot`**: `aiEnabled`, `aiModel` (переопределение модели для бота), `aiSystemPrompt` (кастомный промт).
@@ -143,3 +161,10 @@ prisma/migrations/20261016090000_telegram_ai_bots/
 ```
 
 Тесты: `npx jest src/integrations/naliv src/services/__tests__/botDialogService.test.ts`
+
+## Переменные окружения (дополнение)
+
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `TELEGRAM_BOT_API_KEY` | — | API-ключ бота для `/api/telegram-bot/*` на «Налив» (**обязательна** для привязки и трекинга) |
+| `BOT_ORDER_POLL_INTERVAL_MS` | `60000` | Интервал опроса активных заказов |

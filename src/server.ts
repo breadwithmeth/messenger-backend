@@ -3,6 +3,7 @@ import http from 'http';
 import app from './app.js';
 import { startWaSession } from './services/waService.js'; // Импортируйте startWaSession
 import { startAllTelegramBots, stopAllTelegramBots } from './services/telegramService.js'; // <-- НОВОЕ
+import { startBotOrderTracker, stopBotOrderTracker } from './services/botOrderTracker.js';
 import { initializeSocketIO } from './services/socketService.js'; // <-- Socket.IO
 import { prisma } from './config/authStorage.js'; // Импортируйте prisma
 
@@ -78,12 +79,16 @@ server.listen(PORT, async () => {
   logger.info('[ServerInit] Запуск Telegram ботов...');
   await startAllTelegramBots();
   logger.info('[ServerInit] Telegram боты запущены');
+
+  // Отслеживание статусов заказов «Налив» + уведомления клиентам
+  startBotOrderTracker();
 });
 
 // Graceful shutdown - останавливаем ботов при выключении сервера
 process.on('SIGINT', async () => {
   logger.info('[ServerShutdown] Получен сигнал SIGINT, останавливаем Telegram ботов...');
   await stopAllTelegramBots();
+  stopBotOrderTracker();
   logger.info('[ServerShutdown] Telegram боты остановлены');
   process.exit(0);
 });
@@ -91,6 +96,7 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
   logger.info('[ServerShutdown] Получен сигнал SIGTERM, останавливаем Telegram ботов...');
   await stopAllTelegramBots();
+  stopBotOrderTracker();
   logger.info('[ServerShutdown] Telegram боты остановлены');
   process.exit(0);
 });
