@@ -26,7 +26,15 @@ import {
   NalivCreateOrderPayload,
   NalivCreatedOrder,
 } from '../integrations/naliv/telegramBotClient.js';
-import { CartItem, NalivAddress, NalivBusinessWithDistance, NalivItem } from '../integrations/naliv/types.js';
+import {
+  CartItem,
+  CartItemPromo,
+  NalivAddress,
+  NalivBusinessWithDistance,
+  NalivItem,
+  NalivOption,
+  NalivOptionVariant,
+} from '../integrations/naliv/types.js';
 import { aiChat, AiChatMessage } from './aiChatClient.js';
 
 const logger = createLogger();
@@ -83,7 +91,7 @@ export type DialogContext = {
 // Чистые функции (экспортированы для юнит-тестов)
 // ============================================================
 
-/** Нормализует цену товара с учётом акции (минимальный discount из promotions) */
+/** Нормализует цену товара с учётом скидок (минимальный discount из promotions) */
 export function effectivePrice(item: NalivItem): number {
   let price = item.price;
   const promos = Array.isArray(item.promotions) ? item.promotions : [];
@@ -96,56 +104,103 @@ export function effectivePrice(item: NalivItem): number {
   return price;
 }
 
+/** Главная акция товара для отображения: сначала SUBTRACT (2+1), затем максимальная скидка */
+export function pickPromo(item: NalivItem): CartItemPromo | null {
+  const promos = Array.isArray(item.promotions) ? item.promotions : [];
+  const subtract = promos.find((p) => p?.type === 'SUBTRACT' && Number(p.base_amount) > 0 && Number(p.add_amount) > 0);
+  if (subtract) {
+    return {
+      type: subtract.type,
+      base_amount: Number(subtract.base_amount),
+      add_amount: Number(subtract.add_amount),
+      name: subtract.name,
+    };
+  }
+  const bestDiscount = promos
+    .filter((p) => Number(p?.discount) > 0)
+    .sort((a, b) => Number(b.discount) - Number(a.discount))[0];
+  if (bestDiscount) {
+    return { type: bestDiscount.type, discount: Number(bestDiscount.discount), name: bestDiscount.name };
+  }
+  return null;
+}
+
+/** Бейдж акции для кнопок и списков: « 🔥2+1», « −11%» */
+export function promoBadge(item: NalivItem): string {
+  const promo = pickPromo(item);
+  if (!promo) return '';
+  if (promo.type === 'SUBTRACT') return ` 🔥${promo.base_amount}+${promo.add_amount}`;
+  if (Number(promo.discount) > 0) return ` −${Math.round(Number(promo.discount))}%`;
+  return '';
+}
+
+/** Цена одной порции с учётом опции: цена родителя × размер порции + наценка тары */
+export function portionPrice(line: { price: number; portionSize?: number; optionSurcharge?: number }): number {
+  return line.price * (line.portionSize && line.portionSize > 1 ? line.portionSize : 1) + (line.optionSurcharge || 0);
+}
+
+/** Число порций в позиции (для розлива — бутылок) */
+export function linePortions(line: CartItem): number {
+  return line.portionSize && line.portionSize > 1 ? Math.round(line.qty / line.portionSize) : line.qty;
+}
+
+/** Итог по позиции с учётом акции 2+1 (клиент платит за base из base+add порций) */
+export function lineTotal(line: CartItem): number {
+  const portions = Math.max(0, linePortions(line));
+  const unit = portionPrice(line);
+  const promo = line.promo;
+  if (promo?.type === 'SUBTRACT' && Number(promo.base_amount) > 0 && Number(promo.add_amount) > 0) {
+    const group = promo.base_amount + promo.add_amount;
+    const free = Math.floor(portions / group) * promo.add_amount;
+    return Math.max(0, portions - free) * unit;
+  }
+  return portions * unit;
+}
+
+/** Ключ позиции корзины: товар + выбранная тара */
+function cartLineKey(itemId: number, relationId?: number | null): string {
+  return `${itemId}:${relationId ?? 0}`;
+}
+
+function findCartLine(cart: CartItem[], itemId: number, relationId?: number | null): CartItem | undefined {
+  return cart.find((c) => cartLineKey(c.itemId, c.option?.relationId) === cartLineKey(itemId, relationId));
+}
+
+/** Обязательная одиночная опция товара (например тара для розлива) */
+export function requiredSingleOption(item: NalivItem): NalivOption | null {
+  const options = Array.isArray(item.options) ? item.options : [];
+  return options.find((o) => o?.required === 1 && o?.selection === 'SINGLE' && (o.variants?.length ?? 0) > 0) || null;
+}
+
 /**
- * Добавляет к корзине `portions` порций товара.
- * Размер одной порции = quantity_step шт (шаг заказа из API «Налив»),
- * у большинства товаров порция = 1 шт.
+ * Добавляет к корзине `portions` порций товара (с выбранной опцией-тарой, если есть).
+ * Размер одной порции: для тары — parent_item_amount (литры розлива), иначе quantity_step.
+ * Позиции различаются по паре (товар + тара).
  */
-export function addToCart(cart: CartItem[], item: NalivItem, portions: number): CartItem[] {
-  const step = item.quantity_step > 0 ? item.quantity_step : 1;
+export function addToCart(
+  cart: CartItem[],
+  item: NalivItem,
+  portions: number,
+  option?: { variant: NalivOptionVariant } | null
+): CartItem[] {
+  const variant = option?.variant;
+  const portionSize = variant
+    ? Math.max(1, Number(variant.parent_item_amount) || 1)
+    : item.quantity_step > 0
+      ? item.quantity_step
+      : 1;
+  const relationId = variant?.relation_id ?? null;
   const normalizedPortions = Math.max(1, Math.round(portions));
-  const qtyDelta = normalizedPortions * step;
+  const qtyDelta = normalizedPortions * portionSize;
   const price = effectivePrice(item);
+  const optionSurcharge = variant && variant.price_type === 'ADD' ? Number(variant.price) || 0 : 0;
+  const promo = pickPromo(item);
 
-  const existing = cart.find((c) => c.itemId === item.item_id);
-  if (existing) {
-    return cart.map((c) => (c.itemId === item.item_id ? { ...c, qty: c.qty + qtyDelta, portionSize: step } : c));
-  }
-
-  return [
-    ...cart,
-    { itemId: item.item_id, name: item.name, price, qty: qtyDelta, unit: item.unit || 'шт', portionSize: step },
-  ];
-}
-
-/** Убирает товар из корзины по item_id */
-export function removeFromCart(cart: CartItem[], itemId: number): CartItem[] {
-  return cart.filter((c) => c.itemId !== itemId);
-}
-
-/**
- * Устанавливает ТОЧНОЕ количество в порциях (не прибавляет):
- * «два ягеря» = 2 порции = 2 × quantity_step шт. portions <= 0 — удалить позицию.
- * Ограничивается остатком на складе (amount — в штуках).
- */
-export function setCartQty(cart: CartItem[], item: NalivItem, portions: number): CartItem[] {
-  const step = item.quantity_step > 0 ? item.quantity_step : 1;
-  const normalizedPortions = Math.round(portions);
-
-  if (normalizedPortions <= 0) {
-    return removeFromCart(cart, item.item_id);
-  }
-
-  // Не больше остатка, но минимум одна порция
-  const maxPortions = item.amount > 0 ? Math.floor(item.amount / step) : normalizedPortions;
-  const clampedPortions = Math.min(normalizedPortions, Math.max(maxPortions, 1));
-  const price = effectivePrice(item);
-
-  const existing = cart.find((c) => c.itemId === item.item_id);
+  const existing = findCartLine(cart, item.item_id, relationId);
   if (existing) {
     return cart.map((c) =>
-      c.itemId === item.item_id
-        ? { ...c, qty: clampedPortions * step, price, portionSize: step }
+      cartLineKey(c.itemId, c.option?.relationId) === cartLineKey(item.item_id, relationId)
+        ? { ...c, qty: c.qty + qtyDelta, price, portionSize, optionSurcharge, promo }
         : c
     );
   }
@@ -156,16 +211,84 @@ export function setCartQty(cart: CartItem[], item: NalivItem, portions: number):
       itemId: item.item_id,
       name: item.name,
       price,
-      qty: clampedPortions * step,
+      qty: qtyDelta,
       unit: item.unit || 'шт',
-      portionSize: step,
+      portionSize,
+      optionSurcharge: optionSurcharge || undefined,
+      option: variant
+        ? { relationId: variant.relation_id, label: variant.item_name || `Вариант ${variant.relation_id}` }
+        : null,
+      promo: promo || null,
     },
   ];
 }
 
-/** Сумма позиций без доставки */
+/** Убирает товар из корзины по item_id (все варианты) */
+export function removeFromCart(cart: CartItem[], itemId: number): CartItem[] {
+  return cart.filter((c) => c.itemId !== itemId);
+}
+
+/**
+ * Устанавливает ТОЧНОЕ количество в порциях (не прибавляет):
+ * «два ягеря» = 2 порции. portions <= 0 — удалить позицию.
+ * Ограничивается остатком на складе (amount — в единицах родителя).
+ */
+export function setCartQty(
+  cart: CartItem[],
+  item: NalivItem,
+  portions: number,
+  option?: { variant: NalivOptionVariant } | null
+): CartItem[] {
+  const variant = option?.variant;
+  const portionSize = variant
+    ? Math.max(1, Number(variant.parent_item_amount) || 1)
+    : item.quantity_step > 0
+      ? item.quantity_step
+      : 1;
+  const relationId = variant?.relation_id ?? null;
+  const normalizedPortions = Math.round(portions);
+
+  if (normalizedPortions <= 0) {
+    return cart.filter((c) => cartLineKey(c.itemId, c.option?.relationId) !== cartLineKey(item.item_id, relationId));
+  }
+
+  // Не больше остатка, но минимум одна порция
+  const maxPortions = item.amount > 0 ? Math.floor(item.amount / portionSize) : normalizedPortions;
+  const clampedPortions = Math.min(normalizedPortions, Math.max(maxPortions, 1));
+  const price = effectivePrice(item);
+  const optionSurcharge = variant && variant.price_type === 'ADD' ? Number(variant.price) || 0 : 0;
+  const promo = pickPromo(item);
+
+  const existing = findCartLine(cart, item.item_id, relationId);
+  if (existing) {
+    return cart.map((c) =>
+      cartLineKey(c.itemId, c.option?.relationId) === cartLineKey(item.item_id, relationId)
+        ? { ...c, qty: clampedPortions * portionSize, price, portionSize, optionSurcharge, promo }
+        : c
+    );
+  }
+
+  return [
+    ...cart,
+    {
+      itemId: item.item_id,
+      name: item.name,
+      price,
+      qty: clampedPortions * portionSize,
+      unit: item.unit || 'шт',
+      portionSize,
+      optionSurcharge: optionSurcharge || undefined,
+      option: variant
+        ? { relationId: variant.relation_id, label: variant.item_name || `Вариант ${variant.relation_id}` }
+        : null,
+      promo: promo || null,
+    },
+  ];
+}
+
+/** Сумма позиций без доставки (с учётом опций и акций 2+1) */
 export function cartSubtotal(cart: CartItem[]): number {
-  return cart.reduce((sum, c) => sum + c.price * c.qty, 0);
+  return cart.reduce((sum, c) => sum + lineTotal(c), 0);
 }
 
 /** Форматирование числа: 1460 -> "1 460" */
@@ -182,10 +305,18 @@ export function formatCart(cart: CartItem[], deliveryFee: number): string {
   }
 
   const lines = cart.map((c) => {
-    // Для порционных товаров (шаг заказа > 1) показываем и порции
-    const portionSuffix =
-      c.portionSize && c.portionSize > 1 ? ` (${Math.round(c.qty / c.portionSize)} порц. × ${c.portionSize} ${c.unit})` : '';
-    return `• ${c.name} — ${formatMoney(c.price)} ₸ × ${c.qty} ${c.unit}${portionSuffix} = ${formatMoney(c.price * c.qty)} ₸`;
+    const portions = linePortions(c);
+    const unit = c.unit || 'шт';
+    const isPortioned = !!c.portionSize && c.portionSize > 1;
+    const per = isPortioned
+      ? `${formatMoney(portionPrice(c))} ₸/порц. (${c.portionSize} ${unit})`
+      : `${formatMoney(c.price)} ₸/${unit}`;
+    const optionSuffix = c.option ? `\n   ↳ ${c.option.label}` : '';
+    const promoSuffix =
+      c.promo?.type === 'SUBTRACT'
+        ? `\n   ↳ 🔥 Акция ${c.promo.base_amount}+${c.promo.add_amount}: платите за ${c.promo.base_amount}`
+        : '';
+    return `• ${c.name}${optionSuffix} — ${per} × ${portions} = ${formatMoney(lineTotal(c))} ₸${promoSuffix}`;
   });
   const subtotal = cartSubtotal(cart);
 
@@ -206,9 +337,11 @@ export function cartForPrompt(cart: CartItem[]): string {
     cart.map((c) => ({
       item_id: c.itemId,
       name: c.name,
+      ...(c.option ? { option: c.option.label } : {}),
       price: c.price,
       qty: c.qty,
       unit: c.unit,
+      ...(c.promo?.type === 'SUBTRACT' ? { promo: `${c.promo.base_amount}+${c.promo.add_amount}` } : {}),
       ...(c.portionSize && c.portionSize > 1 ? { portion_size: c.portionSize } : {}),
     }))
   );
@@ -242,9 +375,9 @@ export function shortenItemName(name: string, maxLen = MAX_BUTTON_NAME_LEN): str
 
 /**
  * Сообщение с результатами поиска + инлайн-кнопки выбора товара.
- * Выбор позиции — кнопкой (callback `add:<item_id>`), не текстом:
- * исключает путаницу «номер из списка = количество».
- * limit — сколько вариантов показать (по умолчанию до 8, для общих запросов 2–3).
+ * Выбор позиции — кнопкой (callback `add:<item_id>` или `add:<item_id>:<relation_id>`
+ * для товаров с обязательной тарой), не текстом: исключает путаницу
+ * «номер из списка = количество». limit — сколько вариантов показать.
  */
 export function buildSearchOffer(query: string, items: NalivItem[], limit: number = MAX_SEARCH_BUTTONS): {
   text: string;
@@ -253,20 +386,47 @@ export function buildSearchOffer(query: string, items: NalivItem[], limit: numbe
   const shown = items.slice(0, Math.max(1, Math.min(limit, MAX_SEARCH_BUTTONS)));
 
   const listText = shown
-    .map((i, idx) => `${idx + 1}. ${i.name} — ${formatMoney(effectivePrice(i))} ₸`)
+    .map((i) => {
+      const option = requiredSingleOption(i);
+      const hint = option ? ` — выберите тару кнопкой (${option.name})` : '';
+      const promo = pickPromo(i);
+      const promoText =
+        promo?.type === 'SUBTRACT'
+          ? ` 🔥 акция ${promo.base_amount}+${promo.add_amount}`
+          : Number(promo?.discount) > 0
+            ? ` −${Math.round(Number(promo.discount))}%`
+            : '';
+      return `• ${i.name} — ${formatMoney(effectivePrice(i))} ₸/${i.unit || 'шт'}${promoText}${hint}`;
+    })
     .join('\n');
 
   const text =
     `🔍 Нашёл по запросу «${query}»:\n\n${listText}\n\n` +
-    `Выберите товар кнопкой — добавлю в корзину 👇 (нажать можно несколько раз — по одной штуке за раз)`;
+    `Выберите товар кнопкой — добавлю в корзину 👇 (нажать можно несколько раз — по одной порции за раз)`;
 
-  const rows = chunkRows(
-    shown.map((i, idx) => ({
-      text: `${idx + 1}. ${shortenItemName(i.name)} · ${formatMoney(effectivePrice(i))} ₸`,
-      callbackData: `add:${i.item_id}`,
-    })),
-    2
-  );
+  // Кнопки: у товаров с обязательной тарой — по кнопке на каждый вариант
+  const buttons: BotInlineButton[] = [];
+  for (const i of shown) {
+    const option = requiredSingleOption(i);
+    const badge = promoBadge(i);
+    if (option) {
+      for (const v of option.variants!) {
+        const pAmount = Math.max(1, Number(v.parent_item_amount) || 1);
+        const portion = effectivePrice(i) * pAmount + (v.price_type === 'ADD' ? Number(v.price) || 0 : 0);
+        buttons.push({
+          text: `${shortenItemName(v.item_name || option.name)} · ${formatMoney(portion)} ₸${badge}`,
+          callbackData: `add:${i.item_id}:${v.relation_id}`,
+        });
+      }
+    } else {
+      buttons.push({
+        text: `${shortenItemName(i.name)} · ${formatMoney(effectivePrice(i))} ₸${badge}`,
+        callbackData: `add:${i.item_id}`,
+      });
+    }
+  }
+
+  const rows = chunkRows(buttons.slice(0, MAX_SEARCH_BUTTONS * 2), 2);
   rows.push([
     { text: '🛒 Корзина', callbackData: 'cart' },
     { text: '✅ Оформить', callbackData: 'checkout' },
@@ -843,11 +1003,11 @@ export async function handleBotCallback(ctx: DialogContext, data: string): Promi
   // Снимаем «часики» на кнопке сразу
   await ctx.answerCallback?.();
 
-  const [cmd, arg] = (data || '').split(':');
+  const [cmd, arg, arg2] = (data || '').split(':');
 
   switch (cmd) {
     case 'add':
-      await handleAddCallback(ctx, dialog, Number(arg));
+      await handleAddCallback(ctx, dialog, Number(arg), arg2 ? Number(arg2) : undefined);
       return;
     case 'cart': {
       const business = await findBusinessFee(dialog.businessId);
@@ -893,7 +1053,7 @@ export async function handleBotCallback(ctx: DialogContext, data: string): Promi
 }
 
 /** Добавление товара по кнопке: один тап = +1 шт (с учётом quantity_step) */
-async function handleAddCallback(ctx: DialogContext, dialog: AddCallbackDialog, itemId: number): Promise<void> {
+async function handleAddCallback(ctx: DialogContext, dialog: AddCallbackDialog, itemId: number, relationId?: number): Promise<void> {
   const searchCache = (dialog.lastSearchItems as unknown as NalivItem[] | null) || [];
   const item = searchCache.find((i) => i.item_id === itemId);
 
@@ -907,8 +1067,19 @@ async function handleAddCallback(ctx: DialogContext, dialog: AddCallbackDialog, 
     return;
   }
 
-  // Один тап = +1 порция (= quantity_step шт)
-  const cart = addToCart((dialog.cart as unknown as CartItem[]) || [], item, 1);
+  // Выбранная тара (для розлива): add:<item_id>:<relation_id>
+  let variant: NalivOptionVariant | null = null;
+  if (relationId) {
+    const option = requiredSingleOption(item);
+    variant = option?.variants?.find((v) => v.relation_id === relationId) || null;
+    if (!variant) {
+      await ctx.send('🤔 Такой вариант тары уже не в текущем поиске. Напишите название товара ещё раз 🔍');
+      return;
+    }
+  }
+
+  // Один тап = +1 порция (для тары порция = parent_item_amount литров)
+  const cart = addToCart((dialog.cart as unknown as CartItem[]) || [], item, 1, variant ? { variant } : null);
   await prisma.botDialog.update({
     where: { id: dialog.id },
     data: { cart: cart as unknown as any },
@@ -916,15 +1087,15 @@ async function handleAddCallback(ctx: DialogContext, dialog: AddCallbackDialog, 
 
   const business = await findBusinessFee(dialog.businessId);
   const deliveryFee = business?.delivery_service_fee ?? 0;
-  const line = cart.find((c) => c.itemId === item.item_id)!;
-  const step = item.quantity_step > 0 ? item.quantity_step : 1;
-  const portionNote = step > 1 ? ` (${Math.round(line.qty / step)} порц. × ${step} ${line.unit})` : '';
+  const line = cart.find((c) => c.itemId === item.item_id && (c.option?.relationId ?? null) === (relationId ?? null))!;
+  const lineTotalValue = lineTotal(line);
+  const lineLabel = line.option ? `${item.name} — ${line.option.label}` : item.name;
 
   // Рекомендации «в пару» — в то же сообщение, кнопками
   const recs = await buildRecommendations(ctx, dialog, item, cart);
   const text = [
-    `✅ ${item.name}`,
-    `🛒 В корзине: ${line.qty} ${line.unit}${portionNote} × ${formatMoney(line.price)} ₸`,
+    `✅ ${lineLabel}`,
+    `🛒 В корзине: ${linePortions(line)} порц. = ${line.qty} ${line.unit} — ${formatMoney(lineTotalValue)} ₸`,
     `📦 Итого с доставкой: ${formatMoney(cartSubtotal(cart) + deliveryFee)} ₸`,
   ].join('\n');
 
@@ -936,7 +1107,9 @@ async function handleAddCallback(ctx: DialogContext, dialog: AddCallbackDialog, 
 
   await ctx.send(recs ? `${text}\n\n${recs.text}` : text, { inlineKeyboard: keyboard });
 
-  logger.info(`[BotDialog] Кнопка add:${item.item_id} → корзина чата #${ctx.chatId}: ${cart.length} позиций${recs ? ' + рекомендации' : ''}`);
+  logger.info(
+    `[BotDialog] Кнопка add:${item.item_id}${relationId ? `:${relationId}` : ''} → корзина чата #${ctx.chatId}: ${cart.length} позиций${recs ? ' + рекомендации' : ''}`
+  );
 }
 
 type AddCallbackDialog = {
@@ -1333,6 +1506,27 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
             continue;
           }
 
+          // Товар с обязательной тарой (розлив) — клиент выбирает вариант кнопкой
+          const reqOption = requiredSingleOption(item);
+          if (reqOption) {
+            const variantButtons = chunkRows(
+              (reqOption.variants || []).map((v) => {
+                const pAmount = Math.max(1, Number(v.parent_item_amount) || 1);
+                const portion = effectivePrice(item) * pAmount + (v.price_type === 'ADD' ? Number(v.price) || 0 : 0);
+                return {
+                  text: `${shortenItemName(v.item_name || reqOption.name)} · ${formatMoney(portion)} ₸${promoBadge(item)}`,
+                  callbackData: `add:${item.item_id}:${v.relation_id}`,
+                };
+              }),
+              2
+            );
+            await ctx.send(
+              `🫗 «${item.name}» продаётся с выбором тары (${reqOption.name}) — выберите кнопку ниже:`,
+              { inlineKeyboard: variantButtons }
+            );
+            return;
+          }
+
           const qty = action.qty && action.qty > 0 ? action.qty : 1;
           currentCart = addToCart(currentCart, item, qty);
           await prisma.botDialog.update({
@@ -1526,7 +1720,12 @@ export function buildOrderCreatePayload(
   return {
     user_id: nalivUserId,
     business_id: dialog.businessId,
-    items: cart.map((c) => ({ item_id: c.itemId, amount: c.qty })),
+    items: cart.map((c) => ({
+      item_id: c.itemId,
+      amount: c.qty,
+      // Выбранная тара/модификаторы: option_item_relation_id
+      ...(c.option ? { options: [{ option_item_relation_id: c.option.relationId }] } : {}),
+    })),
     street,
     house: dialog.addressHouse,
     lat: dialog.addressLat,
