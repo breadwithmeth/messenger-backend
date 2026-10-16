@@ -172,7 +172,7 @@ async function handleStartCommand(
     logger.info(`[Telegram] /start от пользователя ${username || userId} в чате ${chatId}`);
 
     // Создаём или находим чат
-    await ensureTelegramChat(
+    const chat = await ensureTelegramChat(
       organizationId,
       botId,
       chatId,
@@ -182,12 +182,29 @@ async function handleStartCommand(
       lastName
     );
 
-    // Получаем приветственное сообщение
+    // Получаем свежие данные бота (aiEnabled может быть изменён без перезапуска)
     const bot = await prisma.telegramBot.findUnique({
       where: { id: botId },
     });
 
-    const welcomeMessage = bot?.welcomeMessage || 
+    // === AI-РЕЖИМ: сценарий приветствие -> адрес -> магазин -> корзина ===
+    if (bot?.aiEnabled) {
+      const { handleBotStart } = await import('./botDialogService.js');
+      await handleBotStart({
+        botId,
+        botAiModel: bot.aiModel,
+        botAiSystemPrompt: bot.aiSystemPrompt,
+        botWelcomeMessage: bot.welcomeMessage,
+        organizationId,
+        chatId: chat.id,
+        telegramChatId: chatId,
+        clientName: firstName,
+        send: (text) => sendTelegramMessage(botId, chatId, text),
+      });
+      return;
+    }
+
+    const welcomeMessage = bot?.welcomeMessage ||
       `👋 Привет! Я бот поддержки. Напишите ваш вопрос, и я передам его оператору.`;
 
     await telegram.sendMessage(chatId, welcomeMessage);
@@ -380,6 +397,42 @@ async function handleIncomingMessage(
       });
     } catch (socketError) {
       logger.error('[Socket.IO] Ошибка отправки уведомления Telegram:', socketError);
+    }
+
+    // === AI-РЕЖИМ: маршрут сообщения в сценарий бота ===
+    try {
+      const bot = await prisma.telegramBot.findUnique({
+        where: { id: botId },
+      });
+
+      if (bot?.aiEnabled) {
+        const { handleBotUserMessage } = await import('./botDialogService.js');
+
+        if (messageType === 'text' && content.trim()) {
+          await handleBotUserMessage(
+            {
+              botId,
+              botAiModel: bot.aiModel,
+              botAiSystemPrompt: bot.aiSystemPrompt,
+              botWelcomeMessage: bot.welcomeMessage,
+              organizationId,
+              chatId: chat.id,
+              telegramChatId: chatId,
+              clientName: firstName,
+              send: (text) => sendTelegramMessage(botId, chatId, text),
+            },
+            content
+          );
+        } else {
+          // AI-бот работает только с текстом
+          await telegram.sendMessage(
+            chatId,
+            '🤖 Я понимаю только текстовые сообщения. Напишите ваш запрос текстом.'
+          );
+        }
+      }
+    } catch (aiError: any) {
+      logger.error(`[Telegram] Ошибка AI-обработки сообщения:`, aiError);
     }
   } catch (error: any) {
     logger.error(`[Telegram] Ошибка обработки входящего сообщения:`, error);

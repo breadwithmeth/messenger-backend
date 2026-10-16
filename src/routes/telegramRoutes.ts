@@ -51,4 +51,14 @@ router.post('/bots/:botId/messages', telegramController.sendMessage);
 // GET /api/telegram/bots/:botId/chats - Получить чаты бота
 router.get('/bots/:botId/chats', telegramController.getBotChats);
 
+/**
+ * AI-боты
+ */
+
+// GET /api/telegram/ai/models - Доступные модели AI-сервера
+router.get('/ai/models', telegramController.listAiModels);
+
+// GET /api/telegram/bots/:botId/orders - Заказы, собранные AI-ботом
+router.get('/bots/:botId/orders', telegramController.getBotOrders);
+
 export default router;

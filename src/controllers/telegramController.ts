@@ -79,7 +79,7 @@ export async function getBot(req: Request, res: Response): Promise<void> {
 export async function createBot(req: Request, res: Response): Promise<void> {
   try {
     const { organizationId } = req.params;
-    const { botToken, welcomeMessage, autoStart } = req.body;
+    const { botToken, welcomeMessage, autoStart, aiEnabled, aiModel, aiSystemPrompt } = req.body;
 
     if (!botToken) {
       res.status(400).json({ error: 'Не указан токен бота' });
@@ -102,6 +102,9 @@ export async function createBot(req: Request, res: Response): Promise<void> {
         organizationId: parseInt(organizationId),
         botToken,
         welcomeMessage: welcomeMessage || undefined,
+        aiEnabled: aiEnabled !== undefined ? Boolean(aiEnabled) : undefined,
+        aiModel: aiModel || undefined,
+        aiSystemPrompt: aiSystemPrompt || undefined,
         status: 'inactive',
       },
     });
@@ -136,7 +139,7 @@ export async function createBot(req: Request, res: Response): Promise<void> {
 export async function updateBot(req: Request, res: Response): Promise<void> {
   try {
     const { botId } = req.params;
-    const { botToken, welcomeMessage, autoReply, webhookUrl } = req.body;
+    const { botToken, welcomeMessage, autoReply, webhookUrl, aiEnabled, aiModel, aiSystemPrompt } = req.body;
 
     const bot = await prisma.telegramBot.findUnique({
       where: { id: parseInt(botId) },
@@ -163,6 +166,9 @@ export async function updateBot(req: Request, res: Response): Promise<void> {
         welcomeMessage: welcomeMessage !== undefined ? welcomeMessage : undefined,
         autoReply: autoReply !== undefined ? autoReply : undefined,
         webhookUrl: webhookUrl !== undefined ? webhookUrl : undefined,
+        aiEnabled: aiEnabled !== undefined ? Boolean(aiEnabled) : undefined,
+        aiModel: aiModel !== undefined ? aiModel : undefined,
+        aiSystemPrompt: aiSystemPrompt !== undefined ? aiSystemPrompt : undefined,
       },
     });
 
@@ -361,6 +367,74 @@ export async function getBotChats(req: Request, res: Response): Promise<void> {
     });
   } catch (error: any) {
     logger.error('[Telegram API] Ошибка получения чатов бота:', error);
+    res.status(500).json({ error: error.message });
+  }
+}
+
+/**
+ * Список доступных моделей AI-сервера (для настройки AI-ботов)
+ */
+export async function listAiModels(req: Request, res: Response): Promise<void> {
+  try {
+    const { listAiModels } = await import('../services/aiChatClient.js');
+    const models = await listAiModels();
+    res.json({ models });
+  } catch (error: any) {
+    logger.error('[Telegram API] Ошибка получения моделей AI:', error);
+    res.status(502).json({ error: error.message });
+  }
+}
+
+/**
+ * Заказы, собранные AI-ботом
+ */
+export async function getBotOrders(req: Request, res: Response): Promise<void> {
+  try {
+    const { botId } = req.params;
+    const { limit = 50, offset = 0, status } = req.query;
+    const organizationId = res.locals.organizationId;
+
+    // Заказы ищем по чатам этого бота (chat.telegramBotId)
+    const where: any = {
+      organizationId,
+      chat: {
+        telegramBotId: parseInt(botId),
+      },
+    };
+
+    if (status && typeof status === 'string') {
+      where.status = status;
+    }
+
+    const [orders, total] = await Promise.all([
+      prisma.botOrder.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: parseInt(limit as string),
+        skip: parseInt(offset as string),
+        include: {
+          chat: {
+            select: {
+              id: true,
+              name: true,
+              telegramUsername: true,
+              telegramFirstName: true,
+              telegramLastName: true,
+            },
+          },
+        },
+      }),
+      prisma.botOrder.count({ where }),
+    ]);
+
+    res.json({
+      orders,
+      total,
+      limit: parseInt(limit as string),
+      offset: parseInt(offset as string),
+    });
+  } catch (error: any) {
+    logger.error('[Telegram API] Ошибка получения заказов бота:', error);
     res.status(500).json({ error: error.message });
   }
 }

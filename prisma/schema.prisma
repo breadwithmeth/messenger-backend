@@ -63,6 +63,7 @@ model Organization {
   clientTags     ClientTag[]          // Теги для клиентов
   contactComments ContactComment[]
   chatComments   ChatComment[]
+  botOrders      BotOrder[]           // Заказы, собранные через AI-ботов
 }
 
 model User {
@@ -272,6 +273,8 @@ model Chat {
   messages            Message[]
   ticketHistory       TicketHistory[] // История изменений тикета
   chatComments        ChatComment[]
+  botDialog           BotDialog?   // Состояние AI-диалога (для Telegram AI-ботов)
+  botOrders           BotOrder[]   // Заказы, оформленные в этом чате
 
   @@unique([organizationId, ticketNumber]) // Уникальный номер тикета в рамках организации
   @@index([status]) // Индекс для быстрого поиска по статусу
@@ -404,19 +407,101 @@ model TelegramBot {
   // Настройки
   welcomeMessage  String?  // Приветственное сообщение
   autoReply       Boolean  @default(false) // Автоответы
-  
+
+  // === AI-АССИСТЕНТ (сценарий: адрес -> ближайший магазин -> корзина -> заказ) ===
+  aiEnabled       Boolean  @default(false) // Включить AI-режим для этого бота
+  aiModel         String?  // Переопределение модели (по умолчанию AI_BOT_MODEL из env)
+  aiSystemPrompt  String?  // Кастомный системный промт сценария
+
   // Webhook URL (если используется)
   webhookUrl      String?
-  
+
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
-  
+
   // Связи
   chats           Chat[]
   messages        Message[]
-  
+
   @@index([organizationId])
   @@index([status])
+}
+
+// === Состояние AI-диалога бота с клиентом (1:1 с Chat) ===
+model BotDialog {
+  id             Int      @id @default(autoincrement())
+  chat           Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  chatId         Int      @unique
+
+  // Текущее состояние сценария
+  state          String   @default("awaiting_address") // awaiting_address | awaiting_store_confirm | shopping | confirming_order
+
+  // Подтверждённый адрес доставки
+  addressLabel   String?
+  addressLat     Float?
+  addressLon     Float?
+
+  // Выбранный магазин
+  businessId     Int?
+  businessName   String?
+
+  // Варианты для выбора клиентом (нумерованные списки)
+  candidateAddresses  Json? // [{label, lat, lon, city}]
+  candidateBusinesses Json? // [{id, name, address, distanceM, deliveryServiceFee}]
+
+  // Кэш последней выдачи поиска товаров (для валидации item_id)
+  lastSearchItems Json?
+
+  // Корзина: [{itemId, name, price, qty, unit}]
+  cart           Json?
+
+  // Диалог передан живому оператору — AI больше не отвечает
+  handedOff      Boolean  @default(false)
+  handedOffAt    DateTime?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  orders         BotOrder[]
+
+  @@index([state])
+}
+
+// === Заказ, собранный клиентом через AI-бота ===
+model BotOrder {
+  id             Int      @id @default(autoincrement())
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  organizationId Int
+  chat           Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  chatId         Int
+  dialog         BotDialog? @relation(fields: [dialogId], references: [id], onDelete: SetNull)
+  dialogId       Int?
+
+  // Магазин
+  businessId     Int
+  businessName   String
+
+  // Адрес доставки
+  address        String
+  addressLat     Float?
+  addressLon     Float?
+
+  // Позиции: [{itemId, name, price, qty, unit}]
+  items          Json
+  totalPrice     Float
+  deliveryFee    Float    @default(0)
+
+  // Статус: new (создан) -> sent (отправлен наружу) -> confirmed / cancelled
+  status         String   @default("new")
+
+  // Контакт клиента из Telegram
+  telegramChatId String?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([organizationId, status])
+  @@index([chatId])
 }
 
 // Настройки публичного виджета чата на сайте
