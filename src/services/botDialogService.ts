@@ -39,11 +39,20 @@ const MAX_AI_ROUNDS = 3;
 const MAX_HISTORY_MESSAGES = 8;
 const FAR_DISTANCE_M = 25000; // предупреждение, если магазин дальше 25 км
 
-/** Опции отправки: requestContact — показать клавиатуру с кнопкой «Поделиться номером» */
-export type BotSendOptions = { requestContact?: boolean };
+/** Кнопка инлайн-клавиатуры (преобразуется в Telegram inline_keyboard) */
+export type BotInlineButton = { text: string; callbackData: string };
+
+/** Опции отправки: requestContact — клавиатура «Поделиться номером», inlineKeyboard — кнопки выбора */
+export type BotSendOptions = {
+  requestContact?: boolean;
+  inlineKeyboard?: BotInlineButton[][];
+};
 
 /** Колбэк отправки сообщения клиенту (реализуется в telegramService через sendTelegramMessage) */
 export type BotReplySender = (text: string, opts?: BotSendOptions) => Promise<unknown>;
+
+/** Колбэк подтверждения нажатия inline-кнопки (answerCallbackQuery) */
+export type BotCallbackAcker = (text?: string) => Promise<unknown>;
 
 export type DialogContext = {
   botId: number;
@@ -55,6 +64,7 @@ export type DialogContext = {
   telegramChatId: string;
   clientName?: string | null;
   send: BotReplySender;
+  answerCallback?: BotCallbackAcker;
 };
 
 // ============================================================
@@ -141,6 +151,75 @@ export function cartForPrompt(cart: CartItem[]): string {
 export function formatDistance(distanceM: number): string {
   if (distanceM < 1000) return `${Math.round(distanceM)} м`;
   return `${(distanceM / 1000).toFixed(1)} км`;
+}
+
+// === Инлайн-кнопки ===
+
+const MAX_SEARCH_BUTTONS = 8;
+const MAX_BUTTON_NAME_LEN = 32;
+
+/** Разбивает список на строки по `size` элементов */
+export function chunkRows<T>(items: T[], size: number): T[][] {
+  const rows: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    rows.push(items.slice(i, i + size));
+  }
+  return rows;
+}
+
+/** Короткое имя товара для кнопки */
+export function shortenItemName(name: string, maxLen = MAX_BUTTON_NAME_LEN): string {
+  const clean = name.replace(/\s+/g, ' ').trim();
+  return clean.length <= maxLen ? clean : `${clean.slice(0, maxLen - 1)}…`;
+}
+
+/**
+ * Сообщение с результатами поиска + инлайн-кнопки выбора товара.
+ * Выбор позиции — кнопкой (callback `add:<item_id>`), не текстом:
+ * исключает путаницу «номер из списка = количество».
+ */
+export function buildSearchOffer(query: string, items: NalivItem[]): {
+  text: string;
+  inlineKeyboard: BotInlineButton[][];
+} {
+  const shown = items.slice(0, MAX_SEARCH_BUTTONS);
+
+  const listText = shown
+    .map((i, idx) => `${idx + 1}. ${i.name} — ${formatMoney(effectivePrice(i))} ₸`)
+    .join('\n');
+
+  const text =
+    `🔍 Нашёл по запросу «${query}»:\n\n${listText}\n\n` +
+    `Выберите товар кнопкой — добавлю в корзину 👇 (нажать можно несколько раз — по одной штуке за раз)`;
+
+  const rows = chunkRows(
+    shown.map((i, idx) => ({
+      text: `${idx + 1}. ${shortenItemName(i.name)} · ${formatMoney(effectivePrice(i))} ₸`,
+      callbackData: `add:${i.item_id}`,
+    })),
+    2
+  );
+  rows.push([
+    { text: '🛒 Корзина', callbackData: 'cart' },
+    { text: '✅ Оформить', callbackData: 'checkout' },
+  ]);
+
+  return { text, inlineKeyboard: rows };
+}
+
+/** Кнопки под корзиной/подтверждением добавления */
+export function cartActionsKeyboard(): BotInlineButton[][] {
+  return [[{ text: '🛒 Корзина', callbackData: 'cart' }, { text: '✅ Оформить', callbackData: 'checkout' }]];
+}
+
+/** Кнопки под сводкой заказа */
+export function confirmOrderKeyboard(): BotInlineButton[][] {
+  return [[{ text: '✅ Да, оформляем', callbackData: 'confirm_order' }, { text: '❌ Нет', callbackData: 'cancel_order' }]];
+}
+
+/** Кнопки под пустой корзиной */
+export function emptyCartKeyboard(): BotInlineButton[][] {
+  return [[{ text: '✅ Оформить', callbackData: 'checkout' }]];
 }
 
 /**
@@ -342,7 +421,8 @@ ${phoneLine}
 {"action": "handoff"} — клиент просит живого оператора
 {"action": "reply", "reply_text": "<текст для клиента>"}
 
-После search_items ты получишь результаты поиска (JSON) — покажи их клиенту через reply коротким нумерованным списком "1. Название — цена ₸" и спроси, что добавить (клиент может ответить названием или номером).
+search_items — вызывай, когда клиент называет товар, которого нет в "Найденных ранее товарах". Результаты клиент увидит автоматически списком с кнопками выбора — САМ список не пиши и не перечисляй товары в reply.
+add_to_cart — только для товаров из "Найденных ранее товаров" (когда выбор однозначен и клиент явно назвал количество или «ещё одну/такую же»).
 После add_to_cart/remove_from_cart/clear_cart ты получишь обновлённую корзину — подтверди через reply живой фразой и предложи, что-нибудь ещё.
 Если клиент пишет «корзина» — вызови show_cart. Если готов заказывать — checkout. Если просто болтает — поддержи беседу через reply и мягко верни к выбору.`;
 
@@ -482,6 +562,103 @@ async function savePhoneAndContinue(
   } else {
     await startShopping(ctx, dialog.id);
   }
+}
+
+/** Отправляет корзину текстом + кнопки действий */
+async function sendCartMessage(ctx: DialogContext, cart: CartItem[], deliveryFee: number): Promise<void> {
+  const keyboard = cart.length > 0 ? cartActionsKeyboard() : emptyCartKeyboard();
+  await ctx.send(formatCart(cart, deliveryFee), { inlineKeyboard: keyboard });
+}
+
+// === Нажатия инлайн-кнопок ===
+
+/**
+ * Обработка callback_query от инлайн-кнопок:
+ *   add:<item_id> — добавить 1 шт товара в корзину
+ *   cart — показать корзину; checkout — оформить; clear — очистить
+ *   confirm_order / cancel_order — подтверждение заказа
+ */
+export async function handleBotCallback(ctx: DialogContext, data: string): Promise<void> {
+  const dialog = await prisma.botDialog.findUnique({ where: { chatId: ctx.chatId } });
+
+  if (!dialog || dialog.handedOff) {
+    await ctx.answerCallback?.();
+    return;
+  }
+
+  // Снимаем «часики» на кнопке сразу
+  await ctx.answerCallback?.();
+
+  const [cmd, arg] = (data || '').split(':');
+
+  switch (cmd) {
+    case 'add':
+      await handleAddCallback(ctx, dialog, Number(arg));
+      return;
+    case 'cart': {
+      const business = await findBusinessFee(dialog.businessId);
+      await sendCartMessage(ctx, (dialog.cart as unknown as CartItem[]) || [], business?.delivery_service_fee ?? 0);
+      return;
+    }
+    case 'checkout': {
+      const cart = (dialog.cart as unknown as CartItem[]) || [];
+      if (cart.length === 0) {
+        await ctx.send('🛒 Корзина пока пуста. Напишите название товара — например «пиво Heineken» — и я всё найду.');
+        return;
+      }
+      await beginOrderConfirmationWithCart(ctx, dialog.id, cart);
+      return;
+    }
+    case 'clear': {
+      await prisma.botDialog.update({
+        where: { id: dialog.id },
+        data: { cart: [] as unknown as any },
+      });
+      await ctx.send('🗑 Корзину очистил. Начинаем заново — напишите название товара 🔍');
+      return;
+    }
+    case 'confirm_order':
+      await handleConfirmingOrder(ctx, dialog, 'да');
+      return;
+    case 'cancel_order':
+      await handleConfirmingOrder(ctx, dialog, 'нет');
+      return;
+    default:
+      logger.warn(`[BotDialog] Неизвестный callback: ${data} (chat #${ctx.chatId})`);
+  }
+}
+
+/** Добавление товара по кнопке: один тап = +1 шт (с учётом quantity_step) */
+async function handleAddCallback(ctx: DialogContext, dialog: { id: number; businessId: number | null; businessName: string | null; lastSearchItems: unknown; cart: unknown }, itemId: number): Promise<void> {
+  const searchCache = (dialog.lastSearchItems as unknown as NalivItem[] | null) || [];
+  const item = searchCache.find((i) => i.item_id === itemId);
+
+  if (!item) {
+    await ctx.send('🤔 Этот товар уже не в текущем поиске. Напишите название ещё раз — покажу актуальные варианты 🔍');
+    return;
+  }
+
+  if (item.amount <= 0) {
+    await ctx.send(`😔 «${item.name}» закончился. Выберите что-нибудь другое 🔍`);
+    return;
+  }
+
+  const cart = addToCart((dialog.cart as unknown as CartItem[]) || [], item, item.quantity_step || 1);
+  await prisma.botDialog.update({
+    where: { id: dialog.id },
+    data: { cart: cart as unknown as any },
+  });
+
+  const business = await findBusinessFee(dialog.businessId);
+  const deliveryFee = business?.delivery_service_fee ?? 0;
+  const line = cart.find((c) => c.itemId === item.item_id)!;
+
+  await ctx.send(
+    `✅ ${item.name}\n🛒 В корзине: ${line.qty} ${line.unit} × ${formatMoney(line.price)} ₸\n📦 Итого с доставкой: ${formatMoney(cartSubtotal(cart) + deliveryFee)} ₸\n\nЧто-нибудь ещё?`,
+    { inlineKeyboard: cartActionsKeyboard() }
+  );
+
+  logger.info(`[BotDialog] Кнопка add:${item.item_id} → корзина чата #${ctx.chatId}: ${cart.length} позиций`);
 }
 
 // === Шаг 1: адрес ===
@@ -704,7 +881,7 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
   // Быстрые команды без AI
   if (isCartCommand(text)) {
     const business = await findBusinessFee(dialog.businessId);
-    await ctx.send(formatCart((dialog.cart as unknown as CartItem[]) || [], business?.delivery_service_fee ?? 0));
+    await sendCartMessage(ctx, (dialog.cart as unknown as CartItem[]) || [], business?.delivery_service_fee ?? 0);
     return;
   }
 
@@ -774,23 +951,19 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
             data: { lastSearchItems: merged.slice(0, MAX_SEARCH_CACHE) as unknown as any },
           });
 
-          messages.push({ role: 'assistant', content: JSON.stringify({ action: 'search_items', query }) });
-          messages.push({
-            role: 'user',
-            content:
-              result.items.length === 0
-                ? `Результаты поиска по «${query}»: ничего не найдено. Скажи клиенту через reply, что товар не найден, и предложи поискать что-то другое.`
-                : `Результаты поиска по «${query}» (JSON): ${JSON.stringify(
-                    result.items.slice(0, 10).map((i) => ({
-                      item_id: i.item_id,
-                      name: i.name,
-                      price: effectivePrice(i),
-                      unit: i.unit,
-                      amount: i.amount,
-                    }))
-                  )}. Покажи клиенту список через reply: "1. Название — цена ₸" и спроси, что добавить. Если клиент уже указал количество или товар однозначный — сразу вызови add_to_cart.`,
-          });
-          break;
+          // Результаты показываем детерминированно: список + инлайн-кнопки выбора.
+          // Клиент выбирает позицию кнопкой (add:<item_id>) — исключаем путаницу
+          // «номер из списка = количество».
+          if (result.items.length === 0) {
+            await ctx.send(
+              `😔 По запросу «${query}» ничего не нашлось в «${dialog.businessName || 'магазине'}».\n\nПопробуем другое название? Например «пиво светлое» или бренд без размера.`
+            );
+            return;
+          }
+
+          const offer = buildSearchOffer(query, result.items);
+          await ctx.send(offer.text, { inlineKeyboard: offer.inlineKeyboard });
+          return;
         }
 
         case 'add_to_cart': {
@@ -854,7 +1027,7 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
         }
 
         case 'show_cart': {
-          await ctx.send(formatCart(currentCart, deliveryFee));
+          await sendCartMessage(ctx, currentCart, deliveryFee);
           return;
         }
 
@@ -954,10 +1127,10 @@ async function beginOrderConfirmationWithCart(
     '',
     formatCart(cart, deliveryFee),
     '',
-    'Всё верно, оформляем? (да/нет)',
+    'Всё верно, оформляем?',
   ].join('\n');
 
-  await ctx.send(summary);
+  await ctx.send(summary, { inlineKeyboard: confirmOrderKeyboard() });
 }
 
 async function handleConfirmingOrder(ctx: DialogContext, dialog: any, text: string): Promise<void> {

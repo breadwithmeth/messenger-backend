@@ -22,9 +22,25 @@ const CONTACT_KEYBOARD: TelegramBot.SendMessageOptions['reply_markup'] = {
 function makeBotReplySender(botId: number, chatId: string) {
   return (
     text: string,
-    opts?: { requestContact?: boolean }
-  ): Promise<TelegramBot.Message> =>
-    sendTelegramMessage(botId, chatId, text, opts?.requestContact ? { replyMarkup: CONTACT_KEYBOARD } : undefined);
+    opts?: {
+      requestContact?: boolean;
+      inlineKeyboard?: { text: string; callbackData: string }[][];
+    }
+  ): Promise<TelegramBot.Message> => {
+    const sendOptions: { replyMarkup?: TelegramBot.SendMessageOptions['reply_markup'] } = {};
+
+    if (opts?.requestContact) {
+      sendOptions.replyMarkup = CONTACT_KEYBOARD;
+    } else if (opts?.inlineKeyboard) {
+      sendOptions.replyMarkup = {
+        inline_keyboard: opts.inlineKeyboard.map((row) =>
+          row.map((btn) => ({ text: btn.text, callback_data: btn.callbackData }))
+        ),
+      };
+    }
+
+    return sendTelegramMessage(botId, chatId, text, sendOptions);
+  };
 }
 
 /**
@@ -89,6 +105,11 @@ export async function startTelegramBot(botId: number): Promise<void> {
       if (msg.text?.startsWith('/')) return;
 
       await handleIncomingMessage(telegram, msg, bot.organizationId, botId);
+    });
+
+    // Нажатия инлайн-кнопок (выбор товара, корзина, оформление)
+    telegram.on('callback_query', async (query) => {
+      await handleCallbackQuery(telegram, query, bot.organizationId, botId);
     });
 
     // Обработка ошибок
@@ -440,6 +461,68 @@ async function handleIncomingMessage(
     }
   } catch (error: any) {
     logger.error(`[Telegram] Ошибка обработки входящего сообщения:`, error);
+  }
+}
+
+/**
+ * Нажатие инлайн-кнопки (callback_query) — маршрут в AI-сценарий
+ */
+async function handleCallbackQuery(
+  telegram: TelegramBot,
+  query: TelegramBot.CallbackQuery,
+  organizationId: number,
+  botId: number
+): Promise<void> {
+  try {
+    if (!query.message || !query.data) {
+      await telegram.answerCallbackQuery(query.id);
+      return;
+    }
+
+    const chatId = query.message.chat.id.toString();
+
+    // Чат должен уже существовать (кнопки живут в старых сообщениях);
+    // ensureTelegramChat не используем, чтобы не переоткрывать закрытые тикеты
+    const chat = await prisma.chat.findFirst({
+      where: { organizationId, channel: 'telegram', telegramBotId: botId, telegramChatId: chatId },
+    });
+
+    if (!chat) {
+      await telegram.answerCallbackQuery(query.id);
+      return;
+    }
+
+    const bot = await prisma.telegramBot.findUnique({ where: { id: botId } });
+    if (!bot?.aiEnabled) {
+      await telegram.answerCallbackQuery(query.id);
+      return;
+    }
+
+    const { handleBotCallback } = await import('./botDialogService.js');
+    await handleBotCallback(
+      {
+        botId,
+        botAiModel: bot.aiModel,
+        botAiSystemPrompt: bot.aiSystemPrompt,
+        botWelcomeMessage: bot.welcomeMessage,
+        organizationId,
+        chatId: chat.id,
+        telegramChatId: chatId,
+        clientName: query.from?.first_name,
+        send: makeBotReplySender(botId, chatId),
+        answerCallback: (text?: string) =>
+          telegram.answerCallbackQuery(query.id, text ? { text } : undefined),
+      },
+      query.data
+    );
+  } catch (error: any) {
+    logger.error(`[Telegram] Ошибка обработки callback_query:`, error);
+    // Снимаем «часики», даже если обработка упала
+    try {
+      await telegram.answerCallbackQuery(query.id, { text: 'Ошибка, попробуйте ещё раз' });
+    } catch {
+      // ignore
+    }
   }
 }
 

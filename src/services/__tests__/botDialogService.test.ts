@@ -18,6 +18,11 @@ import {
   mergeSearchCache,
   effectivePrice,
   buildShoppingSystemPrompt,
+  buildSearchOffer,
+  chunkRows,
+  shortenItemName,
+  cartActionsKeyboard,
+  confirmOrderKeyboard,
 } from '../botDialogService.js';
 import { CartItem, NalivItem } from '../../integrations/naliv/types.js';
 
@@ -257,6 +262,67 @@ describe('пропуск вопроса о телефоне', () => {
     expect(isSkipPhoneRequest('не сейчас')).toBe(true);
     expect(isSkipPhoneRequest('+77051234567')).toBe(false);
     expect(isSkipPhoneRequest('хочу пиво')).toBe(false);
+  });
+});
+
+describe('инлайн-кнопки выбора товара', () => {
+  test('chunkRows разбивает по N в строку', () => {
+    expect(chunkRows([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
+    expect(chunkRows([], 2)).toEqual([]);
+  });
+
+  test('shortenItemName обрезает длинные названия', () => {
+    expect(shortenItemName('Короткое')).toBe('Короткое');
+    const long = 'Пиво бут Волковская пивоварня Неправильный мед 0.45 6% (светлое,крафт)';
+    const short = shortenItemName(long);
+    expect(short.length).toBeLessThanOrEqual(32);
+    expect(short.endsWith('…')).toBe(true);
+  });
+
+  test('buildSearchOffer: список + кнопка на каждый товар + ряд действий', () => {
+    const items = [
+      item({ item_id: 111, name: 'Corona Extra 0.45', price: 990 }),
+      item({ item_id: 222, name: 'Корона Фрутзика 0.5', price: 1090 }),
+    ];
+
+    const offer = buildSearchOffer('корона', items);
+
+    expect(offer.text).toContain('Нашёл по запросу «корона»');
+    expect(offer.text).toContain('1. Corona Extra 0.45 — 990 ₸');
+    expect(offer.text).toContain('2. Корона Фрутзика 0.5 — 1 090 ₸');
+
+    // последний ряд — действия
+    const actionRow = offer.inlineKeyboard[offer.inlineKeyboard.length - 1];
+    expect(actionRow).toEqual([
+      { text: '🛒 Корзина', callbackData: 'cart' },
+      { text: '✅ Оформить', callbackData: 'checkout' },
+    ]);
+
+    // кнопки товаров: 2 в ряд, callback add:<item_id>
+    const flat = offer.inlineKeyboard.flat();
+    expect(flat).toContainEqual(expect.objectContaining({ callbackData: 'add:111' }));
+    expect(flat).toContainEqual(expect.objectContaining({ callbackData: 'add:222' }));
+    // callback_data короче лимита Telegram в 64 байта
+    for (const btn of flat) {
+      expect(btn.callbackData.length).toBeLessThanOrEqual(64);
+    }
+  });
+
+  test('buildSearchOffer ограничивает 8 кнопками', () => {
+    const items = Array.from({ length: 12 }, (_, i) => item({ item_id: i, name: `Пиво ${i}` }));
+    const offer = buildSearchOffer('пиво', items);
+    expect(offer.inlineKeyboard.flat().filter((b) => b.callbackData.startsWith('add:'))).toHaveLength(8);
+  });
+
+  test('клавиатуры корзины и подтверждения', () => {
+    expect(cartActionsKeyboard().flat().map((b) => b.callbackData)).toEqual(['cart', 'checkout']);
+    expect(confirmOrderKeyboard().flat().map((b) => b.callbackData)).toEqual(['confirm_order', 'cancel_order']);
+  });
+
+  test('цена на кнопке учитывает акцию', () => {
+    const promo = item({ item_id: 5, name: 'Heineken 0.5', price: 1000, promotions: [{ type: 'DISCOUNT', discount: 10 }] });
+    const offer = buildSearchOffer('хайнекен', [promo]);
+    expect(offer.text).toContain('900 ₸');
   });
 });
 
