@@ -28,6 +28,7 @@ const logger = createLogger();
 export const DIALOG_STATES = {
   AWAITING_ADDRESS: 'awaiting_address',
   AWAITING_STORE_CONFIRM: 'awaiting_store_confirm',
+  AWAITING_PHONE: 'awaiting_phone',
   SHOPPING: 'shopping',
   CONFIRMING_ORDER: 'confirming_order',
 } as const;
@@ -38,8 +39,11 @@ const MAX_AI_ROUNDS = 3;
 const MAX_HISTORY_MESSAGES = 8;
 const FAR_DISTANCE_M = 25000; // предупреждение, если магазин дальше 25 км
 
+/** Опции отправки: requestContact — показать клавиатуру с кнопкой «Поделиться номером» */
+export type BotSendOptions = { requestContact?: boolean };
+
 /** Колбэк отправки сообщения клиенту (реализуется в telegramService через sendTelegramMessage) */
-export type BotReplySender = (text: string) => Promise<unknown>;
+export type BotReplySender = (text: string, opts?: BotSendOptions) => Promise<unknown>;
 
 export type DialogContext = {
   botId: number;
@@ -184,6 +188,59 @@ export function isCartCommand(text: string): boolean {
   return /^(корзин[ауые]|моя корзина|покажи корзину|что в корзине|cart)(?!\p{L})/iu.test(text.trim());
 }
 
+/** Просьба отложить вопрос про телефон */
+const SKIP_PHONE_PATTERN = /^(позже|потом|пропустить|скип|не сейчас|не хочу|не буду|не давай|skip|later)(?!\p{L})/iu;
+
+export function isSkipPhoneRequest(text: string): boolean {
+  return SKIP_PHONE_PATTERN.test(text.trim());
+}
+
+/**
+ * Нормализует телефон из текста или Telegram contact.
+ * Поддерживает +7 7XX XXX XXXX, 8 7XX..., 77XXXXXXXXX и т.п.
+ * @returns '+7XXXXXXXXXX' или null, если похоже не на телефон
+ */
+export function normalizePhone(raw: string): string | null {
+  if (!raw) return null;
+
+  let digits = raw.replace(/\D/g, '');
+
+  // 8XXXXXXXXXX -> 7XXXXXXXXXX
+  if (digits.length === 11 && digits.startsWith('8')) {
+    digits = `7${digits.slice(1)}`;
+  }
+  // 10 цифр, начиная с 7 (без кода страны) -> 7XXXXXXXXXX
+  if (digits.length === 10 && digits.startsWith('7')) {
+    digits = `7${digits}`;
+  }
+
+  if (digits.length !== 11 || !digits.startsWith('7')) return null;
+
+  return `+7${digits.slice(1)}`;
+}
+
+/** Случайная фраза из списка — чтобы бот не повторялся */
+export function pick<T>(items: T[]): T {
+  return items[Math.floor(Math.random() * items.length)];
+}
+
+/** Вариативные «живые» реакции */
+const PHONE_ACKS = [
+  'Отлично, номер записал ✅',
+  'Супер, спасибо! Номер у меня 📞',
+  'Принято! Без номера никуда 😉',
+];
+
+const PHONE_SKIP_ACKS = [
+  'Хорошо, вернёмся к этому позже 👌',
+  'Без проблем! Спрошу ещё раз при оформлении.',
+];
+
+const PHONE_ASKS = [
+  'Чтобы курьер мог позвонить при доставке, поделитесь номером телефона — нажмите кнопку ниже 📱',
+  'Остался один момент: нужен ваш номер телефона, чтобы курьер мог связаться. Жмите кнопку ниже 📱',
+];
+
 /**
  * Разбор ответа модели. Ожидается строгий JSON вида
  * {"action": "...", ...}. Возвращает null, если распарсить не удалось.
@@ -237,9 +294,26 @@ export function buildShoppingSystemPrompt(ctx: {
   cart: CartItem[];
   searchCache: NalivItem[];
   deliveryFee: number;
+  clientName?: string | null;
+  phone?: string | null;
   customPrompt?: string | null;
 }): string {
-  const base = `Ты — AI-ассистент сервиса доставки алкоголя "Налив/Градусы24" в Telegram. Помогаешь клиенту собрать заказ. Общайся на русском языке, дружелюбно и кратко.
+  const nameLine = ctx.clientName ? `Клиента зовут ${ctx.clientName} — обращайся по имени.` : '';
+  const phoneLine = ctx.phone
+    ? `Телефон клиента уже известен (${ctx.phone}) — дополнительно не спрашивай.`
+    : 'Телефона клиента пока нет — он будет запрошен отдельно, сам не спрашивай.';
+
+  const base = `Ты — Гоша, живой и дружелюбный AI-ассистент доставки алкоголя "Налив/Градусы24" в Telegram. Ты не робот-справка, а отличный продавец-консультант: помогаешь собрать заказ и радуешься, когда клиент доволен. Общайся на русском языке.
+
+ЛИЧНОСТЬ:
+- Живой, лёгкий, с юмором; уместные эмодзи (🍺 🍿 🔥 ✅) — без перебора
+- Отвечай коротко: 1–3 предложения. Никаких простыней
+- Реагируй на выбор клиента: «Отличный выбор!», «Классика!», «Хороший кус»
+- Проявляй инициативу как продавец: предложи похожий товар или закуску к напиткам — но одно предложение за раз, не навязывайся
+- Если клиент пошутил — поддержи шутку. Если недоволен — разберись и помоги
+
+${nameLine}
+${phoneLine}
 
 КОНТЕКСТ:
 - Адрес доставки: ${ctx.address || 'не указан'}
@@ -269,8 +343,8 @@ export function buildShoppingSystemPrompt(ctx: {
 {"action": "reply", "reply_text": "<текст для клиента>"}
 
 После search_items ты получишь результаты поиска (JSON) — покажи их клиенту через reply коротким нумерованным списком "1. Название — цена ₸" и спроси, что добавить (клиент может ответить названием или номером).
-После add_to_cart/remove_from_cart/clear_cart ты получишь обновлённую корзину — подтвердди через reply и спроси, что-нибудь ещё.
-Если клиент пишет «корзина» — вызови show_cart. Если готов заказывать — checkout.`;
+После add_to_cart/remove_from_cart/clear_cart ты получишь обновлённую корзину — подтверди через reply живой фразой и предложи, что-нибудь ещё.
+Если клиент пишет «корзина» — вызови show_cart. Если готов заказывать — checkout. Если просто болтает — поддержи беседу через reply и мягко верни к выбору.`;
 
   return ctx.customPrompt ? `${base}\n\nДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ ВЛАДЕЛЬЦА БОТА:\n${ctx.customPrompt}` : base;
 }
@@ -295,13 +369,16 @@ export async function handleBotStart(ctx: DialogContext): Promise<void> {
       candidateBusinesses: null,
       lastSearchItems: null,
       cart: null,
+      // Телефон сохраняем между сессиями — спрашивать повторно не нужно
       handedOff: false,
       handedOffAt: null,
     },
   });
 
-  const greeting = ctx.botWelcomeMessage?.trim() ||
-    `👋 Привет${ctx.clientName ? `, ${ctx.clientName}` : ''}! Я AI-ассистент доставки.\n\nПомогу собрать заказ и оформить доставку.\n\n📍 Напишите ваш адрес доставки (улица, дом, город) — я найду ближайший магазин.`;
+  const name = ctx.clientName ? `, ${ctx.clientName}` : '';
+  const greeting =
+    ctx.botWelcomeMessage?.trim() ||
+    `Привет${name}! 👋 Я Гоша — ассистент доставки Градусы24 🍻\n\nНайду ближайший магазин, помогу выбрать и оформлю доставку прямо здесь, в чате.\n\n📍 С какого адреса привезти? Напишите улицу, дом и город.`;
 
   await ctx.send(greeting);
 }
@@ -334,6 +411,9 @@ export async function handleBotUserMessage(ctx: DialogContext, text: string): Pr
     case DIALOG_STATES.AWAITING_STORE_CONFIRM:
       await handleAwaitingStoreConfirm(ctx, dialog, text);
       break;
+    case DIALOG_STATES.AWAITING_PHONE:
+      await handleAwaitingPhone(ctx, dialog, text);
+      break;
     case DIALOG_STATES.CONFIRMING_ORDER:
       await handleConfirmingOrder(ctx, dialog, text);
       break;
@@ -341,6 +421,66 @@ export async function handleBotUserMessage(ctx: DialogContext, text: string): Pr
     default:
       await handleShopping(ctx, dialog, text);
       break;
+  }
+}
+
+/**
+ * Клиент поделился контактом (кнопка Telegram) — сохраняем телефон.
+ * Вызывается из telegramService для AI-ботов.
+ */
+export async function handleBotContact(ctx: DialogContext, phoneRaw: string): Promise<void> {
+  const dialog = await prisma.botDialog.findUnique({ where: { chatId: ctx.chatId } });
+
+  if (!dialog) {
+    await handleBotStart(ctx);
+    return;
+  }
+
+  if (dialog.handedOff) {
+    return;
+  }
+
+  const phone = normalizePhone(phoneRaw);
+  if (!phone) {
+    await ctx.send(
+      'Хм, этот номер выглядит странно 🤔 Попробуйте ещё раз кнопкой ниже или напишите номер сообщением.',
+      { requestContact: true }
+    );
+    return;
+  }
+
+  await savePhoneAndContinue(ctx, dialog, phone);
+}
+
+/**
+ * Сохраняет телефон и ведёт клиента дальше.
+ * Из состояния awaiting_phone: в корзину или к оформлению заказа.
+ * Из любого другого (контакт прислали раньше времени): просто благодарим и остаёмся в текущем шаге.
+ */
+async function savePhoneAndContinue(
+  ctx: DialogContext,
+  dialog: { id: number; state: string; cart: unknown },
+  phone: string
+): Promise<void> {
+  await prisma.botDialog.update({
+    where: { id: dialog.id },
+    data: { phone },
+  });
+
+  const ack = pick(PHONE_ACKS);
+  await ctx.send(`${ack}\n📞 ${phone}`);
+
+  if (dialog.state !== DIALOG_STATES.AWAITING_PHONE) {
+    // Контакт прислали не по запросу — продолжаем текущий шаг сценария
+    return;
+  }
+
+  const cart = (dialog.cart as unknown as CartItem[]) || [];
+  if (cart.length > 0) {
+    // Телефон запросили при оформлении — переходим к подтверждению заказа
+    await beginOrderConfirmationWithCart(ctx, dialog.id, cart);
+  } else {
+    await startShopping(ctx, dialog.id);
   }
 }
 
@@ -436,18 +576,22 @@ async function confirmAddressAndFindStore(ctx: DialogContext, dialogId: number, 
       : '';
 
   await ctx.send(
-    `📍 Адрес: ${address.label}\n🏪 Ближайший магазин: ${top.name} (${top.address}, ${formatDistance(top.distanceM)})${farWarning}${alternatives}\n\nВсё верно? (да/нет)`
+    `📍 Записал: ${address.label}\n\n🏪 Ближайший магазин — ${top.name} (${top.address}), всего ${formatDistance(top.distanceM)} 🚗${farWarning}${alternatives}\n\nОтсюда и повезём? (да/нет)`
   );
 }
 
 // === Шаг 2: подтверждение магазина ===
 
-async function handleAwaitingStoreConfirm(ctx: DialogContext, dialog: { id: number; candidateBusinesses: unknown; addressLabel: string | null; addressLat: number | null; addressLon: number | null }, text: string): Promise<void> {
+async function handleAwaitingStoreConfirm(ctx: DialogContext, dialog: { id: number; phone?: string | null; candidateBusinesses: unknown; addressLabel: string | null; addressLat: number | null; addressLon: number | null }, text: string): Promise<void> {
   const yn = parseYesNo(text);
   const candidates = (dialog.candidateBusinesses as unknown as NalivBusinessWithDistance[] | null) || [];
 
   if (yn === 'yes') {
-    await startShopping(ctx, dialog.id);
+    if (dialog.phone) {
+      await startShopping(ctx, dialog.id);
+    } else {
+      await askForPhone(ctx, dialog.id);
+    }
     return;
   }
 
@@ -458,9 +602,15 @@ async function handleAwaitingStoreConfirm(ctx: DialogContext, dialog: { id: numb
       const picked = candidates[choice - 1];
       await prisma.botDialog.update({
         where: { id: dialog.id },
-        data: { businessId: picked.id, businessName: picked.name, state: DIALOG_STATES.SHOPPING },
+        data: { businessId: picked.id, businessName: picked.name },
       });
-      await ctx.send(`🏪 Отлично! Доставка из «${picked.name}».\n\nЧто хотите заказать? Напишите название товара — например «пиво Heineken». В любой момент можно написать «корзина» или «оформить».`);
+      await ctx.send(`🏪 Договорились — доставка из «${picked.name}»!`);
+
+      if (dialog.phone) {
+        await startShopping(ctx, dialog.id);
+      } else {
+        await askForPhone(ctx, dialog.id);
+      }
       return;
     }
   }
@@ -493,7 +643,46 @@ async function handleAwaitingStoreConfirm(ctx: DialogContext, dialog: { id: numb
   await ctx.send('🤔 Напишите «да», если магазин подходит, номер магазина из списка — чтобы выбрать другой, или новый адрес доставки.');
 }
 
-// === Шаг 3: корзина через AI ===
+// === Шаг 3: телефон, затем корзина через AI ===
+
+/** Просит телефон: нативная Telegram-кнопка «Поделиться номером» + опция «позже» */
+async function askForPhone(ctx: DialogContext, dialogId: number): Promise<void> {
+  await prisma.botDialog.update({
+    where: { id: dialogId },
+    data: { state: DIALOG_STATES.AWAITING_PHONE },
+  });
+
+  await ctx.send(`${pick(PHONE_ASKS)}\n\nНе хотите сейчас — напишите «позже».`, {
+    requestContact: true,
+  });
+}
+
+/** Обработка ответа в состоянии ожидания телефона */
+async function handleAwaitingPhone(ctx: DialogContext, dialog: { id: number; state: string; cart: unknown }, text: string): Promise<void> {
+  // «позже» — пропускаем: клиент явно отказался, оформляем без телефона
+  if (isSkipPhoneRequest(text)) {
+    await ctx.send(pick(PHONE_SKIP_ACKS));
+    const cart = (dialog.cart as unknown as CartItem[]) || [];
+    if (cart.length > 0) {
+      await beginOrderConfirmationWithCart(ctx, dialog.id, cart, { skipPhoneGate: true });
+    } else {
+      await startShopping(ctx, dialog.id);
+    }
+    return;
+  }
+
+  // Телефон текстом
+  const phone = normalizePhone(text);
+  if (phone) {
+    await savePhoneAndContinue(ctx, dialog, phone);
+    return;
+  }
+
+  await ctx.send(
+    'Так не получится 🙈 Нажмите кнопку «Поделиться номером» ниже, напишите номер текстом (например +7 705 123 45 67) или «позже».',
+    { requestContact: true }
+  );
+}
 
 async function startShopping(ctx: DialogContext, dialogId: number): Promise<void> {
   await prisma.botDialog.update({
@@ -501,8 +690,13 @@ async function startShopping(ctx: DialogContext, dialogId: number): Promise<void
     data: { state: DIALOG_STATES.SHOPPING, candidateAddresses: null, candidateBusinesses: null },
   });
 
+  const hints = pick([
+    'Напишите, что ищете — например «пиво Heineken» — а я всё найду 🔍',
+    'Просто назовите напиток — например «корона» — и покажу, что есть в магазине 🍺',
+  ]);
+
   await ctx.send(
-    '🛒 Отлично! Что хотите заказать?\n\nНапишите название товара — например «пиво Heineken» — и я найду его в магазине. В любой момент можно написать «корзина», чтобы посмотреть заказ, или «оформить», чтобы завершить.'
+    `Отлично, переходим к самому вкусному! 🛒\n\n${hints}\n\nВ любой момент: «корзина» — что набрали, «оформить» — завершить заказ.`
   );
 }
 
@@ -534,6 +728,8 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
     cart,
     searchCache,
     deliveryFee,
+    clientName: ctx.clientName,
+    phone: dialog.phone,
     customPrompt: ctx.botAiSystemPrompt,
   });
 
@@ -722,8 +918,24 @@ async function beginOrderConfirmation(ctx: DialogContext, dialog: any): Promise<
   await beginOrderConfirmationWithCart(ctx, dialog.id, (dialog.cart as unknown as CartItem[]) || []);
 }
 
-async function beginOrderConfirmationWithCart(ctx: DialogContext, dialogId: number, cart: CartItem[]): Promise<void> {
-  const dialog = await prisma.botDialog.findUnique({ where: { id: dialogId } });
+async function beginOrderConfirmationWithCart(
+  ctx: DialogContext,
+  dialogId: number,
+  cart: CartItem[],
+  opts: { skipPhoneGate?: boolean } = {}
+): Promise<void> {
+  let dialog = await prisma.botDialog.findUnique({ where: { id: dialogId } });
+
+  // Телефона нет — сначала спрашиваем его (корзина уже сохранена)
+  if (!opts.skipPhoneGate && dialog && !dialog.phone && cart.length > 0) {
+    await prisma.botDialog.update({
+      where: { id: dialogId },
+      data: { state: DIALOG_STATES.AWAITING_PHONE, cart: cart as unknown as any },
+    });
+    await askForPhone(ctx, dialogId);
+    return;
+  }
+
   const business = await findBusinessFee(dialog?.businessId ?? null);
   const deliveryFee = business?.delivery_service_fee ?? 0;
 
@@ -732,15 +944,17 @@ async function beginOrderConfirmationWithCart(ctx: DialogContext, dialogId: numb
     data: { state: DIALOG_STATES.CONFIRMING_ORDER, cart: cart as unknown as any },
   });
 
+  const phoneLine = dialog?.phone ? `📞 Телефон: ${dialog.phone}` : '📞 Телефон: не указан';
   const summary = [
     '📋 Проверьте заказ:',
     '',
     `🏪 Магазин: ${dialog?.businessName || '-'}`,
     `📍 Адрес доставки: ${dialog?.addressLabel || '-'}`,
+    phoneLine,
     '',
     formatCart(cart, deliveryFee),
     '',
-    'Подтверждаете заказ? (да/нет)',
+    'Всё верно, оформляем? (да/нет)',
   ].join('\n');
 
   await ctx.send(summary);
@@ -811,6 +1025,7 @@ async function handleConfirmingOrder(ctx: DialogContext, dialog: any, text: stri
       address: dialog.addressLabel || '-',
       addressLat: dialog.addressLat,
       addressLon: dialog.addressLon,
+      phone: dialog.phone,
       items: cart as unknown as any,
       totalPrice: subtotal + deliveryFee,
       deliveryFee,
@@ -825,7 +1040,7 @@ async function handleConfirmingOrder(ctx: DialogContext, dialog: any, text: stri
       chatId: ctx.chatId,
       changeType: 'bot_order_created',
       newValue: String(order.id),
-      description: `AI-бот оформил заказ #${order.id} («${order.businessName}», на сумму ${formatMoney(order.totalPrice)} ₸)`,
+      description: `AI-бот оформил заказ #${order.id} («${order.businessName}», на сумму ${formatMoney(order.totalPrice)} ₸${order.phone ? `, тел. ${order.phone}` : ', без телефона'})`,
     },
   });
 
@@ -837,6 +1052,7 @@ async function handleConfirmingOrder(ctx: DialogContext, dialog: any, text: stri
       chatId: ctx.chatId,
       businessName: order.businessName,
       address: order.address,
+      phone: order.phone,
       totalPrice: order.totalPrice,
       itemsCount: cart.reduce((s, c) => s + c.qty, 0),
       telegramChatId: ctx.telegramChatId,
@@ -858,7 +1074,7 @@ async function handleConfirmingOrder(ctx: DialogContext, dialog: any, text: stri
   });
 
   await ctx.send(
-    `✅ Заказ #${order.id} оформлен!\n\n${formatCart(cart, deliveryFee)}\n\nОператор свяжется с вами для подтверждения. Если хотите что-то добавить — напишите название товара.`
+    `🎉 Заказ #${order.id} оформлен!\n\n${formatCart(cart, deliveryFee)}\n\n${order.phone ? `Курьер позвонит на ${order.phone} 📞 ` : 'Оператор свяжется с вами здесь '}— всё привезём 🚗\n\nЗахотите что-то ещё — просто напишите!`
   );
 }
 

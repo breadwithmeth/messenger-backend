@@ -9,6 +9,24 @@ const logger = createLogger();
 // Хранилище активных ботов
 const activeBots = new Map<number, TelegramBot>();
 
+/** Клавиатура с кнопкой «Поделиться номером» (одноразовая) */
+const CONTACT_KEYBOARD: TelegramBot.SendMessageOptions['reply_markup'] = {
+  keyboard: [[{ text: '📱 Поделиться номером', request_contact: true }]],
+  resize_keyboard: true,
+  one_time_keyboard: true,
+};
+
+/**
+ * Создаёт колбэк отправки сообщений AI-сценария от имени бота
+ */
+function makeBotReplySender(botId: number, chatId: string) {
+  return (
+    text: string,
+    opts?: { requestContact?: boolean }
+  ): Promise<TelegramBot.Message> =>
+    sendTelegramMessage(botId, chatId, text, opts?.requestContact ? { replyMarkup: CONTACT_KEYBOARD } : undefined);
+}
+
 /**
  * Запускает Telegram бота
  */
@@ -57,37 +75,19 @@ export async function startTelegramBot(botId: number): Promise<void> {
     logger.info(`[Telegram] Бот @${botInfo.username} успешно запущен`);
 
     // === ОБРАБОТЧИКИ СОБЫТИЙ ===
+    // Все типы сообщений (текст, фото, документы, видео, голосовые, контакты)
+    // приходят через событие 'message' — отдельные типовые обработчики не нужны,
+    // иначе одно сообщение обрабатывается дважды.
 
     // Обработка команды /start
     telegram.onText(/\/start/, async (msg) => {
       await handleStartCommand(telegram, msg, bot.organizationId, botId);
     });
 
-    // Обработка текстовых сообщений
+    // Обработка сообщений (кроме команд — они обрабатываются отдельно)
     telegram.on('message', async (msg) => {
-      // Пропускаем команды (они обрабатываются отдельно)
       if (msg.text?.startsWith('/')) return;
 
-      await handleIncomingMessage(telegram, msg, bot.organizationId, botId);
-    });
-
-    // Обработка фото
-    telegram.on('photo', async (msg) => {
-      await handleIncomingMessage(telegram, msg, bot.organizationId, botId);
-    });
-
-    // Обработка документов
-    telegram.on('document', async (msg) => {
-      await handleIncomingMessage(telegram, msg, bot.organizationId, botId);
-    });
-
-    // Обработка видео
-    telegram.on('video', async (msg) => {
-      await handleIncomingMessage(telegram, msg, bot.organizationId, botId);
-    });
-
-    // Обработка голосовых сообщений
-    telegram.on('voice', async (msg) => {
       await handleIncomingMessage(telegram, msg, bot.organizationId, botId);
     });
 
@@ -199,7 +199,7 @@ async function handleStartCommand(
         chatId: chat.id,
         telegramChatId: chatId,
         clientName: firstName,
-        send: (text) => sendTelegramMessage(botId, chatId, text),
+        send: makeBotReplySender(botId, chatId),
       });
       return;
     }
@@ -274,7 +274,10 @@ async function handleIncomingMessage(
     let mimeType: string | undefined;
     let size: number | undefined;
 
-    if (msg.text) {
+    if (msg.contact) {
+      messageType = 'contact';
+      content = msg.contact.phone_number || '';
+    } else if (msg.text) {
       messageType = 'text';
       content = msg.text;
     } else if (msg.photo && msg.photo.length > 0) {
@@ -406,28 +409,29 @@ async function handleIncomingMessage(
       });
 
       if (bot?.aiEnabled) {
-        const { handleBotUserMessage } = await import('./botDialogService.js');
+        const botDialogService = await import('./botDialogService.js');
+        const botCtx = {
+          botId,
+          botAiModel: bot.aiModel,
+          botAiSystemPrompt: bot.aiSystemPrompt,
+          botWelcomeMessage: bot.welcomeMessage,
+          organizationId,
+          chatId: chat.id,
+          telegramChatId: chatId,
+          clientName: firstName,
+          send: makeBotReplySender(botId, chatId),
+        };
 
-        if (messageType === 'text' && content.trim()) {
-          await handleBotUserMessage(
-            {
-              botId,
-              botAiModel: bot.aiModel,
-              botAiSystemPrompt: bot.aiSystemPrompt,
-              botWelcomeMessage: bot.welcomeMessage,
-              organizationId,
-              chatId: chat.id,
-              telegramChatId: chatId,
-              clientName: firstName,
-              send: (text) => sendTelegramMessage(botId, chatId, text),
-            },
-            content
-          );
+        if (messageType === 'contact' && content.trim()) {
+          // Клиент поделился номером через кнопку Telegram
+          await botDialogService.handleBotContact(botCtx, content);
+        } else if (messageType === 'text' && content.trim()) {
+          await botDialogService.handleBotUserMessage(botCtx, content);
         } else {
-          // AI-бот работает только с текстом
+          // AI-бот работает только с текстом и контактами
           await telegram.sendMessage(
             chatId,
-            '🤖 Я понимаю только текстовые сообщения. Напишите ваш запрос текстом.'
+            '🤖 Я понимаю текстовые сообщения и кнопку «Поделиться номером». Напишите ваш запрос текстом.'
           );
         }
       }
@@ -562,6 +566,7 @@ export async function sendTelegramMessage(
   options?: {
     replyToMessageId?: number;
     userId?: number;
+    replyMarkup?: TelegramBot.SendMessageOptions['reply_markup'];
   }
 ): Promise<TelegramBot.Message> {
   const telegram = getTelegramBot(botId);
@@ -572,9 +577,13 @@ export async function sendTelegramMessage(
 
   try {
     const sendOptions: TelegramBot.SendMessageOptions = {};
-    
+
     if (options?.replyToMessageId) {
       sendOptions.reply_to_message_id = options.replyToMessageId;
+    }
+
+    if (options?.replyMarkup) {
+      sendOptions.reply_markup = options.replyMarkup;
     }
 
     const sent = await telegram.sendMessage(chatId, content, sendOptions);

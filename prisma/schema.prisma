@@ -441,6 +441,9 @@ model BotDialog {
   addressLat     Float?
   addressLon     Float?
 
+  // Телефон клиента (из contact-кнопки Telegram или текстом)
+  phone          String?
+
   // Выбранный магазин
   businessId     Int?
   businessName   String?
@@ -485,6 +488,9 @@ model BotOrder {
   address        String
   addressLat     Float?
   addressLon     Float?
+
+  // Телефон клиента (если поделился)
+  phone          String?
 
   // Позиции: [{itemId, name, price, qty, unit}]
   items          Json

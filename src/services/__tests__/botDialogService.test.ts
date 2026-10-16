@@ -12,6 +12,8 @@ import {
   parseYesNo,
   isHandoffRequest,
   isCartCommand,
+  isSkipPhoneRequest,
+  normalizePhone,
   parseAiAction,
   mergeSearchCache,
   effectivePrice,
@@ -228,6 +230,36 @@ describe('mergeSearchCache', () => {
   });
 });
 
+describe('нормализация телефона', () => {
+  test('форматы из Telegram contact и текста', () => {
+    expect(normalizePhone('+77051234567')).toBe('+77051234567');
+    expect(normalizePhone('77051234567')).toBe('+77051234567');
+    expect(normalizePhone('8 705 123 45 67')).toBe('+77051234567');
+    expect(normalizePhone('87051234567')).toBe('+77051234567');
+    expect(normalizePhone('705-123-45-67')).toBe('+77051234567');
+    expect(normalizePhone('+7 (705) 123-45-67')).toBe('+77051234567');
+  });
+
+  test('не телефон -> null', () => {
+    expect(normalizePhone('привет')).toBeNull();
+    expect(normalizePhone('12345')).toBeNull();
+    expect(normalizePhone('2')).toBeNull();
+    expect(normalizePhone('')).toBeNull();
+    expect(normalizePhone('+770512345678999')).toBeNull();
+  });
+});
+
+describe('пропуск вопроса о телефоне', () => {
+  test('isSkipPhoneRequest', () => {
+    expect(isSkipPhoneRequest('позже')).toBe(true);
+    expect(isSkipPhoneRequest('Потом')).toBe(true);
+    expect(isSkipPhoneRequest('пропустить')).toBe(true);
+    expect(isSkipPhoneRequest('не сейчас')).toBe(true);
+    expect(isSkipPhoneRequest('+77051234567')).toBe(false);
+    expect(isSkipPhoneRequest('хочу пиво')).toBe(false);
+  });
+});
+
 describe('buildShoppingSystemPrompt', () => {
   test('содержит контекст и все действия', () => {
     const prompt = buildShoppingSystemPrompt({
@@ -256,5 +288,17 @@ describe('buildShoppingSystemPrompt', () => {
       customPrompt: 'Называть клиента по имени',
     });
     expect(prompt).toContain('Называть клиента по имени');
+  });
+
+  test('упоминает имя и телефон клиента, когда известны', () => {
+    const prompt = buildShoppingSystemPrompt({
+      cart: [],
+      searchCache: [],
+      deliveryFee: 30,
+      clientName: 'Алексей',
+      phone: '+77051234567',
+    });
+    expect(prompt).toContain('Клиента зовут Алексей');
+    expect(prompt).toContain('Телефон клиента уже известен');
   });
 });
