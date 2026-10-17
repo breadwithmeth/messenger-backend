@@ -136,12 +136,12 @@ export function promoBadge(item: NalivItem): string {
 
 /** Цена одной порции с учётом опции: цена родителя × размер порции + наценка тары */
 export function portionPrice(line: { price: number; portionSize?: number; optionSurcharge?: number }): number {
-  return line.price * (line.portionSize && line.portionSize > 1 ? line.portionSize : 1) + (line.optionSurcharge || 0);
+  return line.price * (line.portionSize && line.portionSize !== 1 ? line.portionSize : 1) + (line.optionSurcharge || 0);
 }
 
-/** Число порций в позиции (для розлива — бутылок) */
+/** Число порций в позиции (для розлива — бутылок, для весовых — упаковок) */
 export function linePortions(line: CartItem): number {
-  return line.portionSize && line.portionSize > 1 ? Math.round(line.qty / line.portionSize) : line.qty;
+  return line.portionSize && line.portionSize !== 1 ? Math.round(line.qty / line.portionSize) : line.qty;
 }
 
 /** Итог по позиции с учётом акции 2+1 (клиент платит за base из base+add порций) */
@@ -318,7 +318,7 @@ export function formatCart(cart: CartItem[], deliveryFee: number): string {
   const lines = cart.map((c) => {
     const portions = linePortions(c);
     const unit = c.unit || 'шт';
-    const isPortioned = !!c.portionSize && c.portionSize > 1;
+    const isPortioned = !!c.portionSize && c.portionSize !== 1;
     const per = isPortioned
       ? `${formatMoney(portionPrice(c))} ₸/порц. (${c.portionSize} ${unit})`
       : `${formatMoney(c.price)} ₸/${unit}`;
@@ -478,7 +478,10 @@ export function buildQtyOffer(item: NalivItem, variant: NalivOptionVariant | nul
   const portion = effectivePrice(item) * pAmount + surcharge;
   const unit = item.unit || 'шт';
 
-  const perPortion = pAmount > 1 ? `${formatMoney(portion)} ₸ (${pAmount} ${unit})` : `${formatMoney(portion)} ₸/${unit}`;
+  const perPortion =
+    pAmount !== 1
+      ? `${formatMoney(portion)} ₸ за порцию (${pAmount} ${unit})`
+      : `${formatMoney(portion)} ₸ за порцию`;
   const variantLine = variant ? `\n↳ ${variant.item_name}` : '';
   const promo = pickPromo(item);
   const promoLine =
@@ -1163,7 +1166,11 @@ export async function handleBotCallback(ctx: DialogContext, data: string): Promi
       return;
     case 'cart': {
       const business = await findBusinessFee(dialog.businessId);
-      await sendCartMessage(ctx, (dialog.cart as unknown as CartItem[]) || [], business?.delivery_service_fee ?? 0);
+      await sendCartMessage(
+        ctx,
+        (dialog.cart as unknown as CartItem[]) || [],
+        dialog.deliveryPrice ?? business?.delivery_service_fee ?? 0
+      );
       return;
     }
     case 'checkout': {
@@ -1210,6 +1217,7 @@ type PickDialog = {
   businessName: string | null;
   lastSearchItems: unknown;
   cart: unknown;
+  deliveryPrice?: number | null;
 };
 
 /** Общий диалог для воронки выбора (товар -> тара -> количество) */
@@ -1301,7 +1309,7 @@ async function sendAddedConfirmation(
   portions: number
 ): Promise<void> {
   const business = await findBusinessFee(dialog.businessId);
-  const deliveryFee = business?.delivery_service_fee ?? 0;
+  const deliveryFee = dialog.deliveryPrice ?? business?.delivery_service_fee ?? 0;
   const line = cart.find((c) => c.itemId === item.item_id && (c.option?.relationId ?? null) === (relationId ?? null))!;
   const lineLabel = line.option ? `${item.name} — ${line.option.label}` : item.name;
 
@@ -1424,6 +1432,28 @@ async function handleAwaitingAddress(ctx: DialogContext, dialog: { id: number; c
 }
 
 /** Адрес подтверждён — ищем ближайший магазин */
+/**
+ * Проверяет зону и сохраняет реальную цену доставки в диалог.
+ * @returns цена (₸) или null — вне зоны / сервис недоступен
+ */
+async function checkAndSaveDeliveryPrice(dialogId: number, lat: number, lon: number, businessId: number): Promise<number | null> {
+  try {
+    const check = await checkDelivery(lat, lon, businessId);
+    if (!check.inZone) {
+      await prisma.botDialog.update({ where: { id: dialogId }, data: { deliveryPrice: null } });
+      return null;
+    }
+    await prisma.botDialog.update({
+      where: { id: dialogId },
+      data: { deliveryPrice: check.deliveryPrice ?? null },
+    });
+    return check.deliveryPrice ?? null;
+  } catch (error) {
+    logger.warn('[BotDialog] Не удалось проверить доставку:', error);
+    return null;
+  }
+}
+
 async function confirmAddressAndFindStore(ctx: DialogContext, dialogId: number, address: NalivAddress): Promise<void> {
   let nearest: NalivBusinessWithDistance[];
   try {
@@ -1457,6 +1487,14 @@ async function confirmAddressAndFindStore(ctx: DialogContext, dialogId: number, 
     },
   });
 
+  // Сразу считаем реальную стоимость доставки по зоне
+  const deliveryPrice = await checkAndSaveDeliveryPrice(dialogId, address.lat, address.lon, top.id);
+  const deliveryLine = deliveryPrice !== null ? `\n🚗 Доставка: ~${formatMoney(deliveryPrice)} ₸` : '';
+  const zoneWarning =
+    deliveryPrice === null
+      ? '\n⚠️ Не удалось подтвердить зону доставки для этого магазина — если при оформлении не получится, выберем другой.'
+      : '';
+
   const farWarning = top.distanceM > FAR_DISTANCE_M ? '\n\n⚠️ Магазин довольно далеко — доставка может занять больше времени.' : '';
   const alternatives =
     nearest.length > 1
@@ -1467,7 +1505,7 @@ async function confirmAddressAndFindStore(ctx: DialogContext, dialogId: number, 
       : '';
 
   await ctx.send(
-    `📍 Записал: ${address.label}\n\n🏪 Ближайший магазин — ${top.name} (${top.address}), всего ${formatDistance(top.distanceM)} 🚗${farWarning}${alternatives}\n\nОтсюда и повезём? (да/нет)`
+    `📍 Записал: ${address.label}\n\n🏪 Ближайший магазин — ${top.name} (${top.address}), всего ${formatDistance(top.distanceM)} 🚗${deliveryLine}${farWarning}${zoneWarning}${alternatives}\n\nОтсюда и повезём? (да/нет)`
   );
 }
 
@@ -1493,9 +1531,17 @@ async function handleAwaitingStoreConfirm(ctx: DialogContext, dialog: { id: numb
       const picked = candidates[choice - 1];
       await prisma.botDialog.update({
         where: { id: dialog.id },
-        data: { businessId: picked.id, businessName: picked.name },
+        data: { businessId: picked.id, businessName: picked.name, deliveryPrice: null },
       });
-      await ctx.send(`🏪 Договорились — доставка из «${picked.name}»!`);
+
+      // Пересчитываем доставку для выбранного магазина
+      let deliveryNote = '';
+      if (dialog.addressLat !== null && dialog.addressLon !== null) {
+        const price = await checkAndSaveDeliveryPrice(dialog.id, dialog.addressLat, dialog.addressLon, picked.id);
+        deliveryNote = price !== null ? `\n🚗 Доставка: ~${formatMoney(price)} ₸` : '\n⚠️ Зону доставки проверим при оформлении.';
+      }
+
+      await ctx.send(`🏪 Договорились — доставка из «${picked.name}»!${deliveryNote}`);
 
       if (dialog.phone) {
         await startShopping(ctx, dialog.id);
@@ -1595,7 +1641,11 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
   // Быстрые команды без AI
   if (isCartCommand(text)) {
     const business = await findBusinessFee(dialog.businessId);
-    await sendCartMessage(ctx, (dialog.cart as unknown as CartItem[]) || [], business?.delivery_service_fee ?? 0);
+    await sendCartMessage(
+      ctx,
+      (dialog.cart as unknown as CartItem[]) || [],
+      dialog.deliveryPrice ?? business?.delivery_service_fee ?? 0
+    );
     return;
   }
 
@@ -1607,7 +1657,7 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
   const searchCache = (dialog.lastSearchItems as unknown as NalivItem[] | null) || [];
   const cart = (dialog.cart as unknown as CartItem[]) || [];
   const business = await findBusinessFee(dialog.businessId);
-  const deliveryFee = business?.delivery_service_fee ?? 0;
+  const deliveryFee = dialog.deliveryPrice ?? business?.delivery_service_fee ?? 0;
 
   // История диалога для контекста
   const history = await loadChatHistory(ctx.chatId);

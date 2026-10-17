@@ -232,6 +232,33 @@ describe('акции и опции (розлив)', () => {
     expect(parsed.promo).toBe('2+1');
   });
 
+  test('весовой товар (шаг 0.15 кг): цена за порцию, не «/кг»', () => {
+    // Чечил: 6 440 ₸/кг, упаковка 0.15 кг → порция 966 ₸
+    const chechil = item({ item_id: 400, name: 'Чечил Адыгейский кг. 120-140гр.', price: 6440, unit: 'кг', quantity_step: 0.15, amount: 10.5 });
+
+    const cart = addToCart([], chechil, 1);
+    expect(cart[0].qty).toBe(0.15);
+    expect(cart[0].portionSize).toBe(0.15);
+    expect(linePortions(cart[0])).toBe(1);
+    expect(portionPrice(cart[0])).toBe(966);
+    expect(lineTotal(cart[0])).toBe(966);
+
+    // в предложении количества — «за порцию», без «/кг»
+    const qty = buildQtyOffer(chechil, null);
+    expect(qty.text).toContain('966 ₸ за порцию (0.15 кг)');
+    expect(qty.text).not.toContain('₸/кг');
+
+    // и в корзине
+    const cartText = formatCart(cart, 30);
+    expect(cartText).toContain('966 ₸/порц. (0.15 кг) × 1 = 966 ₸');
+    expect(cartText).toContain('Итого: 996 ₸');
+
+    // 2 порции = 0.3 кг = 1 932 ₸
+    const cart2 = addToCart(cart, chechil, 1);
+    expect(cart2[0].qty).toBe(0.3);
+    expect(lineTotal(cart2[0])).toBe(1932);
+  });
+
   test('payload заказа содержит option_item_relation_id', () => {
     const cart = addToCart([], bavaria, 1, { variant: bottle2 });
     const payload = buildOrderCreatePayload(
