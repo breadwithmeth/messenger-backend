@@ -754,14 +754,30 @@ describe('buildShoppingSystemPrompt', () => {
     expect(prompt).toContain('СТРОГО одним JSON-объектом');
   });
 
-  test('добавляет кастомный промт владельца', () => {
+  test('кастомный промт маркетинга замещает встроенный стиль', () => {
     const prompt = buildShoppingSystemPrompt({
       cart: [],
       searchCache: [],
       deliveryFee: 30,
-      customPrompt: 'Называть клиента по имени',
+      customPrompt: 'Ты — Барон Пенный, говоришь вычурно и с достоинством.',
     });
-    expect(prompt).toContain('Называть клиента по имени');
+    // инструкция маркетинга загружена как стиль
+    expect(prompt).toContain('СТИЛЬ ОБЩЕНИЯ (инструкция маркетинга');
+    expect(prompt).toContain('Барон Пенный');
+    // встроенный характер заместился
+    expect(prompt).not.toContain('приятель, который разбирается в пенном');
+    // протокол и ограничения на месте независимо от стиля
+    expect(prompt).toContain('СТРОГО одним JSON-объектом');
+    expect(prompt).toContain('ОГРАНИЧЕНИЯ');
+    expect(prompt).toContain('Ничего не выдумывай');
+  });
+
+  test('без кастомного промта — встроенный характер по тон-оф-войс', () => {
+    const prompt = buildShoppingSystemPrompt({ cart: [], searchCache: [], deliveryFee: 30 });
+    expect(prompt).toContain('приятель, который разбирается в пенном и снеках');
+    expect(prompt).toContain('По умолчанию — на «ты»');
+    expect(prompt).toContain('Эмодзи — не больше одного на сообщение');
+    expect(prompt).not.toContain('ДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ ВЛАДЕЛЬЦА БОТА');
   });
 
   test('упоминает имя и телефон клиента, когда известны', () => {
