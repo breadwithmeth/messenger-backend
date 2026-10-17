@@ -14,6 +14,9 @@ import {
   requiredSingleOption,
   promoBadge,
   pickPromo,
+  buildTaraOffer,
+  buildQtyOffer,
+  buildMultiSearchOffer,
   cartSubtotal,
   formatCart,
   formatMoney,
@@ -243,53 +246,57 @@ describe('акции и опции (розлив)', () => {
     });
   });
 
-  test('кнопки тары содержат название товара и цену порции', () => {
+  test('кнопка товара ведёт в воронку (pick:), тарные показывают «от X ₸»', () => {
     const offer = buildSearchOffer('бавария', [bavaria]);
     const flat = offer.inlineKeyboard.flat();
-    const btn2 = flat.find((b) => b.callbackData === 'add:31150:3031');
-    expect(btn2?.text).toContain('Бавария');
+    const btn = flat.find((b) => b.callbackData === 'pick:31150');
+    expect(btn?.text).toContain('Бавария');
+    expect(btn?.text).toContain('от 1 920 ₸'); // минимальная тара 1л: 1810 + 110
+    expect(btn?.text).toContain('🔥2+1');
+    // у обычных товаров — точная цена
+    const offer2 = buildSearchOffer('корона', [item({ item_id: 111, name: 'Corona Extra 0.45', price: 990 })]);
+    expect(offer2.inlineKeyboard.flat()[0].text).toContain('990 ₸');
+    expect(offer2.inlineKeyboard.flat()[0].callbackData).toBe('pick:111');
+  });
+
+  test('кнопка на каждый товар из выдачи (лимит 8)', () => {
+    const items = Array.from({ length: 12 }, (_, k) => item({ item_id: 100 + k, name: `Пиво ${k}` }));
+    const offer = buildSearchOffer('пиво', items);
+    const pickButtons = offer.inlineKeyboard.flat().filter((b) => b.callbackData.startsWith('pick:'));
+    expect(pickButtons).toHaveLength(8);
+  });
+
+  test('buildTaraOffer: кнопки тары с товаром, ценой порции и акцией', () => {
+    const tara = buildTaraOffer(bavaria)!;
+    expect(tara.text).toContain('выберите тару (Литраж)');
+    const flat = tara.inlineKeyboard.flat();
+    const btn2 = flat.find((b) => b.callbackData === 'tara:31150:3031');
     expect(btn2?.text).toContain('Пластиковая бутылка 2л');
     expect(btn2?.text).toContain('3 720 ₸');
     expect(btn2?.text).toContain('🔥2+1');
-    // у обычных товаров кнопка без тары остаётся как была
-    const offer2 = buildSearchOffer('корона', [item({ item_id: 111, name: 'Corona Extra 0.45', price: 990 })]);
-    expect(offer2.inlineKeyboard.flat()[0].text).toContain('Corona Extra 0.45');
+    expect(buildTaraOffer(item({ item_id: 9 }))).toBeNull();
   });
 
-  test('список согласован с кнопками: товары без кнопок не показываются', () => {
-    // 8 розливных товаров × 3 тары = 24 кнопки, бюджет 16 → в списке ~5 товаров
-    const items = Array.from({ length: 8 }, (_, k) =>
-      item({
-        item_id: 500 + k,
-        name: `Пиво розлив Номер ${k} 1л`,
-        price: 1000,
-        unit: 'л.',
-        options: [
-          {
-            option_id: k,
-            name: 'Литраж',
-            required: 1,
-            selection: 'SINGLE',
-            variants: [
-              { item_name: 'Бутылка 1л', relation_id: 900 + k * 3, price_type: 'ADD', price: 50, parent_item_amount: 1 },
-              { item_name: 'Бутылка 2л', relation_id: 901 + k * 3, price_type: 'ADD', price: 60, parent_item_amount: 2 },
-              { item_name: 'Бутылка 3л', relation_id: 902 + k * 3, price_type: 'ADD', price: 70, parent_item_amount: 3 },
-            ],
-          },
-        ],
-      })
-    );
+  test('buildQtyOffer: количество 1–6 кнопками с callback qty:<id>:<rel>:<n>', () => {
+    const qty = buildQtyOffer(bavaria, bottle2);
+    expect(qty.text).toContain('Пластиковая бутылка 2л');
+    expect(qty.text).toContain('3 720 ₸');
+    expect(qty.text).toContain('🔥 Акция 2+1');
+    const qtyButtons = qty.inlineKeyboard.flat().filter((b) => b.callbackData.startsWith('qty:'));
+    expect(qtyButtons.map((b) => b.callbackData)).toEqual([
+      'qty:31150:3031:1',
+      'qty:31150:3031:2',
+      'qty:31150:3031:3',
+      'qty:31150:3031:4',
+      'qty:31150:3031:5',
+      'qty:31150:3031:6',
+    ]);
+    // «назад к таре»
+    expect(qty.inlineKeyboard.flat().some((b) => b.callbackData === 'tara:31150:3031')).toBe(true);
 
-    const offer = buildSearchOffer('розлив', items);
-    const addButtons = offer.inlineKeyboard.flat().filter((b) => b.callbackData.startsWith('add:'));
-    expect(addButtons.length).toBeLessThanOrEqual(16);
-
-    // каждая строка списка соответствует товару с кнопками
-    for (const n of ['Номер 0', 'Номер 1']) {
-      expect(offer.text).toContain(`Номер ${n === 'Номер 0' ? '0' : '1'}`);
-    }
-    // товар, чьи кнопки не влезли, в списке отсутствует
-    expect(offer.text).not.toContain('Номер 7');
+    // без тары: rel = 0
+    const qtyPlain = buildQtyOffer(item({ item_id: 77, price: 1000 }), null);
+    expect(qtyPlain.inlineKeyboard.flat().some((b) => b.callbackData === 'qty:77:0:3')).toBe(true);
   });
 
   test('resolveVariant: дефолт — первая обязательная тара (розлив не добавится без тары)', () => {
@@ -401,6 +408,39 @@ describe('parseAiAction (JSON-протокол модели)', () => {
       .toMatchObject({ action: 'search_items', limit: 3 });
     expect(parseAiAction('{"action": "search_items", "query": "вино", "limit": "2"}')?.limit).toBe(2);
     expect(parseAiAction('{"action": "reply"}')?.limit).toBeUndefined();
+  });
+
+  test('мультипоиск: query как массив строк', () => {
+    expect(parseAiAction('{"action": "search_items", "query": ["чечил", "вино", "шампанское"]}'))
+      .toMatchObject({ action: 'search_items', queries: ['чечил', 'вино', 'шампанское'], query: undefined });
+    // ограничение 4 запросов, пустые отбрасываются
+    expect(
+      parseAiAction('{"action": "search_items", "query": ["a", "", "b", "c", "d", "e"]}')?.queries
+    ).toEqual(['a', 'b', 'c', 'd']);
+    // строковый query не ломается
+    expect(parseAiAction('{"action": "search_items", "query": "пиво"}')?.queries).toBeUndefined();
+  });
+
+  test('buildMultiSearchOffer: группы с кнопками и пустые группы', () => {
+    const offer = buildMultiSearchOffer([
+      { query: 'чечил', items: [item({ item_id: 1, name: 'Чечил копчёный 120г', price: 890 })] },
+      { query: 'шампанское', items: [item({ item_id: 2, name: 'Советское игристое 0.75', price: 2200 }), item({ item_id: 3, name: 'Ballet 0.75', price: 3100 })] },
+      { query: 'устрицы', items: [] },
+    ]);
+
+    expect(offer.text).toContain('«чечил»');
+    expect(offer.text).toContain('Чечил копчёный 120г — 890 ₸/шт');
+    expect(offer.text).toContain('«шампанское»');
+    expect(offer.text).toContain('😔 По «устрицы» ничего не нашлось');
+
+    const flat = offer.inlineKeyboard.flat();
+    expect(flat.filter((b) => b.callbackData === 'pick:1')).toHaveLength(1);
+    expect(flat.filter((b) => b.callbackData === 'pick:2')).toHaveLength(1);
+    expect(flat.filter((b) => b.callbackData === 'pick:3')).toHaveLength(1);
+    expect(offer.inlineKeyboard[offer.inlineKeyboard.length - 1]).toEqual([
+      { text: '🛒 Корзина', callbackData: 'cart' },
+      { text: '✅ Оформить', callbackData: 'checkout' },
+    ]);
   });
 
   test('приводит action к нижнему регистру', () => {
@@ -619,10 +659,10 @@ describe('инлайн-кнопки выбора товара', () => {
       { text: '✅ Оформить', callbackData: 'checkout' },
     ]);
 
-    // кнопки товаров: 2 в ряд, callback add:<item_id>
+    // кнопки товаров: 2 в ряд, callback pick:<item_id>
     const flat = offer.inlineKeyboard.flat();
-    expect(flat).toContainEqual(expect.objectContaining({ callbackData: 'add:111' }));
-    expect(flat).toContainEqual(expect.objectContaining({ callbackData: 'add:222' }));
+    expect(flat).toContainEqual(expect.objectContaining({ callbackData: 'pick:111' }));
+    expect(flat).toContainEqual(expect.objectContaining({ callbackData: 'pick:222' }));
     // callback_data короче лимита Telegram в 64 байта
     for (const btn of flat) {
       expect(btn.callbackData.length).toBeLessThanOrEqual(64);
@@ -632,20 +672,20 @@ describe('инлайн-кнопки выбора товара', () => {
   test('buildSearchOffer ограничивает 8 кнопками', () => {
     const items = Array.from({ length: 12 }, (_, i) => item({ item_id: i, name: `Пиво ${i}` }));
     const offer = buildSearchOffer('пиво', items);
-    expect(offer.inlineKeyboard.flat().filter((b) => b.callbackData.startsWith('add:'))).toHaveLength(8);
+    expect(offer.inlineKeyboard.flat().filter((b) => b.callbackData.startsWith('pick:'))).toHaveLength(8);
   });
 
   test('buildSearchOffer с limit: 2–3 варианта для общих запросов', () => {
     const items = Array.from({ length: 12 }, (_, i) => item({ item_id: i, name: `Вино ${i}` }));
     const offer3 = buildSearchOffer('красное вино', items, 3);
-    expect(offer3.inlineKeyboard.flat().filter((b) => b.callbackData.startsWith('add:'))).toHaveLength(3);
+    expect(offer3.inlineKeyboard.flat().filter((b) => b.callbackData.startsWith('pick:'))).toHaveLength(3);
 
     const offer2 = buildSearchOffer('белое сухое', items, 2);
-    expect(offer2.inlineKeyboard.flat().filter((b) => b.callbackData.startsWith('add:'))).toHaveLength(2);
+    expect(offer2.inlineKeyboard.flat().filter((b) => b.callbackData.startsWith('pick:'))).toHaveLength(2);
 
     // limit больше 8 обрезается до 8, меньше 1 — до 1
-    expect(buildSearchOffer('пиво', items, 50).inlineKeyboard.flat().filter((b) => b.callbackData.startsWith('add:'))).toHaveLength(8);
-    expect(buildSearchOffer('пиво', items, 0).inlineKeyboard.flat().filter((b) => b.callbackData.startsWith('add:'))).toHaveLength(1);
+    expect(buildSearchOffer('пиво', items, 50).inlineKeyboard.flat().filter((b) => b.callbackData.startsWith('pick:'))).toHaveLength(8);
+    expect(buildSearchOffer('пиво', items, 0).inlineKeyboard.flat().filter((b) => b.callbackData.startsWith('pick:'))).toHaveLength(1);
   });
 
   test('промт требует максимум 2–3 уточняющих вопроса и limit 3', () => {
