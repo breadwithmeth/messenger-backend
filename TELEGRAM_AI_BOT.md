@@ -151,7 +151,7 @@ curl -X POST https://bm.drawbridge.kz/api/telegram/organizations/1/bots \
 3. Подтверждение («✅ Да, оформляем») → `orders/create`: `user_id` из `BotUser`, позиции в штуках (`amount = qty`), адрес (street/house/lat/lon — сохраняется в адресах пользователя). Цены берёт сервер — акции применяются автоматически.
 4. **Успех (201)**: `BotOrder.status = 'sent'` + `nalivOrderId/Uuid`, клиенту — реальная сумма к оплате (`total_sum` с доставкой) и статусный трекинг: `66 ⏳ → 0 🆕 → 1 ✅ → 2 📦 → 3 🚗 → 4 доставлен`.
 5. **Fallback**: «Налив» недоступен / клиент не привязан → заказ сохраняется локально (`status = 'new'`), операторам уходит `bot_order_created` с пометкой «НЕ отправлен в „Налив"». Заказы не теряются.
-6. Оплата: заказ создаётся без `payment_type_id` → статус 66 (AWAITING_PAYMENT); оплата при получении или оператором (ботовские платёжные эндпоинты — по мере появления документации).
+6. **Оплата Kaspi QR**: под сообщением об успехе — кнопка «💳 Оплатить онлайн (Kaspi)» (`POST /api/telegram-bot/orders/:id/kaspi-qr/pay`, method `link`) → клиенту приходит платёжная ссылка + кнопка «🔄 Проверить оплату». Клиент может попросить ссылку снова — AI-действие `payment_link` («оплатить», «дай ссылку»). Трекер опрашивает статус платежей (pending → completed/error), при оплате бот пишет «✅ Оплата прошла», заказ получает статус `paid`; при ошибке предлагает свежую ссылку.
 
 | Метод клиента (`telegramBotClient.ts`) | Эндпоинт |
 |---|---|
@@ -163,8 +163,10 @@ curl -X POST https://bm.drawbridge.kz/api/telegram/organizations/1/bots \
 | `getOrderDetails` | `GET /orders/:id?telegram_id=` |
 | `checkDelivery` | `POST /api/delivery/check` |
 | `createNalivOrder` | `POST /api/telegram-bot/orders/create` |
+| `createKaspiPayment` | `POST /orders/:id/kaspi-qr/pay` |
+| `getKaspiPaymentStatus` | `GET /orders/:id/kaspi-qr/status` |
 
-Авторизация — заголовок `X-Bot-Key: <TELEGRAM_BOT_API_KEY>` (env). Модели: `BotUser` (telegramUserId ↔ nalivUserId, token, чат для уведомлений), `BotOrderTracking` (последний известный статус), `BotOrder.nalivOrderId/Uuid` (связь с заказом в «Налив»), `BotDialog.addressStreet/addressHouse/deliveryPrice`.
+Авторизация — заголовок `X-Bot-Key: <TELEGRAM_BOT_API_KEY>` (env). Модели: `BotUser` (telegramUserId ↔ nalivUserId, token, чат для уведомлений), `BotOrderTracking` (последний известный статус + Kaspi-платёж: `kaspiQrId`, `paymentStatus`), `BotOrder.nalivOrderId/Uuid` (связь с заказом в «Налив»), `BotDialog.addressStreet/addressHouse/deliveryPrice`.
 
 ## Модель данных
 

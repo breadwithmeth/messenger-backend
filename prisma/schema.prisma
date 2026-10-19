@@ -555,6 +555,9 @@ model BotOrderTracking {
   lastStatus     String?
   lastStatusAt   DateTime?
   lastNotifiedAt DateTime?
+  // Kaspi QR-оплата
+  kaspiQrId      Int?     // qrPaymentId из «Налив»
+  paymentStatus  String?  // pending | completed | error
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

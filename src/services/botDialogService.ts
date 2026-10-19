@@ -23,6 +23,8 @@ import {
   linkTelegramAccount,
   checkDelivery,
   createNalivOrder,
+  createKaspiPayment,
+  getKaspiPaymentStatus,
   NalivCreateOrderPayload,
   NalivCreatedOrder,
 } from '../integrations/naliv/telegramBotClient.js';
@@ -858,6 +860,7 @@ ${phoneLine}
 {"action": "clear_cart"}
 {"action": "show_cart"}
 {"action": "checkout"} — клиент хочет оформить заказ
+{"action": "payment_link"} — клиент просит ссылку на оплату / хочет оплатить
 {"action": "handoff"} — клиент просит живого оператора
 {"action": "reply", "reply_text": "<текст для клиента>"}
 
@@ -1219,6 +1222,12 @@ export async function handleBotCallback(ctx: DialogContext, data: string): Promi
     case 'cancel_order':
       await handleConfirmingOrder(ctx, dialog, 'нет');
       return;
+    case 'pay':
+      await handlePayCallback(ctx, dialog, Number(arg));
+      return;
+    case 'paycheck':
+      await handlePayCheckCallback(ctx, dialog, Number(arg));
+      return;
     case 'age_yes':
       if (!dialog.ageConfirmed) {
         await saveAgeAndContinue(ctx, dialog);
@@ -1353,6 +1362,109 @@ async function sendAddedConfirmation(
   keyboard.push(...cartActionsKeyboard());
 
   await ctx.send(recs ? `${text}\n\n${recs.text}` : text, { inlineKeyboard: keyboard });
+}
+
+// ============================================================
+// Kaspi QR-оплата
+// ============================================================
+
+/** Telegram ID клиента для Kaspi-платежа (из контекста или чата) */
+async function resolveTelegramUserId(ctx: DialogContext): Promise<string | null> {
+  if (ctx.telegramUserId) return ctx.telegramUserId;
+  const chat = await prisma.chat.findUnique({ where: { id: ctx.chatId }, select: { telegramUserId: true } });
+  return chat?.telegramUserId ?? null;
+}
+
+/** Создаёт Kaspi-ссылку, отправляет клиенту и включает трекинг оплаты */
+async function sendPaymentLink(ctx: DialogContext, nalivOrderId: number): Promise<void> {
+  const telegramUserId = await resolveTelegramUserId(ctx);
+  if (!telegramUserId) {
+    await ctx.send('😕 Не нашёл ваш аккаунт для оплаты. Напишите «оператор» — поможет живой человек.');
+    return;
+  }
+
+  try {
+    const payment = await createKaspiPayment(nalivOrderId, { telegramId: telegramUserId, method: 'link' });
+
+    if (payment.payment_status === 'already_paid') {
+      await prisma.botOrder.updateMany({ where: { nalivOrderId, status: 'sent' }, data: { status: 'paid' } });
+      await ctx.send(`✅ Заказ №${nalivOrderId} уже оплачен — спасибо!`);
+      return;
+    }
+
+    // Включаем трекинг статуса оплаты
+    const botUser = await prisma.botUser.findUnique({ where: { telegramUserId } });
+    if (botUser) {
+      await prisma.botOrderTracking.upsert({
+        where: { botUserId_orderId: { botUserId: botUser.id, orderId: nalivOrderId } },
+        create: {
+          botUserId: botUser.id,
+          orderId: nalivOrderId,
+          kaspiQrId: payment.qrPaymentId ?? null,
+          paymentStatus: payment.payment_status,
+        },
+        update: { kaspiQrId: payment.qrPaymentId ?? null, paymentStatus: payment.payment_status },
+      });
+    }
+
+    const expire = payment.expireDate ? new Date(payment.expireDate) : null;
+    const expireLine =
+      expire && !Number.isNaN(expire.getTime())
+        ? `\n⏳ Действует до ${expire.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`
+        : '';
+
+    await ctx.send(
+      `💳 Счёт на ${formatMoney(payment.amount)} ₸ по заказу №${nalivOrderId} готов.\n\n` +
+        `Оплатить по Kaspi:\n${payment.paymentLink}${expireLine}\n\n` +
+        `Как только оплатите — скажу сразу 😉`,
+      { inlineKeyboard: [[{ text: '🔄 Проверить оплату', callbackData: `paycheck:${nalivOrderId}` }]] }
+    );
+
+    logger.info(`[BotDialog] Kaspi-ссылка отправлена: заказ ${nalivOrderId}, чат #${ctx.chatId}`);
+  } catch (error) {
+    logger.error(`[BotDialog] Ошибка создания Kaspi-платежа (заказ ${nalivOrderId}):`, error);
+    await ctx.send('😔 Не получилось создать счёт Kaspi. Попробуйте ещё раз или напишите «оператор».');
+  }
+}
+
+/** Кнопка «Оплатить онлайн» после оформления заказа */
+async function handlePayCallback(ctx: DialogContext, dialog: { id: number }, nalivOrderId: number): Promise<void> {
+  if (!Number.isFinite(nalivOrderId) || nalivOrderId <= 0) return;
+  await sendPaymentLink(ctx, nalivOrderId);
+}
+
+/** Кнопка «Проверить оплату» */
+async function handlePayCheckCallback(ctx: DialogContext, dialog: { id: number }, nalivOrderId: number): Promise<void> {
+  const telegramUserId = await resolveTelegramUserId(ctx);
+  if (!telegramUserId || !Number.isFinite(nalivOrderId)) return;
+
+  try {
+    const status = await getKaspiPaymentStatus(nalivOrderId, telegramUserId);
+    if (!status) {
+      await ctx.send('🤔 Платёж не нашёлся. Попробуйте ещё раз или напишите «оператор».');
+      return;
+    }
+
+    if (status.payment_status === 'completed' || status.payment_status === 'already_paid') {
+      await prisma.botOrder.updateMany({ where: { nalivOrderId, status: 'sent' }, data: { status: 'paid' } });
+      await ctx.send(`✅ Оплата по заказу №${nalivOrderId} прошла — спасибо! Курьер уже в деле 🚗`);
+      return;
+    }
+
+    if (status.payment_status === 'error') {
+      await ctx.send('😔 Оплата не прошла. Попробуйте ещё раз — вот свежая ссылка:', {
+        inlineKeyboard: [[{ text: '💳 Оплатить онлайн (Kaspi)', callbackData: `pay:${nalivOrderId}` }]],
+      });
+      return;
+    }
+
+    await ctx.send('⏳ Kaspi пока не подтвердил оплату. Как только пройдёт — напишу сразу.', {
+      inlineKeyboard: [[{ text: '🔄 Проверить оплату', callbackData: `paycheck:${nalivOrderId}` }]],
+    });
+  } catch (error) {
+    logger.error(`[BotDialog] Ошибка проверки Kaspi-платежа (${nalivOrderId}):`, error);
+    await ctx.send('😔 Не удалось проверить платёж. Попробуйте ещё раз через минуту.');
+  }
 }
 
 /**
@@ -1978,6 +2090,20 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
           return;
         }
 
+        case 'payment_link': {
+          // Последний оформленный заказ с незакрытой оплатой
+          const lastOrder = await prisma.botOrder.findFirst({
+            where: { chatId: ctx.chatId, nalivOrderId: { not: null }, status: 'sent' },
+            orderBy: { createdAt: 'desc' },
+          });
+          if (!lastOrder?.nalivOrderId) {
+            await ctx.send('💳 Неоплаченных заказов нет — всё оплачено или заказ ещё не оформлен.');
+            return;
+          }
+          await sendPaymentLink(ctx, lastOrder.nalivOrderId);
+          return;
+        }
+
         case 'handoff': {
           await handoffToOperator(ctx, dialog.id);
           return;
@@ -2466,9 +2592,12 @@ async function handleConfirmingOrder(ctx: DialogContext, dialog: any, text: stri
   if (nalivOrder) {
     await ctx.send(
       `🎉 Заказ №${nalivOrder.order_id} передан в «${order.businessName}»!\n\n` +
-      `💳 К оплате: ${formatMoney(nalivOrder.total_sum)} ₸ (вкл. доставку ${formatMoney(nalivOrder.delivery_price)} ₸)\n` +
-      `💵 Оплата при получении — курьер примет наличные или карту.\n\n` +
-      `Следить за статусом буду прямо здесь: 🆕 принят → 📦 готов → 🚗 в пути\n\nЗахотите что-то ещё — просто напишите!`
+      `💳 К оплате: ${formatMoney(nalivOrder.total_sum)} ₸ (вкл. доставку ${formatMoney(nalivOrder.delivery_price)} ₸)\n\n` +
+      `Оплатите онлайн по Kaspi или наличными курьеру — как удобнее.\n\n` +
+      `Статус буду присылать прямо сюда: 🆕 принят → 📦 готов → 🚗 в пути\n\nЗахотите что-то ещё — просто напишите!`,
+      {
+        inlineKeyboard: [[{ text: '💳 Оплатить онлайн (Kaspi)', callbackData: `pay:${nalivOrder.order_id}` }]],
+      }
     );
   } else {
     await ctx.send(

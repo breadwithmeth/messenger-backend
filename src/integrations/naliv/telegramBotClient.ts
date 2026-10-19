@@ -288,6 +288,73 @@ export async function createNalivOrder(payload: NalivCreateOrderPayload): Promis
   };
 }
 
+// === Kaspi QR-оплата ===
+
+/** Kaspi-платёж (создание/статус) */
+export type KaspiPaymentInfo = {
+  order_id: number;
+  payment_status: string; // pending | completed | error | already_paid
+  amount: number;
+  paymentLink?: string;
+  qrPaymentId?: number;
+  expireDate?: string;
+  kaspi_status?: string;
+};
+
+/** Толерантный разбор ответа Kaspi-платежа */
+export function parseKaspiPayment(payload: any): KaspiPaymentInfo | null {
+  const d = payload?.data;
+  if (!d || d.order_id === undefined) return null;
+  return {
+    order_id: Number(d.order_id),
+    payment_status: String(d.payment_status ?? 'pending'),
+    amount: Number(d.amount ?? 0),
+    paymentLink: d.paymentLink || undefined,
+    qrPaymentId: d.qrPaymentId !== undefined ? Number(d.qrPaymentId) : undefined,
+    expireDate: d.expireDate || undefined,
+    kaspi_status: d.kaspi_status || undefined,
+  };
+}
+
+/**
+ * Создаёт Kaspi QR-платёж или ссылку на оплату.
+ * method: 'link' (по умолчанию, ссылка в чат) | 'qr' (QR-код).
+ * Оплата возможна из статусов 66/67/68/6; уже оплаченный -> payment_status: 'already_paid'.
+ */
+export async function createKaspiPayment(
+  orderId: number,
+  opts: { telegramId?: string; userId?: number; method?: 'link' | 'qr' } = {}
+): Promise<KaspiPaymentInfo> {
+  const { data } = await botRequest('post', `/api/telegram-bot/orders/${orderId}/kaspi-qr/pay`, {
+    data: {
+      telegram_id: opts.telegramId,
+      user_id: opts.userId,
+      method: opts.method || 'link',
+    },
+  });
+  const payment = parseKaspiPayment(data);
+  if (!payment) {
+    throw new NalivBotApiError('Неожиданный ответ kaspi-qr/pay', undefined, `/api/telegram-bot/orders/${orderId}/kaspi-qr/pay`);
+  }
+  return payment;
+}
+
+/**
+ * Статус Kaspi-платежа (обновляет статус оплаты на стороне «Налив»:
+ * успешно -> заказ 0, ошибка -> 6). 404 -> null.
+ */
+export async function getKaspiPaymentStatus(orderId: number, telegramId: string): Promise<KaspiPaymentInfo | null> {
+  try {
+    const { data } = await botRequest('get', `/api/telegram-bot/orders/${orderId}/kaspi-qr/status`, {
+      params: { telegram_id: telegramId },
+    });
+    return parseKaspiPayment(data);
+  } catch (error) {
+    if (error instanceof NalivBotApiError && error.status === 404) return null;
+    throw error;
+  }
+}
+
 // === Статусы ===
 
 /** Человекочитаемые названия статусов активных заказов */

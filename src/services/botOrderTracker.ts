@@ -9,7 +9,11 @@
 import { prisma } from '../config/authStorage.js';
 import { createLogger } from '../config/logging.js';
 import { getAiBotConfig } from '../config/aiBotConfig.js';
-import { getActiveOrders, orderStatusLabel } from '../integrations/naliv/telegramBotClient.js';
+import {
+  getActiveOrders,
+  orderStatusLabel,
+  getKaspiPaymentStatus,
+} from '../integrations/naliv/telegramBotClient.js';
 
 const logger = createLogger();
 
@@ -134,9 +138,93 @@ export async function pollOnce(): Promise<void> {
     if (notifications > 0) {
       logger.info(`[BotOrderTracker] Отправлено уведомлений о статусах: ${notifications}`);
     }
+    // === Kaspi QR: опрос незавершённых платежей ===
+    notifications += await pollKaspiPayments();
   } catch (error) {
     logger.error('[BotOrderTracker] Ошибка опроса заказов:', error);
   } finally {
     polling = false;
   }
+}
+
+/**
+ * Опрашивает статус Kaspi-платежей, по которым ждём оплату.
+ * pending -> completed: «Оплата получена»; -> error: просим новую ссылку.
+ * @returns число отправленных уведомлений
+ */
+async function pollKaspiPayments(): Promise<number> {
+  const pending = await prisma.botOrderTracking.findMany({
+    where: { kaspiQrId: { not: null }, paymentStatus: { notIn: ['completed', 'error'] } },
+    include: { botUser: true },
+    take: 50,
+  });
+
+  let notifications = 0;
+
+  for (const tracking of pending) {
+    const botUser = tracking.botUser;
+    if (!botUser.telegramBotId || !botUser.telegramChatId) continue;
+
+    let status;
+    try {
+      status = await getKaspiPaymentStatus(tracking.orderId, botUser.telegramUserId);
+    } catch (error) {
+      logger.warn(`[BotOrderTracker] Kaspi-статус заказа ${tracking.orderId} не получен:`, error);
+      continue;
+    }
+    if (!status) continue;
+
+    if (status.payment_status === tracking.paymentStatus) continue;
+
+    if (status.payment_status === 'completed' || status.payment_status === 'already_paid') {
+      await prisma.botOrderTracking.update({
+        where: { id: tracking.id },
+        data: { paymentStatus: 'completed' },
+      });
+      await prisma.botOrder.updateMany({
+        where: { nalivOrderId: tracking.orderId, status: 'sent' },
+        data: { status: 'paid' },
+      });
+
+      try {
+        const { sendTelegramMessage } = await import('./telegramService.js');
+        await sendTelegramMessage(
+          botUser.telegramBotId,
+          botUser.telegramChatId,
+          `✅ Оплата по заказу №${tracking.orderId} прошла — спасибо! 🚗`
+        );
+        notifications += 1;
+      } catch (error) {
+        logger.warn('[BotOrderTracker] Не удалось отправить уведомление об оплате:', error);
+      }
+      continue;
+    }
+
+    if (status.payment_status === 'error') {
+      await prisma.botOrderTracking.update({
+        where: { id: tracking.id },
+        data: { paymentStatus: 'error' },
+      });
+      try {
+        const { sendTelegramMessage } = await import('./telegramService.js');
+        await sendTelegramMessage(
+          botUser.telegramBotId,
+          botUser.telegramChatId,
+          `😔 Оплата по заказу №${tracking.orderId} не прошла. Напишите «оплатить» — дам свежую ссылку.`
+        );
+        notifications += 1;
+      } catch (error) {
+        logger.warn('[BotOrderTracker] Не удалось отправить уведомление об ошибке оплаты:', error);
+      }
+      continue;
+    }
+
+    // pending — обновляем статус без уведомления
+    await prisma.botOrderTracking.update({
+      where: { id: tracking.id },
+      data: { paymentStatus: status.payment_status },
+    });
+  }
+
+  return notifications;
 }
