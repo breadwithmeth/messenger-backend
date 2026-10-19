@@ -504,7 +504,7 @@ export function buildQtyOffer(item: NalivItem, variant: NalivOptionVariant | nul
   ]);
 
   return {
-    text: `🔢 «${item.name}»${variantLine} — ${perPortion} за порцию${promoLine}\n\nСколько берём?`,
+    text: `🔢 «${item.name}»${variantLine} — ${perPortion}${promoLine}\n\nСколько берём?`,
     inlineKeyboard: rows,
   };
 }
@@ -1392,23 +1392,27 @@ async function sendPaymentLink(ctx: DialogContext, nalivOrderId: number): Promis
       return;
     }
 
-    // Включаем трекинг статуса оплаты
+    // Сначала отправляем ссылку — трекинг некритичен и не должен мешать клиенту
+    await ctx.send(payment.paymentLink || '😔 Ссылка не создалась, попробуйте ещё раз.');
+
+    // Включаем трекинг статуса оплаты (ошибка трекинга не влияет на ссылку)
     const botUser = await prisma.botUser.findUnique({ where: { telegramUserId } });
     if (botUser) {
-      await prisma.botOrderTracking.upsert({
-        where: { botUserId_orderId: { botUserId: botUser.id, orderId: nalivOrderId } },
-        create: {
-          botUserId: botUser.id,
-          orderId: nalivOrderId,
-          kaspiQrId: payment.qrPaymentId != null ? String(payment.qrPaymentId) : null,
-          paymentStatus: payment.payment_status,
-        },
-        update: { kaspiQrId: payment.qrPaymentId != null ? String(payment.qrPaymentId) : null, paymentStatus: payment.payment_status },
-      });
+      try {
+        await prisma.botOrderTracking.upsert({
+          where: { botUserId_orderId: { botUserId: botUser.id, orderId: nalivOrderId } },
+          create: {
+            botUserId: botUser.id,
+            orderId: nalivOrderId,
+            kaspiQrId: payment.qrPaymentId != null ? String(payment.qrPaymentId) : null,
+            paymentStatus: payment.payment_status,
+          },
+          update: { kaspiQrId: payment.qrPaymentId != null ? String(payment.qrPaymentId) : null, paymentStatus: payment.payment_status },
+        });
+      } catch (trackingError) {
+        logger.warn(`[BotDialog] Не удалось включить трекинг оплаты (заказ ${nalivOrderId}):`, trackingError);
+      }
     }
-
-    // Только ссылка — без текста и кнопок
-    await ctx.send(payment.paymentLink || '😔 Ссылка не создалась, попробуйте ещё раз.');
 
     logger.info(`[BotDialog] Kaspi-ссылка отправлена: заказ ${nalivOrderId}, чат #${ctx.chatId}`);
   } catch (error) {
@@ -1441,7 +1445,8 @@ async function handlePayCheckCallback(ctx: DialogContext, dialog: { id: number }
       return;
     }
 
-    if (status.payment_status === 'error') {
+    // failed/canceled/expired и прочие неуспешные — предлагаем свежую ссылку
+    if (status.payment_status !== 'pending') {
       await ctx.send('😔 Оплата не прошла. Попробуйте ещё раз — вот свежая ссылка:', {
         inlineKeyboard: [[{ text: '💳 Оплатить онлайн (Kaspi)', callbackData: `pay:${nalivOrderId}` }]],
       });

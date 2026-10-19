@@ -154,7 +154,7 @@ export async function pollOnce(): Promise<void> {
  */
 async function pollKaspiPayments(): Promise<number> {
   const pending = await prisma.botOrderTracking.findMany({
-    where: { kaspiQrId: { not: null }, paymentStatus: { notIn: ['completed', 'error'] } },
+    where: { kaspiQrId: { not: null }, paymentStatus: { not: 'completed' } },
     include: { botUser: true },
     take: 50,
   });
@@ -174,8 +174,7 @@ async function pollKaspiPayments(): Promise<number> {
     }
     if (!status) continue;
 
-    if (status.payment_status === tracking.paymentStatus) continue;
-
+    // Оплачено
     if (status.payment_status === 'completed' || status.payment_status === 'already_paid') {
       await prisma.botOrderTracking.update({
         where: { id: tracking.id },
@@ -200,7 +199,8 @@ async function pollKaspiPayments(): Promise<number> {
       continue;
     }
 
-    if (status.payment_status === 'error') {
+    // Неуспешные статусы (error, failed, canceled, expired) — уведомляем один раз
+    if (status.payment_status !== 'pending' && status.payment_status !== tracking.paymentStatus) {
       await prisma.botOrderTracking.update({
         where: { id: tracking.id },
         data: { paymentStatus: 'error' },
@@ -220,10 +220,12 @@ async function pollKaspiPayments(): Promise<number> {
     }
 
     // pending — обновляем статус без уведомления
-    await prisma.botOrderTracking.update({
-      where: { id: tracking.id },
-      data: { paymentStatus: status.payment_status },
-    });
+    if (status.payment_status !== tracking.paymentStatus) {
+      await prisma.botOrderTracking.update({
+        where: { id: tracking.id },
+        data: { paymentStatus: status.payment_status },
+      });
+    }
   }
 
   return notifications;
