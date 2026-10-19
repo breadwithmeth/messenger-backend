@@ -5,6 +5,8 @@
 //  - Публичный API "Налив" (геокодер адресов, магазины, товары)
 
 export type AiBotConfig = {
+  /** Стиль AI API: 'glm' (Z.ai, OpenAI-совместимый) | 'ollama' (нативный Ollama) */
+  aiApiStyle: 'glm' | 'ollama';
   aiBaseUrl: string;
   aiApiKey: string;
   aiModel: string;
@@ -34,9 +36,10 @@ export function getAiBotConfig(): AiBotConfig {
   if (cached) return cached;
 
   cached = {
-    aiBaseUrl: (process.env.AI_BOT_BASE_URL || 'https://nssl.drawbridge.kz').replace(/\/$/, ''),
+    aiApiStyle: process.env.AI_API_STYLE === 'ollama' ? 'ollama' : 'glm',
+    aiBaseUrl: (process.env.AI_BOT_BASE_URL || 'https://api.z.ai').replace(/\/$/, ''),
     aiApiKey: process.env.AI_BOT_API_KEY || '',
-    aiModel: process.env.AI_BOT_MODEL || 'qwen2.5:7b',
+    aiModel: process.env.AI_BOT_MODEL || 'glm-4.5-flash',
     nalivBaseUrl: (process.env.NALIV_API_BASE_URL || 'https://njt25.naliv.kz').replace(/\/$/, ''),
     nalivBotApiKey: process.env.TELEGRAM_BOT_API_KEY || '',
     orderPollIntervalMs: parsePositiveIntEnv('BOT_ORDER_POLL_INTERVAL_MS', 60000),

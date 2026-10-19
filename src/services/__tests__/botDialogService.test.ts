@@ -448,6 +448,23 @@ describe('parseAiAction (JSON-протокол модели)', () => {
     expect(parseAiAction('{"action": "search_items", "query": "пиво"}')?.queries).toBeUndefined();
   });
 
+  test('buildMultiSearchOffer: дубли между группами показываются один раз', () => {
+    const cola = item({ item_id: 55, name: 'Напиток Coca-Cola 0.5', price: 560 });
+    const colaCan = item({ item_id: 56, name: 'Напиток Coca-Cola 0.45 жб', price: 560 });
+
+    const offer = buildMultiSearchOffer([
+      { query: 'кола 0.5', items: [cola] },
+      { query: 'напиток кока-кола', items: [colaCan, cola] },
+    ]);
+
+    expect(offer.text).toContain('«кола 0.5»');
+    // вторая группа: Coca-Cola 0.5 — дубль, остаётся только жб
+    expect(offer.text.match(/Coca-Cola 0.5 —/g)).toHaveLength(1);
+    expect(offer.text).toContain('Coca-Cola 0.45 жб');
+    expect(offer.inlineKeyboard.flat().filter((b) => b.callbackData === 'pick:55')).toHaveLength(1);
+    expect(offer.inlineKeyboard.flat().some((b) => b.callbackData === 'pick:56')).toBe(true);
+  });
+
   test('buildMultiSearchOffer: группы с кнопками и пустые группы', () => {
     const offer = buildMultiSearchOffer([
       { query: 'чечил', items: [item({ item_id: 1, name: 'Чечил копчёный 120г', price: 890 })] },

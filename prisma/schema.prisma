@@ -463,6 +463,9 @@ model BotDialog {
   // Кэш последней выдачи поиска товаров (для валидации item_id)
   lastSearchItems Json?
 
+  // Товары, реально показанные клиенту кнопками (валидация AI-добавлений)
+  lastOfferItems Json?
+
   // Корзина: [{itemId, name, price, qty, unit}]
   cart           Json?
 

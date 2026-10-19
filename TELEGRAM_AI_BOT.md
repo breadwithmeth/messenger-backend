@@ -25,7 +25,8 @@ AI-боты Telegram принимают заказы у клиентов без 
 - Токены ботов хранятся в БД (`TelegramBot`), запуск — long-polling, как у обычных ботов поддержки.
 - AI-режим включается **флагом `aiEnabled`** на конкретном боте — остальные боты работают как раньше.
 - Вся переписка (входящие и ответы AI) сохраняется в `Chat`/`Message` — операторы видят её в существующем UI.
-- Модель: `qwen2.5:7b` на Ollama-совместимом сервере `nssl.drawbridge.kz` (`/api/chat`, `format: "json"`).
+- Модель: **GLM** (`glm-5.3-flash`) через Z.ai (`https://api.z.ai`, OpenAI-совместимый `/api/paas/v4/chat/completions`). JSON-режим через `response_format`. Для glm-4.5/4.6 размышления отключаются (`thinking: disabled`), glm-5.3+ всегда думает (лимит токенов 2048). Голосовые и файлы не обрабатываются — бот просит текст.
+- Защита: если `aiModel` бота неизвестен серверу (ошибка 1211 «Unknown Model»), запрос автоматически повторяется с моделью из `AI_BOT_MODEL`.
 - Заказ сохраняется в таблицу `BotOrder` (статус `new`) + уведомление операторов по Socket.IO (`bot_order_created`).
 
 ⚠️ Важно: боты подхватываются из БД **только при старте сервера** (`startAllTelegramBots()`). Бот, добавленный после деплоя, нужно запустить вручную: `POST /api/telegram/bots/:botId/start`.
@@ -34,9 +35,10 @@ AI-боты Telegram принимают заказы у клиентов без 
 
 | Переменная | По умолчанию | Описание |
 |---|---|---|
-| `AI_BOT_BASE_URL` | `https://nssl.drawbridge.kz` | Ollama-совместимый AI-сервер |
+| `AI_API_STYLE` | `glm` | Стиль API: `glm` (Z.ai) или `ollama` |
+| `AI_BOT_BASE_URL` | `https://api.z.ai` | AI-сервер (Z.ai / Ollama) |
 | `AI_BOT_API_KEY` | — | Bearer-токен AI-сервера (**обязательна**) |
-| `AI_BOT_MODEL` | `qwen2.5:7b` | Модель по умолчанию |
+| `AI_BOT_MODEL` | `glm-5.3-flash` | Модель по умолчанию (доступны: glm-4.5, glm-4.5-air, glm-4.6, glm-4.7, glm-5*, glm-5.3-flash…) |
 | `NALIV_API_BASE_URL` | `https://njt25.naliv.kz` | Публичный API «Налив» (геокодер, магазины, товары) |
 | `AI_BOT_HTTP_TIMEOUT_MS` | `60000` | Таймаут HTTP-запросов к AI/«Налив» |
 | `AI_BOT_HTTP_RETRY_COUNT` | `2` | Ретраи для «Налив» (5xx/429/сеть) |
@@ -54,7 +56,7 @@ curl -X POST https://bm.drawbridge.kz/api/telegram/organizations/1/bots \
     "botToken": "123456:ABC-DEF...",
     "welcomeMessage": "👋 Привет! Я ассистент доставки. Напишите ваш адрес...",
     "aiEnabled": true,
-    "aiModel": "qwen2.5:7b",
+    "aiModel": "glm-4.5-flash",
     "aiSystemPrompt": "характер бота — инструкция маркетинга (замещает встроенный стиль)"
   }'
 ```
@@ -111,7 +113,11 @@ curl -X POST https://bm.drawbridge.kz/api/telegram/organizations/1/bots \
 
 **Порции**: `qty` в протоколе — количество **порций**. Размер одной порции = `quantity_step` шт товара (у большинства товаров порция = 1 шт). 1 тап кнопки = +1 порция. В корзине хранятся штуки (`qty = порции × quantity_step`), в заказе идут штуки, кламп по остатку — по целым порциям (`floor(amount / step)`). Для порционных товаров корзина показывает «8 шт (2 порц. × 4 шт)».
 
-Бэкенд исполняет действия. Список товаров после `search_items` рендерит **сам бэкенд** (кнопки), модель его не описывает. Товар для `add_to_cart` валидируется по кэшу результатов поиска (`BotDialog.lastSearchItems`, до 50 позиций) и остаткам на складе. Если модель ответила не-JSON — текст отправляется клиенту как есть (fallback).
+Бэкенд исполняет действия. Список товаров после `search_items` рендерит **сам бэкенд** (кнопки), модель его не описывает. **`add_to_cart`/`set_qty` валидируются только по `BotDialog.lastOfferItems`** — товарам, реально показанным клиенту кнопками (поиск + рекомендации). Этого товара нет в показанном списке → модели уходит ошибка и она вызывает `search_items`. Если модель ответила не-JSON — текст отправляется клиенту как есть (fallback).
+
+Дополнительно:
+- **Мультипоиск без дублей**: один товар, найденный в нескольких запросах, показывается один раз.
+- **Запросы по названию**: промт запрещает модели переводить объёмы («литр» → «0.946») и выдумывать артикулы.
 
 ### Переход на оператора
 
@@ -162,7 +168,7 @@ curl -X POST https://bm.drawbridge.kz/api/telegram/organizations/1/bots \
 ## Модель данных
 
 - **`TelegramBot`**: `aiEnabled`, `aiModel` (переопределение модели для бота), `aiSystemPrompt` (характер бота — редактируется маркетингом, замещает встроенный стиль; протокол и ограничения неизменяемы).
-- **`BotDialog`** (1:1 с `Chat`): состояние сценария, подтверждение возраста (`ageConfirmed`), адрес (`addressLabel/Lat/Lon/Street/House`), телефон (`phone`), цена доставки (`deliveryPrice`), магазин (`businessId/Name`), кандидаты для выбора, кэш поиска, корзина (`cart` JSON), `handedOff`.
+- **`BotDialog`** (1:1 с `Chat`): состояние сценария, подтверждение возраста (`ageConfirmed`), адрес (`addressLabel/Lat/Lon/Street/House`), телефон (`phone`), цена доставки (`deliveryPrice`), магазин (`businessId/Name`), кандидаты для выбора, кэш поиска (`lastSearchItems`), показанные товары (`lastOfferItems` — валидация AI-добавлений), корзина (`cart` JSON), `handedOff`.
 - **`BotOrder`**: организация, чат, магазин, адрес, телефон клиента (`phone`), позиции (`items` JSON), `totalPrice`, `deliveryFee`, `status` (`new` → `sent` → `confirmed`/`cancelled`), `nalivOrderId/Uuid` (ID заказа в «Налив»), `telegramChatId`.
 
 ## Структура кода

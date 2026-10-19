@@ -517,15 +517,21 @@ export function buildMultiSearchOffer(groups: { query: string; items: NalivItem[
 } {
   const sections: string[] = [];
   const buttons: BotInlineButton[] = [];
+  const seenIds = new Set<number>(); // один товар — одна кнопка, даже если нашёлся в двух запросах
 
   for (const g of groups) {
+    // пустой результат честно показываем; полный дубль другой группы — пропускаем
     if (g.items.length === 0) {
       sections.push(`😔 По «${g.query}» ничего не нашлось`);
       continue;
     }
+    const fresh = g.items.filter((i) => !seenIds.has(i.item_id));
+    if (fresh.length === 0) continue;
+    for (const i of fresh) seenIds.add(i.item_id);
+
     sections.push(
       `🔎 «${g.query}»:\n` +
-        g.items
+        fresh
           .map((i) => {
             const promo = pickPromo(i);
             const promoText =
@@ -539,7 +545,7 @@ export function buildMultiSearchOffer(groups: { query: string; items: NalivItem[
           })
           .join('\n')
     );
-    for (const i of g.items) {
+    for (const i of fresh) {
       const fromPrice = minPortionPrice(i);
       const priceLabel = fromPrice !== null ? `от ${formatMoney(fromPrice)} ₸` : `${formatMoney(effectivePrice(i))} ₸`;
       buttons.push({
@@ -831,17 +837,18 @@ ${phoneLine}
 - Магазин: ${ctx.businessName || 'не выбран'} (business_id: ${ctx.businessId || '-'})
 - Стоимость доставки: ${ctx.deliveryFee} ₸
 - Текущая корзина (JSON): ${cartForPrompt(ctx.cart)}
-- Найденные ранее товары (JSON, свежие в конце; доступны для add_to_cart): ${JSON.stringify(
+- Последний показанный клиенту список (JSON; ТОЛЬКО из него разрешены add_to_cart/set_qty): ${JSON.stringify(
     ctx.searchCache.slice(-15).map((i) => ({ item_id: i.item_id, name: i.name, price: i.price, unit: i.unit }))
   )}
 
 ПРАВИЛА ПРОТОКОЛА:
 1. Ты отвечаешь СТРОГО одним JSON-объектом, без пояснений и markdown.
-2. Если клиент называет товар, которого нет в "Найденных ранее товарах" — сначала вызови search_items.
-3. КАТЕГОРИИ И ТИПЫ («розлив», «пиво», «вино», «закуски», «на компанию») — ВСЕГДА search_items, даже если похожие товары уже есть в "Найденных ранее товарах". Клиент должен увидеть весь выбор кнопками.
+2. Если клиент называет товар, которого нет в "Последнем показанном списке" — сначала вызови search_items.
+3. КАТЕГОРИИ И ТИПЫ («розлив», «пиво», «вино», «закуски», «на компанию») — ВСЕГДА search_items, даже если похожие товары уже есть в списке. Клиент должен увидеть весь выбор кнопками.
 4. НЕСКОЛЬКО РАЗНЫХ ТОВАРОВ одним сообщением («чечил, вино и шампанское») — передай МАССИВ запросов: {"action": "search_items", "query": ["чечил", "вино", "шампанское"]} (максимум 4). Результаты покажутся сгруппированно.
-5. add_to_cart/set_qty — только когда клиент явно просит добавить или изменить КОНКРЕТНЫЙ товар.
-6. Когда клиент выбирает товар из списка по номеру, используй item_id соответствующего товара из последнего результата поиска.
+5. add_to_cart/set_qty — только когда клиент явно просит добавить или изменить КОНКРЕТНЫЙ товар ИЗ ПОСЛЕДНЕГО ПОКАЗАННОГО СПИСКА. Если клиент уточняет («литр», «побольше», «та жёлтая») — ищи в этом списке или вызывай search_items заново.
+6. Запросы к поиску — по названию на русском («кола 1 литр», «виски джек дэниэлс»). НЕ переводи объёмы в другие единицы (никаких «0.946»), не выдумывай артикулы.
+7. Когда клиент выбирает товар из списка по номеру, используй item_id соответствующего товара из последнего результата поиска.
 
 Формат ответа (выбери ОДНО действие):
 {"action": "search_items", "query": "<запрос или массив запросов>", "limit": <сколько показать, опционально>}
@@ -860,7 +867,7 @@ ${phoneLine}
 - add_to_cart («ещё», «плюс», «добавь», «кинь ещё») — прибавить к тому, что уже в корзине: «ещё два ягеря» при 1 шт в корзине = 3 шт
 - set_qty («два ягеря», «хочу 3 короны», «сделай 2», «не 2, а 4») — клиент называет ИТОГОВОЕ количество: «два ягеря» = ровно 2 порции, независимо от того, сколько уже лежит
 
-search_items — вызывай, когда клиент называет товар, которого нет в "Найденных ранее товарах". Результаты клиент увидит автоматически списком с кнопками выбора — САМ список не пиши и не перечисляй товары в reply.
+search_items — вызывай, когда клиента интересует товар, которого нет в "Последнем показанном списке". Результаты клиент увидит автоматически списком с кнопками выбора — САМ список не пиши и не перечисляй товары в reply.
 add_to_cart/set_qty — только для товаров из "Найденных ранее товаров" (когда выбор однозначен).
 После add_to_cart/set_qty/remove_from_cart/clear_cart ты получишь обновлённую корзину — подтверди через reply живой фразой и предложи, что-нибудь ещё.
 Если клиент пишет «корзина» — вызови show_cart. Если готов заказывать — checkout. Если просто болтает — поддержи беседу через reply и мягко верни к выбору.`;
@@ -1233,6 +1240,7 @@ type PickDialog = {
   businessId: number | null;
   businessName: string | null;
   lastSearchItems: unknown;
+  lastOfferItems?: unknown;
   cart: unknown;
   deliveryPrice?: number | null;
 };
@@ -1354,7 +1362,7 @@ async function sendAddedConfirmation(
  */
 export async function buildRecommendations(
   ctx: DialogContext,
-  dialog: { id: number; businessId: number | null; lastSearchItems: unknown; cart: unknown },
+  dialog: { id: number; businessId: number | null; lastSearchItems: unknown; lastOfferItems?: unknown; cart: unknown },
   addedItem: NalivItem,
   cart: CartItem[]
 ): Promise<{ text: string; inlineKeyboard: BotInlineButton[][] } | null> {
@@ -1382,7 +1390,14 @@ export async function buildRecommendations(
   const merged = mergeSearchCache(searchCache, found);
   await prisma.botDialog.update({
     where: { id: dialog.id },
-    data: { lastSearchItems: merged.slice(0, MAX_SEARCH_CACHE) as unknown as any },
+    data: {
+      lastSearchItems: merged.slice(0, MAX_SEARCH_CACHE) as unknown as any,
+      // рекомендации тоже показаны кнопками — клиент может добавить их текстом
+      lastOfferItems: mergeSearchCache((dialog.lastOfferItems as unknown as NalivItem[] | null) || [], found).slice(
+        0,
+        MAX_SEARCH_CACHE
+      ) as unknown as any,
+    },
   });
 
   return {
@@ -1672,6 +1687,10 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
   }
 
   const searchCache = (dialog.lastSearchItems as unknown as NalivItem[] | null) || [];
+  // Только товары, реально показанные клиенту кнопками — по ним разрешено add/set.
+  // Весь кэш поиска (50 позиций) модели не виден, чтобы она не «добавляла» то, чего клиент не видел.
+  const shownItems =
+    (dialog.lastOfferItems as unknown as NalivItem[] | null) || searchCache.slice(-15);
   const cart = (dialog.cart as unknown as CartItem[]) || [];
   const business = await findBusinessFee(dialog.businessId);
   const deliveryFee = dialog.deliveryPrice ?? business?.delivery_service_fee ?? 0;
@@ -1684,7 +1703,7 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
     businessName: dialog.businessName,
     businessId: dialog.businessId,
     cart,
-    searchCache,
+    searchCache: shownItems,
     deliveryFee,
     clientName: ctx.clientName,
     phone: dialog.phone,
@@ -1699,6 +1718,7 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
 
   let currentCart = cart;
   let currentSearchCache = searchCache;
+  let currentShownItems = shownItems;
   let lastAddedItem: NalivItem | null = null; // для рекомендаций «в пару»
 
   try {
@@ -1746,10 +1766,28 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
               }
             }
             currentSearchCache = merged;
+
+            // Товары, показанные клиенту в этом сообщении (без дублей между группами)
+            const shown: NalivItem[] = [];
+            const seenIds = new Set<number>();
+            for (const g of groups) {
+              for (const i of g.items) {
+                if (!seenIds.has(i.item_id)) {
+                  seenIds.add(i.item_id);
+                  shown.push(i);
+                }
+              }
+            }
+            const updatedShown = mergeSearchCache(currentShownItems, shown);
+
             await prisma.botDialog.update({
               where: { id: dialog.id },
-              data: { lastSearchItems: merged.slice(0, MAX_SEARCH_CACHE) as unknown as any },
+              data: {
+                lastSearchItems: merged.slice(0, MAX_SEARCH_CACHE) as unknown as any,
+                lastOfferItems: updatedShown.slice(0, MAX_SEARCH_CACHE) as unknown as any,
+              },
             });
+            currentShownItems = updatedShown;
 
             const multiOffer = buildMultiSearchOffer(groups);
             await ctx.send(multiOffer.text, { inlineKeyboard: multiOffer.inlineKeyboard });
@@ -1781,18 +1819,27 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
             action.limit && action.limit >= 1
               ? Math.min(Math.floor(action.limit), MAX_SEARCH_BUTTONS)
               : undefined;
+          const shown = result.items.slice(0, limit ?? MAX_SEARCH_BUTTONS);
+          const updatedShown = mergeSearchCache(currentShownItems, shown);
+
+          await prisma.botDialog.update({
+            where: { id: dialog.id },
+            data: { lastOfferItems: updatedShown.slice(0, MAX_SEARCH_CACHE) as unknown as any },
+          });
+          currentShownItems = updatedShown;
+
           const offer = buildSearchOffer(query, result.items, limit);
           await ctx.send(offer.text, { inlineKeyboard: offer.inlineKeyboard });
           return;
         }
 
         case 'add_to_cart': {
-          const item = currentSearchCache.find((i) => i.item_id === action.item_id);
+          const item = currentShownItems.find((i) => i.item_id === action.item_id);
           if (!item) {
             messages.push({ role: 'assistant', content: raw });
             messages.push({
               role: 'user',
-              content: 'Ошибка: товар не найден среди найденных ранее. Сначала вызови search_items, затем add_to_cart с item_id из результатов.',
+              content: 'Ошибка: этого товара нет в последнем показанном клиенту списке. Нельзя добавлять то, чего клиент не видел. Сначала вызови search_items.',
             });
             continue;
           }
@@ -1830,12 +1877,12 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
         }
 
         case 'set_qty': {
-          const item = currentSearchCache.find((i) => i.item_id === action.item_id);
+          const item = currentShownItems.find((i) => i.item_id === action.item_id);
           if (!item) {
             messages.push({ role: 'assistant', content: raw });
             messages.push({
               role: 'user',
-              content: 'Ошибка: товар не найден среди найденных ранее. Сначала вызови search_items, затем set_qty с item_id из результатов.',
+              content: 'Ошибка: этого товара нет в последнем показанном клиенту списке. Нельзя изменять то, чего клиент не видел. Сначала вызови search_items.',
             });
             continue;
           }
