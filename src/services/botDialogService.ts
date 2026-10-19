@@ -1400,25 +1400,15 @@ async function sendPaymentLink(ctx: DialogContext, nalivOrderId: number): Promis
         create: {
           botUserId: botUser.id,
           orderId: nalivOrderId,
-          kaspiQrId: payment.qrPaymentId ?? null,
+          kaspiQrId: payment.qrPaymentId != null ? String(payment.qrPaymentId) : null,
           paymentStatus: payment.payment_status,
         },
-        update: { kaspiQrId: payment.qrPaymentId ?? null, paymentStatus: payment.payment_status },
+        update: { kaspiQrId: payment.qrPaymentId != null ? String(payment.qrPaymentId) : null, paymentStatus: payment.payment_status },
       });
     }
 
-    const expire = payment.expireDate ? new Date(payment.expireDate) : null;
-    const expireLine =
-      expire && !Number.isNaN(expire.getTime())
-        ? `\n⏳ Действует до ${expire.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`
-        : '';
-
-    await ctx.send(
-      `💳 Счёт на ${formatMoney(payment.amount)} ₸ по заказу №${nalivOrderId} готов.\n\n` +
-        `Оплатить по Kaspi:\n${payment.paymentLink}${expireLine}\n\n` +
-        `Как только оплатите — скажу сразу 😉`,
-      { inlineKeyboard: [[{ text: '🔄 Проверить оплату', callbackData: `paycheck:${nalivOrderId}` }]] }
-    );
+    // Только ссылка — без текста и кнопок
+    await ctx.send(payment.paymentLink || '😔 Ссылка не создалась, попробуйте ещё раз.');
 
     logger.info(`[BotDialog] Kaspi-ссылка отправлена: заказ ${nalivOrderId}, чат #${ctx.chatId}`);
   } catch (error) {
