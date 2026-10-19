@@ -29,6 +29,7 @@ import {
   isSkipPhoneRequest,
   normalizePhone,
   parseAiAction,
+  parseSuitableIds,
   mergeSearchCache,
   effectivePrice,
   buildShoppingSystemPrompt,
@@ -475,7 +476,7 @@ describe('parseAiAction (JSON-протокол модели)', () => {
     expect(offer.text).toContain('«чечил»');
     expect(offer.text).toContain('Чечил копчёный 120г — 890 ₸/шт');
     expect(offer.text).toContain('«шампанское»');
-    expect(offer.text).toContain('😔 По «устрицы» ничего не нашлось');
+    expect(offer.text).toContain('😔 По «устрицы» подходящего не нашлось');
 
     const flat = offer.inlineKeyboard.flat();
     expect(flat.filter((b) => b.callbackData === 'pick:1')).toHaveLength(1);
@@ -489,6 +490,18 @@ describe('parseAiAction (JSON-протокол модели)', () => {
 
   test('приводит action к нижнему регистру', () => {
     expect(parseAiAction('{"action": "SHOW_CART"}')?.action).toBe('show_cart');
+  });
+});
+
+describe('AI-фильтр неподходящих товаров', () => {
+  test('parseSuitableIds: валидный JSON, ограждения, мусор', () => {
+    expect(parseSuitableIds('{"suitable": [101, 303]}')).toEqual([101, 303]);
+    expect(parseSuitableIds('Ответ:\n```json\n{"suitable": ["55"]}\n```')).toEqual([55]);
+    expect(parseSuitableIds('{"suitable": []}')).toEqual([]);
+    expect(parseSuitableIds('{"suitable": [-1, "abc", 7]}')).toEqual([7]);
+    expect(parseSuitableIds('{"foo": 1}')).toEqual([]);
+    expect(parseSuitableIds('битый json')).toEqual([]);
+    expect(parseSuitableIds('')).toEqual([]);
   });
 });
 

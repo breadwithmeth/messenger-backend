@@ -520,9 +520,9 @@ export function buildMultiSearchOffer(groups: { query: string; items: NalivItem[
   const seenIds = new Set<number>(); // один товар — одна кнопка, даже если нашёлся в двух запросах
 
   for (const g of groups) {
-    // пустой результат честно показываем; полный дубль другой группы — пропускаем
+    // пустой результат (или всё отфильтровано) честно показываем; полный дубль другой группы — пропускаем
     if (g.items.length === 0) {
-      sections.push(`😔 По «${g.query}» ничего не нашлось`);
+      sections.push(`😔 По «${g.query}» подходящего не нашлось`);
       continue;
     }
     const fresh = g.items.filter((i) => !seenIds.has(i.item_id));
@@ -835,7 +835,7 @@ ${phoneLine}
 КОНТЕКСТ:
 - Адрес доставки: ${ctx.address || 'не указан'}
 - Магазин: ${ctx.businessName || 'не выбран'} (business_id: ${ctx.businessId || '-'})
-- Стоимость доставки: ${ctx.deliveryFee} ₸
+- Стоимость доставки: ${ctx.deliveryFee} ₸ (рассчитана по зоне адреса клиента)
 - Текущая корзина (JSON): ${cartForPrompt(ctx.cart)}
 - Последний показанный клиенту список (JSON; ТОЛЬКО из него разрешены add_to_cart/set_qty): ${JSON.stringify(
     ctx.searchCache.slice(-15).map((i) => ({ item_id: i.item_id, name: i.name, price: i.price, unit: i.unit }))
@@ -1189,11 +1189,10 @@ export async function handleBotCallback(ctx: DialogContext, data: string): Promi
       }
       return;
     case 'cart': {
-      const business = await findBusinessFee(dialog.businessId);
       await sendCartMessage(
         ctx,
         (dialog.cart as unknown as CartItem[]) || [],
-        dialog.deliveryPrice ?? business?.delivery_service_fee ?? 0
+        await resolveDeliveryFee(dialog)
       );
       return;
     }
@@ -1239,6 +1238,8 @@ type PickDialog = {
   id: number;
   businessId: number | null;
   businessName: string | null;
+  addressLat?: number | null;
+  addressLon?: number | null;
   lastSearchItems: unknown;
   lastOfferItems?: unknown;
   cart: unknown;
@@ -1333,8 +1334,7 @@ async function sendAddedConfirmation(
   relationId: number | null,
   portions: number
 ): Promise<void> {
-  const business = await findBusinessFee(dialog.businessId);
-  const deliveryFee = dialog.deliveryPrice ?? business?.delivery_service_fee ?? 0;
+  const deliveryFee = await resolveDeliveryFee(dialog);
   const line = cart.find((c) => c.itemId === item.item_id && (c.option?.relationId ?? null) === (relationId ?? null))!;
   const lineLabel = line.option ? `${item.name} — ${line.option.label}` : item.name;
 
@@ -1672,12 +1672,7 @@ async function startShopping(ctx: DialogContext, dialogId: number): Promise<void
 async function handleShopping(ctx: DialogContext, dialog: any, text: string): Promise<void> {
   // Быстрые команды без AI
   if (isCartCommand(text)) {
-    const business = await findBusinessFee(dialog.businessId);
-    await sendCartMessage(
-      ctx,
-      (dialog.cart as unknown as CartItem[]) || [],
-      dialog.deliveryPrice ?? business?.delivery_service_fee ?? 0
-    );
+    await sendCartMessage(ctx, (dialog.cart as unknown as CartItem[]) || [], await resolveDeliveryFee(dialog));
     return;
   }
 
@@ -1692,8 +1687,7 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
   const shownItems =
     (dialog.lastOfferItems as unknown as NalivItem[] | null) || searchCache.slice(-15);
   const cart = (dialog.cart as unknown as CartItem[]) || [];
-  const business = await findBusinessFee(dialog.businessId);
-  const deliveryFee = dialog.deliveryPrice ?? business?.delivery_service_fee ?? 0;
+  const deliveryFee = await resolveDeliveryFee(dialog);
 
   // История диалога для контекста
   const history = await loadChatHistory(ctx.chatId);
@@ -1753,19 +1747,26 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
 
           // Мультипоиск: несколько разных товаров одним ходом
           if (queries.length > 1) {
-            const groups: { query: string; items: NalivItem[] }[] = [];
+            const rawGroups: { query: string; items: NalivItem[] }[] = [];
             let merged = currentSearchCache;
             for (const q of queries.slice(0, 4)) {
               try {
                 const r = await searchItems(q, dialog.businessId, 1, 10);
                 merged = mergeSearchCache(merged, r.items);
-                groups.push({ query: q, items: r.items.slice(0, 3) });
+                rawGroups.push({ query: q, items: r.items.slice(0, 3) });
               } catch (error) {
                 logger.warn(`[BotDialog] Мультипоиск «${q}» не удался:`, error);
-                groups.push({ query: q, items: [] });
+                rawGroups.push({ query: q, items: [] });
               }
             }
             currentSearchCache = merged;
+
+            // AI-фильтр по каждой группе (параллельно)
+            const groups = await Promise.all(
+              rawGroups.map((g) =>
+                filterSuitableItems(ctx, text, g.query, g.items).then((items) => ({ query: g.query, items }))
+              )
+            );
 
             // Товары, показанные клиенту в этом сообщении (без дублей между группами)
             const shown: NalivItem[] = [];
@@ -1815,11 +1816,25 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
             return;
           }
 
+          // AI-фильтр: отбрасываем неподходящие товары (другой тип, объём, безалкогольное)
+          const suitable = await filterSuitableItems(ctx, text, query, result.items);
+
+          if (suitable.length === 0) {
+            // Всё отфильтровано — честно говорим и показываем ближайшее по названию
+            const closest = result.items[0];
+            await ctx.send(
+              `😔 Под «${query}» подходящего не нашлось.\n\n` +
+                `Близко по названию: ${closest.name} — ${formatMoney(effectivePrice(closest))} ₸/${closest.unit || 'шт'}.\n\n` +
+                `Если устроит — напишите название этого товара, покажу кнопкой. Или уточните запрос (другой объём или бренд).`
+            );
+            return;
+          }
+
           const limit =
             action.limit && action.limit >= 1
               ? Math.min(Math.floor(action.limit), MAX_SEARCH_BUTTONS)
               : undefined;
-          const shown = result.items.slice(0, limit ?? MAX_SEARCH_BUTTONS);
+          const shown = suitable.slice(0, limit ?? MAX_SEARCH_BUTTONS);
           const updatedShown = mergeSearchCache(currentShownItems, shown);
 
           await prisma.botDialog.update({
@@ -1828,7 +1843,7 @@ async function handleShopping(ctx: DialogContext, dialog: any, text: string): Pr
           });
           currentShownItems = updatedShown;
 
-          const offer = buildSearchOffer(query, result.items, limit);
+          const offer = buildSearchOffer(query, suitable, limit);
           await ctx.send(offer.text, { inlineKeyboard: offer.inlineKeyboard });
           return;
         }
@@ -2022,6 +2037,85 @@ export function mergeSearchCache(cache: NalivItem[], fresh: NalivItem[]): NalivI
   return Array.from(map.values()).slice(-MAX_SEARCH_CACHE);
 }
 
+// ============================================================
+// AI-фильтр неподходящих товаров в выдаче поиска
+// ============================================================
+
+const FILTER_SYSTEM_PROMPT = `Ты — фильтр результатов поиска в боте доставки алкоголя «Налив/Градусы24». Тебе приходит запрос клиента и список кандидатов (JSON). Верни СТРОГО JSON вида {"suitable": [<item_id>, ...]} — только item_id товаров, которые РЕАЛЬНО соответствуют запросу.
+
+Отбрасывай кандидатов:
+- другого типа товара: запрос «кола» (напиток) — драже, конфеты, жевательные резинки и снеки со словом «кола» не подходят;
+- неподходящего объёма/размера, если клиент явно указал: «1 литр» — кандидаты 0.05, 0.35, 0.5 не подходят;
+- безалкогольную версию алкогольного запроса («вино» ≠ «вино безалкогольное») и наоборот;
+- явно другой продукт при совпадении только одного слова.
+
+Не отбрасывай за цену или бренд. Если подходящих нет — верни {"suitable": []}. Никакого текста кроме JSON.`;
+
+/**
+ * Разбирает ответ фильтра: {"suitable": [id, ...]} -> массив чисел.
+ * Битый ответ -> пустой массив.
+ */
+export function parseSuitableIds(raw: string): number[] {
+  if (!raw) return [];
+  let text = raw.trim();
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenceMatch) text = fenceMatch[1].trim();
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) return [];
+  try {
+    const parsed = JSON.parse(text.slice(start, end + 1));
+    const list = Array.isArray(parsed?.suitable) ? parsed.suitable : [];
+    return list.map(Number).filter((n) => Number.isFinite(n) && n > 0);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Отсеивает неподходящие товары из выдачи (второй лёгкий AI-вызов):
+ * тип товара, объём (если клиент указал), алкогольное/безалкогольное.
+ * При ошибке возвращает кандидатов как есть (fail-open) — поиск не должен ломаться.
+ */
+async function filterSuitableItems(
+  ctx: DialogContext,
+  userText: string,
+  query: string,
+  items: NalivItem[]
+): Promise<NalivItem[]> {
+  if (items.length <= 1) return items;
+
+  try {
+    const raw = await aiChat(
+      [
+        { role: 'system', content: FILTER_SYSTEM_PROMPT },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            сообщение_клиента: userText.slice(0, 300),
+            поисковый_запрос: query,
+            кандидаты: items.map((i) => ({
+              item_id: i.item_id,
+              name: i.name,
+              price: effectivePrice(i),
+              unit: i.unit,
+            })),
+          }),
+        },
+      ],
+      { formatJson: true, temperature: 0 }
+    );
+
+    const ids = parseSuitableIds(raw);
+    if (ids.length === 0) return [];
+    const idSet = new Set(ids);
+    return items.filter((i) => idSet.has(i.item_id));
+  } catch (error) {
+    logger.warn('[BotDialog] AI-фильтр не сработал, показываю выдачу как есть:', error);
+    return items;
+  }
+}
+
 /** Улица из метки геокодера: первый сегмент до запятой («улица Толстого, ...» -> «улица Толстого») */
 export function normalizeStreet(street: string | null | undefined): string | null {
   if (!street) return null;
@@ -2080,6 +2174,28 @@ async function findBusinessFee(businessId: number | null) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Реальная стоимость доставки для показа клиенту.
+ * Если зона ещё не считалась (старые диалоги) — считает по адресу и кэширует в диалог.
+ * Вне зоны / ошибка сервиса — базовый тариф магазина.
+ */
+async function resolveDeliveryFee(dialog: {
+  id: number;
+  businessId: number | null;
+  addressLat?: number | null;
+  addressLon?: number | null;
+  deliveryPrice?: number | null;
+}): Promise<number> {
+  const business = await findBusinessFee(dialog.businessId);
+  const fallback = business?.delivery_service_fee ?? 0;
+
+  if (dialog.deliveryPrice != null) return dialog.deliveryPrice;
+  if (dialog.addressLat == null || dialog.addressLon == null || !dialog.businessId) return fallback;
+
+  const price = await checkAndSaveDeliveryPrice(dialog.id, dialog.addressLat, dialog.addressLon, dialog.businessId);
+  return price ?? fallback;
 }
 
 async function beginOrderConfirmation(ctx: DialogContext, dialog: any): Promise<void> {
