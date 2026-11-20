@@ -15,6 +15,9 @@ services:
     build: .
     depends_on:
       - db
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     environment:
       PORT: 3000
       DATABASE_URL: postgresql://app:app@db:5432/messenger?schema=public
