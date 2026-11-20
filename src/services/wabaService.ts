@@ -7,6 +7,66 @@ import { saveMedia } from './storageService.js';
 
 const logger = createLogger();
 
+// Логи сбоев дублируются в console.log, потому что pino-логгер по умолчанию
+// молчит (APP_LOG_LEVEL не задан) и ошибки WABA в нём терялись.
+const WABA_LOG_SENSITIVE_KEY = /(authorization|cookie|password|secret|token)/i;
+
+function redactForWabaLog(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(redactForWabaLog);
+  }
+
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, childValue]) => [
+      key,
+      WABA_LOG_SENSITIVE_KEY.test(key) ? '[REDACTED]' : redactForWabaLog(childValue),
+    ])
+  );
+}
+
+function wabaConsoleLog(event: string, data: Record<string, unknown> = {}) {
+  try {
+    console.log('[WABA SERVICE]', JSON.stringify({
+      timestamp: new Date().toISOString(),
+      event,
+      ...data,
+    }));
+  } catch (logError) {
+    console.log('[WABA SERVICE LOG ERROR]', String(logError));
+  }
+}
+
+function getWabaAxiosErrorDetails(error: any): Record<string, unknown> {
+  const responseData = error?.response?.data;
+  const graphError = responseData?.error;
+
+  return {
+    errorName: error?.name,
+    errorMessage: error?.message,
+    errorCode: error?.code,
+    errorCause: error?.cause ? String(error?.cause?.message ?? error?.cause) : undefined,
+    responseStatus: error?.response?.status,
+    responseStatusText: error?.response?.statusText,
+    graphErrorCode: graphError?.code,
+    graphErrorSubcode: graphError?.error_subcode,
+    graphErrorType: graphError?.type,
+    graphErrorMessage: graphError?.message,
+    graphErrorFbtraceId: graphError?.fbtrace_id,
+    graphErrorIsTransient: graphError?.is_transient,
+    responseData: redactForWabaLog(responseData),
+  };
+}
+
+function logWabaFailure(event: string, error: any, context: Record<string, unknown> = {}): void {
+  const details = { event, ...context, ...getWabaAxiosErrorDetails(error) };
+  logger.error(`❌ WABA: ${event}`, details);
+  wabaConsoleLog(event, details);
+}
+
 interface WABAConfig {
   accessToken: string;
   phoneNumberId: string;
@@ -117,7 +177,12 @@ export class WABAService {
       logger.info(`📤 WABA: Сообщение отправлено. ID: ${response.data.messages?.[0]?.id}`);
       return response.data;
     } catch (error: any) {
-      logger.error('❌ WABA: Ошибка отправки сообщения:', error.response?.data || error.message);
+      logWabaFailure('send-message-failed', error, {
+        messageType: options.type,
+        to: options.to,
+        phoneNumberId: this.config.phoneNumberId,
+        apiVersion: this.config.apiVersion,
+      });
       throw error;
     }
   }
@@ -289,7 +354,11 @@ export class WABAService {
 
       return response.data;
     } catch (error: any) {
-      logger.error('❌ WABA: Ошибка получения шаблонов:', error.response?.data || error.message);
+      logWabaFailure('get-templates-failed', error, {
+        wabaId: this.config.wabaId,
+        apiVersion: this.config.apiVersion,
+        params: redactForWabaLog(params),
+      });
       throw error;
     }
   }
@@ -318,7 +387,11 @@ export class WABAService {
 
       return response.data;
     } catch (error: any) {
-      logger.error('❌ WABA: Ошибка отметки как прочитанного:', error.response?.data || error.message);
+      logWabaFailure('mark-as-read-failed', error, {
+        messageId,
+        phoneNumberId: this.config.phoneNumberId,
+        apiVersion: this.config.apiVersion,
+      });
       throw error;
     }
   }
@@ -347,7 +420,12 @@ export class WABAService {
 
       return response.data.id;
     } catch (error: any) {
-      logger.error('❌ WABA: Ошибка загрузки медиа:', error.response?.data || error.message);
+      logWabaFailure('upload-media-failed', error, {
+        phoneNumberId: this.config.phoneNumberId,
+        apiVersion: this.config.apiVersion,
+        fileUrl,
+        mimeType,
+      });
       throw error;
     }
   }
@@ -356,6 +434,7 @@ export class WABAService {
    * Скачать медиа-файл из WhatsApp и загрузить на R2
    */
   async downloadAndUploadMedia(mediaId: string, mimeType: string): Promise<string> {
+    let step = 'get-media-url';
     try {
       // Шаг 1: Получаем URL медиа-файла
       const mediaInfoUrl = `${this.baseUrl}/${mediaId}`;
@@ -369,6 +448,7 @@ export class WABAService {
       logger.info(`📥 WABA: Получен URL медиа-файла: ${mediaId}`);
 
       // Шаг 2: Скачиваем файл
+      step = 'download-file';
       const mediaResponse = await axios.get(mediaUrl, {
         headers: {
           'Authorization': `Bearer ${this.config.accessToken}`,
@@ -386,12 +466,18 @@ export class WABAService {
       const filename = `waba_${timestamp}_${random}${ext}`;
 
       // Шаг 4: Загружаем на R2
+      step = 'upload-to-r2';
       const publicUrl = await saveMedia(buffer, filename, mimeType);
       logger.info(`✅ WABA: Файл загружен на R2: ${publicUrl}`);
 
       return publicUrl;
     } catch (error: any) {
-      logger.error('❌ WABA: Ошибка скачивания/загрузки медиа:', error.response?.data || error.message);
+      logWabaFailure('download-media-failed', error, {
+        mediaId,
+        mimeType,
+        step,
+        apiVersion: this.config.apiVersion,
+      });
       throw error;
     }
   }
@@ -444,6 +530,13 @@ export async function getWABAConfig(organizationPhoneId: number): Promise<WABACo
     });
 
     if (!orgPhone?.wabaAccessToken || !orgPhone?.wabaPhoneNumberId) {
+      wabaConsoleLog('config-incomplete', {
+        organizationPhoneId,
+        phoneFound: Boolean(orgPhone),
+        hasAccessToken: Boolean(orgPhone?.wabaAccessToken),
+        hasPhoneNumberId: Boolean(orgPhone?.wabaPhoneNumberId),
+        hasWabaId: Boolean(orgPhone?.wabaId),
+      });
       return null;
     }
 
@@ -455,6 +548,10 @@ export async function getWABAConfig(organizationPhoneId: number): Promise<WABACo
     };
   } catch (error) {
     logger.error('❌ Ошибка получения WABA конфигурации:', error);
+    wabaConsoleLog('config-db-error', {
+      organizationPhoneId,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
     return null;
   }
 }

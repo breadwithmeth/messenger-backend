@@ -75,8 +75,10 @@ function getAxiosErrorSnapshot(error: any): Record<string, unknown> {
   const graphError = responseData?.error;
 
   return {
-    errorMessage: graphError?.message || error?.message,
+    errorMessage: graphError?.message || error?.message || error?.code || 'unknown error',
+    errorName: error?.name,
     errorCode: error?.code,
+    errorCause: error?.cause ? String(error?.cause?.message ?? error?.cause) : undefined,
     responseStatus: error?.response?.status,
     responseStatusText: error?.response?.statusText,
     graphErrorCode: graphError?.code,
@@ -1204,7 +1206,8 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
             res.setHeader('Retry-After', '30');
           }
 
-          return res.status(getHttpStatusFromUpstreamError(error)).json({
+          const failureHttpStatus = getHttpStatusFromUpstreamError(error);
+          const failurePayload = {
             error: retryable
               ? 'Временная ошибка WhatsApp API. Попробуйте отправить сообщение еще раз через несколько секунд.'
               : 'Не удалось отправить сообщение через WABA.',
@@ -1212,7 +1215,23 @@ export const sendMessageByChat = async (req: Request, res: Response) => {
             retryable,
             upstreamStatus: error?.response?.status,
             upstreamError: errorSnapshot.responseData,
+          };
+
+          consoleSendLog('SEND-BY-CHAT', 'waba-send-failed-response', {
+            chatId: chat.id,
+            organizationPhoneId: chat.organizationPhone.id,
+            type,
+            recipientPhone,
+            attempt,
+            maxAttempts: WABA_SEND_MAX_ATTEMPTS,
+            httpStatus: failureHttpStatus,
+            responsePayload: failurePayload,
+            errorStack: typeof error?.stack === 'string'
+              ? error.stack.split('\n').slice(0, 6)
+              : undefined,
           });
+
+          return res.status(failureHttpStatus).json(failurePayload);
         }
       }
 

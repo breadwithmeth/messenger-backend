@@ -268,6 +268,21 @@ async function autoSendCollectionFlowIfNeeded(args: {
     );
   } catch (error: any) {
     logger.error('❌ WABA Flow: Ошибка автоотправки формы:', error.response?.data || error.message);
+    console.log('[WABA FLOW AUTO-SEND]', JSON.stringify({
+      timestamp: new Date().toISOString(),
+      event: 'auto-send-flow-failed',
+      chatId,
+      to: args.to,
+      remoteJid: args.remoteJid,
+      flowId: String(orgPhone.wabaFlowId),
+      isNewChat,
+      isReopenedClosedChat,
+      responseStatus: error?.response?.status,
+      errorMessage: error?.response?.data?.error?.message || error?.message || error?.code,
+      graphErrorCode: error?.response?.data?.error?.code,
+      graphErrorSubcode: error?.response?.data?.error?.error_subcode,
+      graphErrorFbtraceId: error?.response?.data?.error?.fbtrace_id,
+    }));
   }
 }
 
